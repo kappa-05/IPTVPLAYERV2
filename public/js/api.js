@@ -16,12 +16,12 @@ export class XtreamAPI {
 
   static getProxyUrl(targetUrl, useProxy = true) {
     if (!useProxy) return targetUrl;
-    // Check if we are running locally via python server
-    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    if (isLocal) {
+    // When served by server.py (locally or on cloud like Render/Railway), use the internal proxy
+    const isStaticHost = window.location.hostname.endsWith('github.io') || window.location.protocol === 'file:';
+    if (!isStaticHost) {
       return `/api/proxy?url=${encodeURIComponent(targetUrl)}`;
     }
-    // Fallback public CORS proxy if running statically elsewhere
+    // Fallback public CORS proxy if running statically without server.py
     return `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`;
   }
 

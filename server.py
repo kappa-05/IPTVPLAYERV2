@@ -71,7 +71,7 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     """Handle each request in a new thread for concurrent HLS fragment loading."""
     daemon_threads = True
 
-PORT = 8080
+PORT = int(os.environ.get('PORT', 8080))
 PUBLIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public')
 
 # Realistic Mock Xtream Dataset for Instant Demo Mode
