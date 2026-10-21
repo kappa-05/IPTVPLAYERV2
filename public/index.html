@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="IPTV Player V2 - Client IPTV ultra-veloce con login Xtream Codes, navigazione Canali Live, Film VOD e Serie TV con streaming ad alte prestazioni.">
+  <title>IPTV Player V2 - Xtream Codes Edition</title>
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  
+  <!-- Modern Stylesheets -->
+  <link rel="stylesheet" href="css/main.css">
+  <link rel="stylesheet" href="css/login.css">
+  <link rel="stylesheet" href="css/playlist.css">
+  <link rel="stylesheet" href="css/player.css">
+  <link rel="stylesheet" href="css/animations.css">
+</head>
+<body>
+
+  <!-- Ambient Cinematic Background Glow -->
+  <div class="ambient-glow"></div>
+
+  <!-- Toast Notifications Root -->
+  <div id="toast-container"></div>
+
+  <!-- Main Application Container -->
+  <div id="app">
+
+    <!-- ====================================================================
+         1. LOGIN & AUTHENTICATION VIEW
+         ==================================================================== -->
+    <div id="login-view" class="login-view-container">
+      <div class="login-card">
+        
+        <div class="login-header">
+          <div class="login-logo">
+            <img src="assets/favicon.svg" alt="IPTV Player Logo">
+          </div>
+          <h1 class="login-title">IPTV PLAYER V2</h1>
+          <p class="login-subtitle">Accesso ultra-rapido tramite Xtream Codes API</p>
+        </div>
+
+        <form id="login-form">
+          
+          <!-- Server URL -->
+          <div class="form-group">
+            <label class="form-label" for="login-host">Server URL / Host</label>
+            <div class="input-wrapper">
+              <span class="input-icon">🌐</span>
+              <input 
+                type="text" 
+                id="login-host" 
+                class="form-input" 
+                placeholder="es. http://server.example.com:8080" 
+                required 
+                autocomplete="url"
+              >
+            </div>
+          </div>
+
+          <!-- Username -->
+          <div class="form-group">
+            <label class="form-label" for="login-username">Username</label>
+            <div class="input-wrapper">
+              <span class="input-icon">👤</span>
+              <input 
+                type="text" 
+                id="login-username" 
+                class="form-input" 
+                placeholder="Il tuo nome utente Xtream" 
+                required 
+                autocomplete="username"
+              >
+            </div>
+          </div>
+
+          <!-- Password -->
+          <div class="form-group">
+            <label class="form-label" for="login-password">Password</label>
+            <div class="input-wrapper">
+              <span class="input-icon">🔑</span>
+              <input 
+                type="password" 
+                id="login-password" 
+                class="form-input" 
+                placeholder="La tua password" 
+                required 
+                autocomplete="current-password"
+              >
+              <button type="button" id="toggle-password-btn" class="password-toggle-btn" title="Mostra/Nascondi password">👁️</button>
+            </div>
+          </div>
+
+          <!-- Proxy Toggle -->
+          <div class="advanced-options">
+            <div class="proxy-toggle-row">
+              <div class="proxy-label-group">
+                <span class="proxy-title">🛡️ Bypass CORS (Proxy Attivo)</span>
+                <span class="proxy-desc">Consigliato per evitare il blocco del browser verso server IPTV</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="proxy-toggle" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Submit Button -->
+          <button type="submit" id="login-submit-btn" class="btn-primary">
+            <span>⚡ Accedi alla Playlist</span>
+          </button>
+
+          <!-- 1-Click Demo Button -->
+          <button type="button" id="demo-account-btn" class="btn-demo">
+            <span>🧪 Prova con Account Demo (1-Click)</span>
+          </button>
+
+        </form>
+
+        <!-- Saved Profiles Section -->
+        <div class="saved-accounts-section">
+          <div class="saved-accounts-title">
+            <span>Profili Recenti</span>
+          </div>
+          <div id="saved-accounts-list" class="saved-accounts-list">
+            <!-- Dynamically populated from IndexedDB -->
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ====================================================================
+         2. DASHBOARD VIEW (LIVE, VOD, SERIE TV)
+         ==================================================================== -->
+    <div id="dashboard-view" class="dashboard-container" style="display: none;">
+      
+      <!-- Top Navigation Header -->
+      <header class="app-header">
+        
+        <!-- Left: Brand -->
+        <div class="brand-section">
+          <div class="brand-icon">
+            <img src="assets/favicon.svg" alt="IPTV Logo">
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="brand-title">IPTV PLAYER</span>
+            <span class="brand-version">V2.0 PRO</span>
+          </div>
+        </div>
+
+        <!-- Center: 3 Main Categories + Favorites -->
+        <nav class="category-nav-tabs">
+          <button class="nav-tab-btn active" data-mode="live" id="nav-btn-live">
+            <span>📺 Canali Live</span>
+            <span class="nav-tab-badge" id="nav-count-live">0</span>
+          </button>
+          <button class="nav-tab-btn" data-mode="vod" id="nav-btn-vod">
+            <span>🎬 Film VOD</span>
+            <span class="nav-tab-badge" id="nav-count-vod">0</span>
+          </button>
+          <button class="nav-tab-btn" data-mode="series" id="nav-btn-series">
+            <span>🍿 Serie TV</span>
+            <span class="nav-tab-badge" id="nav-count-series">0</span>
+          </button>
+          <button class="nav-tab-btn" data-mode="favorites" id="nav-btn-fav">
+            <span>⭐ Preferiti</span>
+            <span class="nav-tab-badge" id="nav-count-fav">0</span>
+          </button>
+        </nav>
+
+        <!-- Right: Search, Account Status, Actions -->
+        <div class="header-actions">
+          
+          <!-- Instant Search Box -->
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input 
+              type="text" 
+              id="stream-search-input" 
+              class="search-input" 
+              placeholder="Cerca canale, film o serie..."
+            >
+            <span id="search-clear-btn" class="search-clear-btn" title="Cancella ricerca">✕</span>
+          </div>
+
+          <!-- Account Pill -->
+          <div class="account-status-pill">
+            <span class="status-indicator" title="Connesso"></span>
+            <span class="account-username" id="header-account-user">User</span>
+            <span class="account-exp" id="header-account-exp">Attivo</span>
+          </div>
+
+          <!-- Refresh Playlist Cache -->
+          <button id="btn-refresh-cache" class="header-btn" title="Aggiorna cache playlist dal server">
+            🔄
+          </button>
+
+          <!-- Logout -->
+          <button id="btn-logout" class="header-btn header-btn-logout" title="Disconnetti account">
+            🚪
+          </button>
+
+        </div>
+
+      </header>
+
+      <!-- Main Dashboard Body: Categories Sidebar + Content Area -->
+      <main class="dashboard-body">
+        
+        <!-- Sidebar: Categorized Navigation -->
+        <aside class="categories-sidebar">
+          
+          <div class="sidebar-header">
+            <div class="sidebar-title-row">
+              <span class="sidebar-title">📁 Categorie</span>
+              <span class="sidebar-counter" id="sidebar-category-counter"></span>
+            </div>
+            <input 
+              type="text" 
+              id="category-search-input" 
+              class="category-filter-input" 
+              placeholder="Filtra categorie..."
+            >
+          </div>
+
+          <div id="categories-list" class="categories-list">
+            <!-- Dynamically populated -->
+          </div>
+
+        </aside>
+
+        <!-- Content Area: Toolbar + Virtualized Stream Grid -->
+        <section class="content-area">
+          
+          <!-- Toolbar -->
+          <div class="content-toolbar">
+            
+            <div class="active-category-info">
+              <h2 class="active-category-title" id="active-category-title">Tutti i Contenuti</h2>
+              <span class="active-category-count-badge" id="active-category-count">0 contenuti</span>
+            </div>
+
+            <div class="toolbar-controls">
+              
+              <!-- Sort Select -->
+              <select id="sort-select" class="sort-select">
+                <option value="default">Ordina: Predefinito</option>
+                <option value="name-asc">Nome (A - Z)</option>
+                <option value="name-desc">Nome (Z - A)</option>
+                <option value="rating">Miglior Voto ★</option>
+              </select>
+
+              <!-- View Mode Toggle -->
+              <div class="view-toggle-group">
+                <button id="view-grid-btn" class="view-toggle-btn active" title="Vista Griglia">
+                  ⊞
+                </button>
+                <button id="view-list-btn" class="view-toggle-btn" title="Vista Elenco">
+                  ☰
+                </button>
+              </div>
+
+            </div>
+
+          </div>
+
+          <!-- Virtualized High Performance Grid Container -->
+          <div id="virtual-scroll-container" class="virtual-scroll-container">
+            <!-- VirtualGrid creates spacer & viewport dynamically -->
+          </div>
+
+          <!-- Empty State (Hidden when items present) -->
+          <div id="empty-state-view" class="empty-state" style="display: none;">
+            <div class="empty-state-icon">📡</div>
+            <div class="empty-state-title">Nessun contenuto trovato</div>
+            <p class="empty-state-desc">Nessun canale o video corrisponde ai criteri di ricerca o alla categoria selezionata.</p>
+          </div>
+
+        </section>
+
+      </main>
+
+    </div>
+
+    <!-- ====================================================================
+         3. VIDEO PLAYER MODAL OVERLAY
+         ==================================================================== -->
+    <div id="player-modal-overlay" class="modal-overlay">
+      <div class="player-modal">
+        
+        <div class="player-header">
+          <div class="player-title-info">
+            <span id="player-type-badge" class="badge badge-live">LIVE</span>
+            <span id="player-format-badge" class="badge badge-format" style="background: rgba(255,255,255,0.12); font-size: 11px; font-weight: 700; cursor: pointer; border: 1px solid rgba(255,255,255,0.25); border-radius: 6px; padding: 3px 8px; user-select: none;" title="Clicca per forzare il cambio formato (HLS ↔ TS)">HLS</span>
+            <h3 id="player-stream-title" class="player-title">Riproduzione Stream</h3>
+          </div>
+          <button id="player-close-btn" class="player-close-btn" title="Chiudi (Esc)">✕</button>
+        </div>
+
+        <div class="player-video-wrapper">
+          
+          <video id="main-video-player" controls playsinline></video>
+
+          <div id="player-loading" class="player-loading-spinner" style="display: none;">
+            <div class="spinner" style="width: 32px; height: 32px; border-width: 3px;"></div>
+            <span class="loading-status-text" style="font-size: 13px; font-weight: 600;">Bufferizzazione stream...</span>
+            <span class="loading-elapsed" style="font-size: 11px; color: rgba(255,255,255,0.5); font-family: var(--font-mono);">0s</span>
+          </div>
+
+          <div id="player-error" class="player-error-banner"></div>
+
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Local Media Engines: HLS.js and mpegts.js for zero-lag local playback -->
+  <script src="js/vendor/hls.min.js"></script>
+  <script src="js/vendor/mpegts.min.js"></script>
+
+  <!-- Main ES Module Orchestrator -->
+  <script type="module" src="js/app.js"></script>
+
+</body>
+</html>

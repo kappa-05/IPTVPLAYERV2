@@ -1,0 +1,345 @@
+/* ==========================================================================
+   IPTV PLAYER V2 - Player & Details Modal Styles
+   Video Player Overlay, Series Episode Browser, VOD Detail Modal
+   ========================================================================== */
+
+/* 1. Modal Overlay Backdrop */
+.modal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--bg-overlay);
+  backdrop-filter: blur(20px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.modal-overlay.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 2. Video Player Modal */
+.player-modal {
+  width: 100%;
+  max-width: 1100px;
+  background: #000;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.9), var(--shadow-neon);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  transform: scale(0.95);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.modal-overlay.active .player-modal {
+  transform: scale(1);
+}
+
+.player-header {
+  padding: 12px 18px;
+  background: linear-gradient(180deg, rgba(14, 20, 34, 0.95) 0%, rgba(14, 20, 34, 0.6) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.player-title-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.player-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.player-close-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.player-close-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: #ff6b6b;
+}
+
+/* Video Frame Container */
+.player-video-wrapper {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.player-video-wrapper video {
+  width: 100%;
+  height: 100%;
+  outline: none;
+  object-fit: contain;
+}
+
+.player-loading-spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: #fff;
+  z-index: 5;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 16px 24px;
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(8px);
+}
+
+.player-error-banner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(239, 68, 68, 0.9);
+  color: #fff;
+  padding: 16px 24px;
+  border-radius: var(--radius-md);
+  text-align: center;
+  max-width: 450px;
+  z-index: 6;
+  display: none;
+}
+
+/* 3. Series Episodes Modal */
+.series-modal {
+  width: 100%;
+  max-width: 960px;
+  max-height: 85vh;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  backdrop-filter: var(--blur-glass);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: scale(0.95);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.modal-overlay.active .series-modal {
+  transform: scale(1);
+}
+
+/* Series Hero Header */
+.series-hero {
+  position: relative;
+  padding: 28px;
+  display: flex;
+  gap: 24px;
+  background: linear-gradient(180deg, rgba(20, 26, 42, 0.9) 0%, rgba(13, 17, 28, 0.95) 100%);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.series-hero-poster {
+  width: 130px;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle);
+}
+
+.series-hero-poster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.series-hero-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.series-hero-title {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.series-hero-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.series-hero-plot {
+  font-size: 13.5px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  max-height: 75px;
+  overflow-y: auto;
+}
+
+.series-hero-cast {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* Season Tabs */
+.season-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 28px;
+  background: rgba(10, 14, 23, 0.7);
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+}
+
+.season-tab-btn {
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+.season-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-main);
+}
+
+.season-tab-btn.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.4);
+}
+
+/* Episodes List */
+.episodes-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.episode-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-radius: var(--radius-md);
+  background: rgba(15, 21, 35, 0.7);
+  border: 1px solid var(--border-subtle);
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.episode-card:hover {
+  background: rgba(25, 35, 58, 0.85);
+  border-color: rgba(99, 102, 241, 0.4);
+  transform: translateX(4px);
+}
+
+.episode-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  overflow: hidden;
+}
+
+.episode-num-badge {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--color-primary-light);
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: rgba(99, 102, 241, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.episode-info-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.episode-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.episode-plot {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.episode-play-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--grad-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex-shrink: 0;
+  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.3);
+  transition: transform 0.2s;
+}
+
+.episode-card:hover .episode-play-btn {
+  transform: scale(1.1);
+}
