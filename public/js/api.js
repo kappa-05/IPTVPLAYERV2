@@ -7,11 +7,22 @@
 export class XtreamAPI {
   static normalizeHost(host) {
     let clean = (host || '').trim();
+    if (!clean) return '';
     if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
       clean = 'http://' + clean;
     }
-    // Remove trailing slash
-    return clean.replace(/\/+$/, '');
+    try {
+      const parsed = new URL(clean);
+      let pathname = parsed.pathname || '';
+      // Strip any API or script suffix like /player_api.php or /get.php
+      if (pathname.endsWith('/player_api.php') || pathname.endsWith('/get.php')) {
+        pathname = pathname.replace(/\/(player_api\.php|get\.php)$/, '');
+      }
+      pathname = pathname.replace(/\/+$/, '');
+      return `${parsed.protocol}//${parsed.host}${pathname}`;
+    } catch {
+      return clean.replace(/\/+$/, '');
+    }
   }
 
   static getProxyUrl(targetUrl, useProxy = true) {
@@ -25,7 +36,7 @@ export class XtreamAPI {
     return `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`;
   }
 
-  static async fetchJSON(url, useProxy = true, timeoutMs = 12000) {
+  static async fetchJSON(url, useProxy = true, timeoutMs = 15000) {
     const finalUrl = this.getProxyUrl(url, useProxy);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -40,7 +51,18 @@ export class XtreamAPI {
       clearTimeout(timer);
 
       if (!response.ok) {
-        throw new Error(`Errore HTTP ${response.status}: ${response.statusText}`);
+        let errorDetail = `Errore HTTP ${response.status}: ${response.statusText || 'Errore del server'}`;
+        try {
+          const errData = await response.json();
+          if (errData && errData.error) {
+            errorDetail = errData.error;
+          } else if (errData && errData.message) {
+            errorDetail = errData.message;
+          }
+        } catch (_) {
+          // Response is not JSON
+        }
+        throw new Error(errorDetail);
       }
 
       const data = await response.json();
@@ -48,7 +70,7 @@ export class XtreamAPI {
     } catch (err) {
       clearTimeout(timer);
       if (err.name === 'AbortError') {
-        throw new Error(`Timeout richiesta (${timeoutMs / 1000}s). Il server non risponde.`);
+        throw new Error(`Timeout richiesta (${timeoutMs / 1000}s). Il server IPTV non risponde.`);
       }
       throw err;
     }
@@ -184,4 +206,31 @@ export class XtreamAPI {
 
     return '';
   }
+
+  /**
+   * Launch external stream directly in VLC Media Player
+   */
+  static async openVLC(streamUrl) {
+    try {
+      const res = await fetch(`/api/open_vlc?url=${encodeURIComponent(streamUrl)}`);
+      const data = await res.json();
+      return data;
+    } catch (err) {
+      console.error('Failed to open VLC:', err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Query system capabilities (VLC & FFmpeg presence)
+   */
+  static async checkTools() {
+    try {
+      const res = await fetch('/api/tools');
+      return await res.json();
+    } catch (err) {
+      return { vlc_available: false, ffmpeg_available: false };
+    }
+  }
 }
+

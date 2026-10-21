@@ -75,31 +75,78 @@ class IPTVApp {
 
   bindLoginEvents() {
     const loginForm = document.getElementById('login-form');
+    const submitBtn = document.getElementById('login-submit-btn');
     const demoBtn = document.getElementById('demo-account-btn');
     const proxyToggle = document.getElementById('proxy-toggle');
     const togglePassBtn = document.getElementById('toggle-password-btn');
+    const hostInput = document.getElementById('login-host');
+    const userInput = document.getElementById('login-username');
+    const passInput = document.getElementById('login-password');
+
+    // Remove error highlight as soon as the user starts typing
+    [hostInput, userInput, passInput].forEach(inp => {
+      if (inp) {
+        inp.addEventListener('input', () => inp.classList.remove('input-error'));
+      }
+    });
+
+    // Auto-extract credentials if user pastes a full Xtream / M3U link with credentials
+    if (hostInput) {
+      const checkAndExtractUrl = () => {
+        const val = hostInput.value.trim();
+        if (val.includes('username=') && val.includes('password=')) {
+          try {
+            const urlObj = new URL(val.startsWith('http') ? val : `http://${val}`);
+            const u = urlObj.searchParams.get('username');
+            const p = urlObj.searchParams.get('password');
+            if (u && p) {
+              if (userInput) userInput.value = u;
+              if (passInput) passInput.value = p;
+              let pathname = (urlObj.pathname || '').replace(/\/(get\.php|player_api\.php)$/, '').replace(/\/+$/, '');
+              hostInput.value = `${urlObj.protocol}//${urlObj.host}${pathname}`;
+              UIManager.showToast('Credenziali Rilevate', 'Username e Password estratti automaticamente dal link!', 'success');
+            }
+          } catch (_) {}
+        }
+      };
+      hostInput.addEventListener('input', checkAndExtractUrl);
+      hostInput.addEventListener('paste', () => setTimeout(checkAndExtractUrl, 50));
+    }
 
     if (togglePassBtn) {
-      togglePassBtn.addEventListener('click', () => {
-        const passInput = document.getElementById('login-password');
-        if (passInput.type === 'password') {
-          passInput.type = 'text';
-          togglePassBtn.textContent = '🔒';
-        } else {
-          passInput.type = 'password';
-          togglePassBtn.textContent = '👁️';
+      togglePassBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const pInput = document.getElementById('login-password');
+        if (pInput) {
+          if (pInput.type === 'password') {
+            pInput.type = 'text';
+            togglePassBtn.textContent = '🔒';
+          } else {
+            pInput.type = 'password';
+            togglePassBtn.textContent = '👁️';
+          }
         }
       });
     }
 
     if (demoBtn) {
-      demoBtn.addEventListener('click', () => {
+      demoBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
         const origin = window.location.origin;
-        document.getElementById('login-host').value = `${origin}/api/demo`;
-        document.getElementById('login-username').value = 'vip_user_2026';
-        document.getElementById('login-password').value = 'password123';
-        if (proxyToggle) proxyToggle.checked = false; // Demo is already local
-        UIManager.showToast('Profilo Demo Caricato', 'Credenziali demo inserite. Clicca su "Accedi alla Playlist".', 'info');
+        if (hostInput) hostInput.value = `${origin}/api/demo`;
+        if (userInput) userInput.value = 'vip_user_2026';
+        if (passInput) passInput.value = 'password123';
+        if (proxyToggle) proxyToggle.checked = false; // Demo is local
+        [hostInput, userInput, passInput].forEach(inp => inp?.classList.remove('input-error'));
+        UIManager.showToast('Profilo Demo Caricato', 'Accesso automatico in corso...', 'info');
+        await this.handleLogin();
+      });
+    }
+
+    if (submitBtn) {
+      submitBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        await this.handleLogin();
       });
     }
 
@@ -144,17 +191,42 @@ class IPTVApp {
   }
 
   async handleLogin() {
-    const host = document.getElementById('login-host').value.trim();
-    const username = document.getElementById('login-username').value.trim();
-    const password = document.getElementById('login-password').value.trim();
+    if (this.isLoggingIn) return;
+
+    const hostInput = document.getElementById('login-host');
+    const userInput = document.getElementById('login-username');
+    const passInput = document.getElementById('login-password');
+    const host = hostInput ? hostInput.value.trim() : '';
+    const username = userInput ? userInput.value.trim() : '';
+    const password = passInput ? passInput.value.trim() : '';
     const useProxy = document.getElementById('proxy-toggle')?.checked ?? true;
     const submitBtn = document.getElementById('login-submit-btn');
 
-    if (!host || !username || !password) {
-      UIManager.showToast('Campi Obbligatori', 'Inserisci Server URL, Username e Password.', 'warning');
+    // Reset previous errors
+    [hostInput, userInput, passInput].forEach(inp => inp?.classList.remove('input-error'));
+
+    if (!host) {
+      hostInput?.classList.add('input-error');
+      hostInput?.focus();
+      UIManager.showToast('Server URL Mancante', 'Inserisci l\'indirizzo del tuo server Xtream Codes.', 'warning');
       return;
     }
 
+    if (!username) {
+      userInput?.classList.add('input-error');
+      userInput?.focus();
+      UIManager.showToast('Username Mancante', 'Inserisci il nome utente del tuo account.', 'warning');
+      return;
+    }
+
+    if (!password) {
+      passInput?.classList.add('input-error');
+      passInput?.focus();
+      UIManager.showToast('Password Mancante', 'Inserisci la password del tuo account.', 'warning');
+      return;
+    }
+
+    this.isLoggingIn = true;
     try {
       if (submitBtn) {
         submitBtn.disabled = true;
@@ -182,8 +254,9 @@ class IPTVApp {
 
     } catch (err) {
       console.error('Login error:', err);
-      UIManager.showToast('Errore di Accesso', err.message || 'Impossibile connettersi al server Xtream Codes.', 'error', 5000);
+      UIManager.showToast('Errore di Accesso', err.message || 'Impossibile connettersi al server Xtream Codes.', 'error', 6000);
     } finally {
+      this.isLoggingIn = false;
       if (submitBtn) {
         submitBtn.disabled = false;
         submitBtn.innerHTML = '<span>⚡ Accedi alla Playlist</span>';
@@ -469,7 +542,7 @@ class IPTVApp {
         (selected) => this.playStream(selected, 'vod'),
         (selected, type, favBtn) => this.toggleFavorite(selected, type, favBtn),
         isFav,
-        (selected) => this.playStream(selected, 'vod'),
+        (selected) => this.playStreamVlc(selected, 'vod'),
         viewMode
       );
     } else if (cardType === 'series') {
@@ -494,6 +567,19 @@ class IPTVApp {
     const streamUrl = XtreamAPI.buildStreamUrl(this.currentAccount, item, type);
     const title = item.name || 'Stream IPTV';
     this.player.play(streamUrl, title, type, item, this.currentAccount);
+  }
+
+  playStreamVlc(item, type) {
+    if (!this.currentAccount) return;
+    const streamUrl = XtreamAPI.buildStreamUrl(this.currentAccount, item, type);
+    UIManager.showToast('VLC Media Player', `Avvio di "${item.name}" in VLC...`, 'info', 2500);
+    XtreamAPI.openVLC(streamUrl).then(res => {
+      if (res.success) {
+        UIManager.showToast('VLC Avviato', `Riproduzione di "${item.name}" avviata in VLC.`, 'success', 3500);
+      } else {
+        UIManager.showToast('Errore VLC', res.error || 'Impossibile avviare VLC.', 'error', 3500);
+      }
+    });
   }
 
   async openSeries(series) {

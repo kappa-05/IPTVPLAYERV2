@@ -140,9 +140,12 @@ export class UIManager {
         <div class="movie-title" title="${name}">${name}</div>
         <div class="movie-meta">
           <span>Film VOD</span>
-          <button class="btn-card-fav ${isFav ? 'active' : ''}" style="width:24px;height:24px;font-size:12px;" title="Preferiti">
-            ${isFav ? '★' : '☆'}
-          </button>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <button class="btn-card-vlc" title="Riproduci con VLC Media Player (Dolby, DTS, 4K)">🚀 VLC</button>
+            <button class="btn-card-fav ${isFav ? 'active' : ''}" style="width:24px;height:24px;font-size:12px;" title="Preferiti">
+              ${isFav ? '★' : '☆'}
+            </button>
+          </div>
         </div>
       </div>
     `;
@@ -152,6 +155,14 @@ export class UIManager {
       e.stopPropagation();
       onToggleFav(item, 'vod', favBtn);
     });
+
+    const vlcBtn = card.querySelector('.btn-card-vlc');
+    if (vlcBtn && onDetail) {
+      vlcBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onDetail(item);
+      });
+    }
 
     card.addEventListener('click', () => {
       onPlay(item, 'vod');

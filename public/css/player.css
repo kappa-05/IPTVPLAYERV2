@@ -122,6 +122,229 @@
   backdrop-filter: blur(8px);
 }
 
+.player-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* Volume Panel in Player Header */
+.player-volume-panel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  padding: 4px 10px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
+}
+
+.player-vol-icon-btn {
+  background: none;
+  border: none;
+  color: var(--text-main);
+  font-size: 15px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  transition: transform 0.15s;
+}
+
+.player-vol-icon-btn:hover {
+  transform: scale(1.15);
+}
+
+.player-vol-range {
+  width: 75px;
+  height: 4px;
+  accent-color: var(--color-primary-light);
+  cursor: pointer;
+}
+
+.player-vol-pct {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.85);
+  min-width: 34px;
+  font-family: var(--font-mono);
+  user-select: none;
+}
+
+.player-boost-btn {
+  background: rgba(99, 102, 241, 0.22);
+  border: 1px solid rgba(99, 102, 241, 0.45);
+  color: #a5b4fc;
+  font-size: 10px;
+  font-weight: 800;
+  border-radius: 6px;
+  padding: 2px 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: var(--font-mono);
+}
+
+.player-boost-btn:hover {
+  background: rgba(99, 102, 241, 0.45);
+  color: #fff;
+}
+
+.player-boost-btn.boosted {
+  background: linear-gradient(135deg, #f59e0b, #ef4444);
+  color: #fff;
+  border-color: #f59e0b;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
+}
+
+/* VLC Quick Launcher Button */
+.player-vlc-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(249, 115, 22, 0.18);
+  border: 1px solid rgba(249, 115, 22, 0.45);
+  color: #fb923c;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.player-vlc-btn:hover {
+  background: rgba(249, 115, 22, 0.35);
+  color: #fff;
+  border-color: #fb923c;
+  box-shadow: 0 0 12px rgba(249, 115, 22, 0.4);
+  transform: translateY(-1px);
+}
+
+/* Audio Diagnostic Notice Banner (Overlay on player) */
+.player-audio-notice {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.94);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.8), 0 0 20px rgba(56, 189, 248, 0.2);
+  border-radius: var(--radius-md);
+  padding: 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 10;
+  max-width: 90%;
+  width: 580px;
+  backdrop-filter: blur(12px);
+  animation: slideUpFade 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideUpFade {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 20px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.audio-notice-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.audio-notice-content .notice-icon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.notice-text-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.notice-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #38bdf8;
+}
+
+.notice-desc {
+  font-size: 12.5px;
+  color: #cbd5e1;
+  line-height: 1.4;
+}
+
+.notice-btn-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.btn-audio-action {
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+}
+
+.btn-audio-accent {
+  background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%);
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(14, 165, 233, 0.35);
+}
+
+.btn-audio-accent:hover {
+  transform: scale(1.03);
+  box-shadow: 0 4px 15px rgba(14, 165, 233, 0.5);
+}
+
+.btn-audio-vlc {
+  background: rgba(249, 115, 22, 0.25);
+  border: 1px solid rgba(249, 115, 22, 0.5);
+  color: #fed7aa;
+}
+
+.btn-audio-vlc:hover {
+  background: rgba(249, 115, 22, 0.45);
+  color: #fff;
+}
+
+.btn-audio-dismiss {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.7);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.2s;
+}
+
+.btn-audio-dismiss:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
 .player-error-banner {
   position: absolute;
   top: 50%;
@@ -343,3 +566,353 @@
 .episode-card:hover .episode-play-btn {
   transform: scale(1.1);
 }
+
+/* ==========================================================================
+   CUSTOM MODERN VIDEO PLAYER CONTROLS
+   Replaces native video controls with high-tech neon glassmorphic controls
+   ========================================================================== */
+
+.player-video-wrapper {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.player-video-wrapper.controls-hidden {
+  cursor: none;
+}
+
+.player-video-wrapper video {
+  width: 100%;
+  height: 100%;
+  outline: none;
+  object-fit: contain;
+  cursor: pointer;
+}
+
+/* Center Feedback Ripple Animation */
+.player-center-feedback {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 8;
+}
+
+.player-center-feedback .feedback-circle {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  color: #fff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 20px rgba(56, 189, 248, 0.4);
+  animation: feedbackPulse 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes feedbackPulse {
+  0% { transform: scale(0.6); opacity: 0; }
+  40% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+/* Custom Controls Bottom Overlay */
+.player-custom-controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: linear-gradient(0deg, rgba(8, 12, 22, 0.96) 0%, rgba(8, 12, 22, 0.72) 65%, transparent 100%);
+  padding: 24px 20px 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1), transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: auto;
+}
+
+.player-video-wrapper.controls-hidden .player-custom-controls {
+  opacity: 0;
+  transform: translateY(12px);
+  pointer-events: none;
+}
+
+/* Timeline & Scrubber */
+.player-timeline-container {
+  position: relative;
+  width: 100%;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.player-timeline-track {
+  position: relative;
+  width: 100%;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+  overflow: visible;
+  transition: height 0.15s ease;
+}
+
+.player-timeline-container:hover .player-timeline-track,
+.player-timeline-container.dragging .player-timeline-track {
+  height: 8px;
+}
+
+.player-timeline-buffer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0%;
+  background: rgba(255, 255, 255, 0.32);
+  border-radius: 4px;
+  pointer-events: none;
+  transition: width 0.2s ease;
+}
+
+.player-timeline-played {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0%;
+  background: linear-gradient(90deg, #38bdf8 0%, #6366f1 100%);
+  border-radius: 4px;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
+  pointer-events: none;
+}
+
+.player-timeline-handle {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.8), 0 2px 6px rgba(0, 0, 0, 0.6);
+  transform: translate(-50%, -50%) scale(0);
+  transition: transform 0.15s ease;
+  pointer-events: none;
+}
+
+.player-timeline-container:hover .player-timeline-handle,
+.player-timeline-container.dragging .player-timeline-handle {
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.player-timeline-tooltip {
+  position: absolute;
+  bottom: 22px;
+  left: 0;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 5px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  z-index: 12;
+}
+
+.player-timeline-container:hover .player-timeline-tooltip,
+.player-timeline-container.dragging .player-timeline-tooltip {
+  opacity: 1;
+}
+
+/* Controls Toolbar Row */
+.player-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.player-ctrl-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.player-ctrl-btn {
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  padding: 6px;
+  transition: all 0.15s ease;
+}
+
+.player-ctrl-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #38bdf8;
+}
+
+.player-ctrl-play {
+  padding: 4px;
+  color: #38bdf8;
+}
+
+.player-ctrl-play:hover {
+  transform: scale(1.12);
+  color: #fff;
+}
+
+.player-ctrl-seek {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 4px 8px;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  font-family: var(--font-mono, monospace);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.player-ctrl-seek:hover {
+  background: rgba(99, 102, 241, 0.25);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #c7d2fe;
+}
+
+/* Time Display */
+.player-time-display {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  font-family: var(--font-mono, monospace);
+  user-select: none;
+  margin-left: 6px;
+}
+
+.time-current {
+  color: #fff;
+  font-weight: 700;
+}
+
+.time-separator {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.time-duration {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Live TV Indicator */
+.player-live-indicator {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-radius: 12px;
+  padding: 3px 10px;
+  user-select: none;
+  margin-left: 6px;
+}
+
+.live-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 8px #ef4444;
+  animation: pulseLiveIndicator 1.5s infinite;
+}
+
+@keyframes pulseLiveIndicator {
+  0% { transform: scale(0.9); opacity: 0.8; }
+  50% { transform: scale(1.3); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.8; }
+}
+
+.live-text {
+  font-size: 11px;
+  font-weight: 800;
+  color: #fca5a5;
+  letter-spacing: 0.5px;
+}
+
+/* Interactive Audio Pill Button */
+.player-ctrl-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(14, 165, 233, 0.15);
+  border: 1px solid rgba(14, 165, 233, 0.35);
+  color: #38bdf8;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.player-ctrl-pill:hover {
+  background: rgba(14, 165, 233, 0.3);
+  border-color: #38bdf8;
+}
+
+.player-ctrl-pill.transcoding {
+  background: rgba(99, 102, 241, 0.25);
+  border-color: rgba(99, 102, 241, 0.55);
+  color: #c7d2fe;
+}
+
+.player-ctrl-pill.transcoding:hover {
+  background: rgba(99, 102, 241, 0.45);
+  border-color: #818cf8;
+}
+
+/* Bottom Volume Controls */
+.player-bottom-volume-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  padding: 2px 8px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.player-bottom-vol-range {
+  width: 60px;
+  height: 4px;
+  accent-color: #38bdf8;
+  cursor: pointer;
+}
+

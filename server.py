@@ -18,6 +18,8 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 import socket
 import threading
+import subprocess
+import shutil
 
 # Unverified SSL context to prevent certificate validation errors on IPTV servers
 SSL_UNVERIFIED_CTX = ssl._create_unverified_context()
@@ -28,6 +30,50 @@ NO_PROXY_OPENER = urllib.request.build_opener(
     urllib.request.ProxyHandler({}),
     urllib.request.HTTPSHandler(context=SSL_UNVERIFIED_CTX)
 )
+
+def find_ffmpeg():
+    """Detect FFmpeg executable in PATH or WinGet installation directory."""
+    p = shutil.which("ffmpeg")
+    if p:
+        return p
+    winget_dir = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages")
+    if os.path.isdir(winget_dir):
+        for root, dirs, files in os.walk(winget_dir):
+            if "ffmpeg.exe" in files:
+                return os.path.join(root, "ffmpeg.exe")
+    for candidate in [
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+    ]:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+def find_ffprobe():
+    """Detect FFprobe executable in PATH or next to ffmpeg."""
+    p = shutil.which("ffprobe")
+    if p:
+        return p
+    ff = find_ffmpeg()
+    if ff:
+        cand = ff.replace("ffmpeg.exe", "ffprobe.exe").replace("ffmpeg", "ffprobe")
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def find_vlc():
+    """Detect VLC Media Player executable."""
+    p = shutil.which("vlc")
+    if p:
+        return p
+    for candidate in [
+        r"C:\Program Files\VideoLAN\VLC\vlc.exe",
+        r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
+    ]:
+        if os.path.exists(candidate):
+            return candidate
+    return None
 
 
 def rewrite_m3u8(content_text, base_url, proxy_prefix='/api/proxy?url='):
@@ -500,6 +546,9 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == '/api/proxy':
             self.handle_proxy(is_head=True)
             return
+        if parsed.path == '/api/transcode':
+            self.handle_transcode(is_head=True)
+            return
         super().do_HEAD()
 
     def handle_proxy(self, is_head=False):
@@ -647,6 +696,212 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 err_body = {"error": f"Errore Proxy: {str(e)}", "code": 500}
                 self.wfile.write(json.dumps(err_body).encode('utf-8'))
 
+    def handle_tools(self):
+        vlc = find_vlc()
+        ffmpeg = find_ffmpeg()
+        self.send_response(200)
+        self.end_cors_headers()
+        self.end_headers()
+        res = {
+            "vlc_available": bool(vlc),
+            "vlc_path": vlc,
+            "ffmpeg_available": bool(ffmpeg),
+            "ffmpeg_path": ffmpeg
+        }
+        self.wfile.write(json.dumps(res).encode('utf-8'))
+
+    def handle_open_vlc(self):
+        prefix = '/api/open_vlc?url='
+        if self.path.startswith(prefix):
+            target_url = self.path[len(prefix):]
+        else:
+            parsed = urllib.parse.urlparse(self.path)
+            qs = urllib.parse.parse_qs(parsed.query)
+            target_url = qs.get('url', [None])[0]
+
+        if not target_url:
+            self.send_response(400)
+            self.end_cors_headers()
+            self.end_headers()
+            self.wfile.write(b'{"success": false, "error": "Parametro url mancante"}')
+            return
+
+        if target_url.startswith('http%3A') or target_url.startswith('https%3A') or '%2F' in target_url:
+            target_url = urllib.parse.unquote(target_url)
+
+        vlc_path = find_vlc()
+        if not vlc_path:
+            self.send_response(404)
+            self.end_cors_headers()
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "error": "VLC Media Player non trovato sul sistema."}).encode('utf-8'))
+            return
+
+        try:
+            subprocess.Popen([vlc_path, target_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.send_response(200)
+            self.end_cors_headers()
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": True, "message": "VLC avviato con successo!", "path": vlc_path}).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.end_cors_headers()
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
+
+    def handle_transcode(self, is_head=False):
+        parsed = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
+        target_url = qs.get('url', [None])[0]
+        ss_val = qs.get('ss', [None])[0] or qs.get('start', [None])[0]
+
+        # Fallback for unescaped url parameter
+        if not target_url:
+            prefix = '/api/transcode?url='
+            if self.path.startswith(prefix):
+                remainder = self.path[len(prefix):]
+                if '&ss=' in remainder:
+                    parts = remainder.split('&ss=', 1)
+                    target_url = parts[0]
+                    ss_val = parts[1]
+                else:
+                    target_url = remainder
+
+        if not target_url:
+            self.send_response(400)
+            self.end_cors_headers()
+            self.end_headers()
+            if not is_head:
+                self.wfile.write(b'{"error": "Parametro url mancante"}')
+            return
+
+        if target_url.startswith('http%3A') or target_url.startswith('https%3A') or '%2F' in target_url:
+            target_url = urllib.parse.unquote(target_url)
+
+        start_seconds = 0.0
+        if ss_val:
+            try:
+                start_seconds = max(0.0, float(ss_val))
+            except (ValueError, TypeError):
+                start_seconds = 0.0
+
+        ffmpeg_path = find_ffmpeg()
+        if not ffmpeg_path:
+            # Fallback to standard proxy if ffmpeg is missing
+            self.handle_proxy(is_head=is_head)
+            return
+
+        clean_env = os.environ.copy()
+        clean_env.pop('http_proxy', None)
+        clean_env.pop('https_proxy', None)
+
+        cmd = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel", "error",
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "5",
+            "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
+        ]
+
+        if start_seconds > 0:
+            cmd.extend(["-ss", str(start_seconds)])
+
+        cmd.extend([
+            "-i", target_url,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ac", "2",
+            "-avoid_negative_ts", "make_zero",
+            "-f", "mp4",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+            "pipe:1"
+        ])
+
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
+        self.send_header('Access-Control-Allow-Headers', '*')
+        self.send_header('Content-Type', 'video/mp4')
+        self.send_header('Cache-Control', 'no-cache')
+        self.end_headers()
+
+        if is_head:
+            return
+
+        proc = None
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=clean_env)
+            while True:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+        except Exception as e:
+            print(f"[Transcode] Streaming error: {e}")
+        finally:
+            if proc:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=1)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+
+    def handle_media_info(self):
+        parsed = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
+        target_url = qs.get('url', [None])[0]
+        if not target_url:
+            self.send_response(400)
+            self.end_cors_headers()
+            self.end_headers()
+            self.wfile.write(b'{"error": "Parametro url mancante"}')
+            return
+
+        if target_url.startswith('http%3A') or target_url.startswith('https%3A') or '%2F' in target_url:
+            target_url = urllib.parse.unquote(target_url)
+
+        ffprobe_path = find_ffprobe()
+        if not ffprobe_path:
+            self.send_response(200)
+            self.end_cors_headers()
+            self.end_headers()
+            self.wfile.write(b'{"duration": 0}')
+            return
+
+        try:
+            cmd = [
+                ffprobe_path,
+                "-v", "error",
+                "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
+                "-show_entries", "format=duration",
+                "-of", "json",
+                target_url
+            ]
+            clean_env = os.environ.copy()
+            clean_env.pop('http_proxy', None)
+            clean_env.pop('https_proxy', None)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=8, env=clean_env)
+            info = json.loads(res.stdout) if res.stdout else {}
+            dur_str = info.get('format', {}).get('duration')
+            dur = float(dur_str) if dur_str else 0
+            self.send_response(200)
+            self.end_cors_headers()
+            self.end_headers()
+            self.wfile.write(json.dumps({"duration": dur}).encode('utf-8'))
+        except Exception as e:
+            self.send_response(200)
+            self.end_cors_headers()
+            self.end_headers()
+            self.wfile.write(json.dumps({"duration": 0, "error": str(e)}).encode('utf-8'))
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -655,6 +910,26 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         # 1. CORS Proxy Endpoint (for API calls and Streams): /api/proxy?url=<TARGET_URL>
         if path == '/api/proxy':
             self.handle_proxy(is_head=False)
+            return
+
+        # 2. On-The-Fly Audio Transcoding (AC3/DTS -> AAC for browser playback): /api/transcode?url=<TARGET_URL>&ss=<SEEK_SECONDS>
+        if path == '/api/transcode':
+            self.handle_transcode(is_head=False)
+            return
+
+        # 3. Media Metadata Probe: /api/media_info?url=<TARGET_URL>
+        if path == '/api/media_info':
+            self.handle_media_info()
+            return
+
+        # 4. Direct Launch in VLC Media Player: /api/open_vlc?url=<TARGET_URL>
+        if path == '/api/open_vlc':
+            self.handle_open_vlc()
+            return
+
+        # 5. Diagnostic System Tools Status: /api/tools
+        if path == '/api/tools':
+            self.handle_tools()
             return
 
         # 2. Built-in Demo Xtream API: /api/demo/player_api.php
