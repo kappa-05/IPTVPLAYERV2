@@ -10,8 +10,9 @@
  *  - Stall detection, auto-recovery, and detailed diagnostic error states
  */
 
-import { XtreamAPI } from './api.js';
-import { UIManager } from './ui.js';
+import { XtreamAPI } from './api.js?v=3.0';
+import { UIManager } from './ui.js?v=3.0';
+import { WatchHistoryManager } from './history.js?v=3.0';
 
 export class VideoPlayer {
   constructor() {
@@ -98,6 +99,16 @@ export class VideoPlayer {
     this.retryCount = 0;
     this.maxRetries = 2;
 
+    // Resume Playback Banner Elements
+    this.resumeBanner = document.getElementById('player-resume-banner');
+    this.resumeTimeEl = document.getElementById('resume-banner-time');
+    this.resumeRestartBtn = document.getElementById('resume-restart-btn');
+    this.resumeDismissBtn = document.getElementById('resume-dismiss-btn');
+    this.resumeTimeout = null;
+    this.pendingResumeSeek = 0;
+    this.lastProgressSaveTime = 0;
+    this.onClose = null;
+
     this.initEvents();
     this.initCustomControls();
   }
@@ -173,6 +184,20 @@ export class VideoPlayer {
     if (this.btnDismissAudioNotice) {
       this.btnDismissAudioNotice.addEventListener('click', () => {
         this.hideAudioNotice();
+      });
+    }
+
+    // Resume banner buttons
+    if (this.resumeRestartBtn) {
+      this.resumeRestartBtn.addEventListener('click', () => {
+        this.seek(0);
+        this.hideResumeBanner();
+      });
+    }
+
+    if (this.resumeDismissBtn) {
+      this.resumeDismissBtn.addEventListener('click', () => {
+        this.hideResumeBanner();
       });
     }
 
@@ -296,6 +321,17 @@ export class VideoPlayer {
       }
     }
 
+    // Check for saved resume position on VOD / Series
+    let initialSeek = 0;
+    if (type !== 'live' && item && account) {
+      const itemId = WatchHistoryManager.getItemId(item, type);
+      const saved = WatchHistoryManager.getProgress(account.id, itemId);
+      if (saved && saved.currentTime >= 15 && !saved.completed) {
+        initialSeek = saved.currentTime;
+      }
+    }
+    this.pendingResumeSeek = initialSeek;
+
     // Determine initial format
     let initialFormat = 'm3u8';
     if (type === 'live') {
@@ -319,7 +355,7 @@ export class VideoPlayer {
     };
 
     this.retryCount = 0;
-    this._startPlayback();
+    this._startPlayback(initialSeek);
   }
 
   _startPlayback(seekPos = 0) {
@@ -335,6 +371,13 @@ export class VideoPlayer {
 
     this.updateFormatBadge(currentFormat);
     this.updateAudioBadge();
+
+    // Show resume banner if started from a saved position
+    if (seekPos > 0 && type !== 'live') {
+      this.showResumeBanner(seekPos);
+    } else {
+      this.hideResumeBanner();
+    }
 
     // Ensure volume is properly initialized and never muted by default
     if (this.video) {
@@ -867,6 +910,7 @@ export class VideoPlayer {
       this.video.addEventListener('timeupdate', () => {
         if (!this.isDraggingTimeline) {
           this.updateProgressUI();
+          this.savePlaybackProgress(false);
         }
       });
 
@@ -1452,7 +1496,70 @@ export class VideoPlayer {
     }
   }
 
+  showResumeBanner(seekPos) {
+    if (!this.resumeBanner || !this.resumeTimeEl) return;
+    this.resumeTimeEl.textContent = this.formatTime(seekPos);
+    this.resumeBanner.style.display = 'flex';
+    if (this.resumeTimeout) clearTimeout(this.resumeTimeout);
+    this.resumeTimeout = setTimeout(() => {
+      this.hideResumeBanner();
+    }, 8000);
+  }
+
+  hideResumeBanner() {
+    if (this.resumeTimeout) {
+      clearTimeout(this.resumeTimeout);
+      this.resumeTimeout = null;
+    }
+    if (this.resumeBanner) {
+      this.resumeBanner.style.display = 'none';
+    }
+  }
+
+  savePlaybackProgress(force = false) {
+    if (!this.currentStream || this.currentStream.type === 'live' || !this.currentStream.account || !this.currentStream.item) return;
+    const now = Date.now();
+    if (!force && (now - this.lastProgressSaveTime < 4000)) return;
+    this.lastProgressSaveTime = now;
+
+    const cur = this.getCurrentPlaybackTime();
+    const dur = this.getDuration();
+    if (dur < 30 || cur < 5) return;
+
+    const pct = (cur / dur) * 100;
+    const accountId = this.currentStream.account.id;
+    const itemId = WatchHistoryManager.getItemId(this.currentStream.item, this.currentStream.type);
+
+    if (pct > 92 || (dur - cur) < 45) {
+      WatchHistoryManager.markCompleted(accountId, itemId);
+    } else if (cur >= 15 && pct >= 2) {
+      let subTitle = '';
+      if (this.currentStream.type === 'series') {
+        const s = this.currentStream.item.season || this.currentStream.item.season_num || '1';
+        const e = this.currentStream.item.episode_num || this.currentStream.item.num || '1';
+        subTitle = `Stagione ${s} • Episodio ${e}`;
+      } else {
+        subTitle = 'Film VOD';
+      }
+
+      WatchHistoryManager.saveProgress(accountId, {
+        id: itemId,
+        type: this.currentStream.type,
+        title: this.currentStream.title,
+        subTitle: subTitle,
+        poster: this.currentStream.item.stream_icon || this.currentStream.item.cover || this.currentStream.item.movie_image || '',
+        currentTime: cur,
+        duration: dur,
+        percent: pct,
+        item: this.currentStream.item,
+        completed: false
+      });
+    }
+  }
+
   close() {
+    this.savePlaybackProgress(true);
+    this.hideResumeBanner();
     this.clearStallTimer();
     if (this.audioProbeTimer) {
       clearTimeout(this.audioProbeTimer);
@@ -1478,6 +1585,9 @@ export class VideoPlayer {
     this.isDraggingTimeline = false;
     this.showControls();
     this.updatePlayState(false);
+    if (this.onClose) {
+      this.onClose();
+    }
   }
 }
 

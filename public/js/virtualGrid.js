@@ -41,7 +41,7 @@ export class VirtualGrid {
 
     // Viewport holds only currently visible elements
     this.viewport = document.createElement('div');
-    this.viewport.className = `virtual-grid-viewport grid-${this.cardType}`;
+    this.viewport.className = `virtual-grid-viewport grid-${this.cardType} ${this.viewMode === 'list' ? 'list-mode' : ''}`;
 
     this.spacer.appendChild(this.viewport);
     this.container.appendChild(this.spacer);
@@ -90,8 +90,8 @@ export class VirtualGrid {
 
     if (this.viewMode === 'list') {
       this.columns = 1;
-      this.itemHeight = 72;
-      this.gap = 8;
+      this.itemHeight = 44;
+      this.gap = 4;
     } else {
       if (this.cardType === 'live') {
         this.minItemWidth = 230;
@@ -151,6 +151,11 @@ export class VirtualGrid {
 
     this.viewport.innerHTML = '';
     this.viewport.appendChild(fragment);
+  }
+
+  refresh() {
+    this.calculateDimensions();
+    this.render();
   }
 
   destroy() {

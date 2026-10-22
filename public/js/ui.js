@@ -3,6 +3,8 @@
  * Clean, Modern Professional Components (Zero Emojis, Crisp SVGs, Safe Fallbacks).
  */
 
+import { WatchHistoryManager } from './history.js?v=3.0';
+
 const ICONS = {
   starOutline: '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>',
   starFilled: '<svg viewBox="0 0 24 24" width="14" height="14" stroke="#fbbf24" stroke-width="2" fill="#fbbf24" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>',
@@ -84,26 +86,27 @@ export class UIManager {
 
     if (viewMode === 'list') {
       card.innerHTML = `
-        <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
-          <div style="display:flex; align-items:center; gap:12px; overflow:hidden;">
-            <div class="channel-logo-container" style="width:38px; height:38px;">
+        <div class="list-item-row">
+          <div class="list-item-left">
+            <div class="channel-logo-container" style="width:28px; height:28px; min-width:28px; padding:2px; border-radius:3px; flex-shrink:0;">
               ${logoUrl 
                 ? `<img class="channel-logo-img" src="${logoUrl}" alt="" />
                    <span class="channel-fallback-logo" style="display:none;">TV</span>` 
                 : '<span class="channel-fallback-logo">TV</span>'}
             </div>
-            <div style="display:flex; flex-direction:column; overflow:hidden;">
-              <span class="channel-name" style="font-size:13.5px;">${safeName}</span>
-              <span style="font-size:11px; color:var(--text-dim);">ID: ${streamId}</span>
+            <div class="list-item-text">
+              <div class="list-item-title-row">
+                <span class="channel-name" title="${safeName}">${safeName}</span>
+                <span class="badge badge-live" style="font-size:9px; padding:1px 5px;"><span class="live-pulse"></span> LIVE</span>
+              </div>
+              <span class="list-item-sub">ID: ${streamId}</span>
             </div>
           </div>
-          <div style="display:flex; align-items:center; gap:8px;">
+          <div class="list-item-actions">
             <button class="btn-card-fav ${isFav ? 'active' : ''}" title="Preferiti">
               ${isFav ? ICONS.starFilled : ICONS.starOutline}
             </button>
-            <button class="btn-primary" style="padding:6px 14px; font-size:12px; width:auto; border-radius:4px;">
-              Guarda
-            </button>
+            <button class="btn-primary btn-list-action">Guarda</button>
           </div>
         </div>
       `;
@@ -154,7 +157,7 @@ export class UIManager {
     return card;
   }
 
-  static createVodCard(item, onPlay, onToggleFav, isFav, onDetail, viewMode = 'grid') {
+  static createVodCard(item, onPlay, onToggleFav, isFav, onDetail, viewMode = 'grid', accountId = null) {
     const card = document.createElement('div');
     card.className = `movie-card ${viewMode === 'list' ? 'list-mode' : ''}`;
 
@@ -164,45 +167,100 @@ export class UIManager {
     const container = (item.container_extension || 'MP4').toUpperCase();
     const safeName = UIManager.escapeHtml(name);
 
-    card.innerHTML = `
-      <div class="movie-poster-box">
-        ${posterUrl 
-          ? `<img class="movie-poster-img" src="${posterUrl}" loading="lazy" alt="" />
-             <div class="movie-poster-fallback" style="display:none;">${ICONS.movie}<span>${safeName}</span></div>` 
-          : `<div class="movie-poster-fallback">${ICONS.movie}<span>${safeName}</span></div>`}
-        <div class="movie-overlay-badges">
-          <span class="badge badge-vod">${container}</span>
-          ${rating ? `<span class="badge badge-rating">${rating}</span>` : ''}
-        </div>
-      </div>
-      <div class="movie-card-info">
-        <div class="movie-title" title="${safeName}">${safeName}</div>
-        <div class="movie-meta">
-          <span>Film VOD</span>
-          <div style="display: flex; align-items: center; gap: 6px;">
+    const itemId = `vod_${item.stream_id || item.id}`;
+    const progress = accountId ? WatchHistoryManager.getProgress(accountId, itemId) : null;
+    const isCompleted = accountId ? WatchHistoryManager.isCompleted(accountId, itemId) : false;
+    const progressPct = progress ? progress.percent : 0;
+    const remText = progress ? WatchHistoryManager.formatRemaining(progress.duration, progress.currentTime) : '';
+
+    if (viewMode === 'list') {
+      card.innerHTML = `
+        <div class="list-item-row">
+          <div class="list-item-left">
+            <div class="list-poster-thumb">
+              ${posterUrl 
+                ? `<img class="list-poster-img" src="${posterUrl}" loading="lazy" alt="" />
+                   <div class="list-poster-fallback" style="display:none;">${ICONS.movie}</div>` 
+                : `<div class="list-poster-fallback">${ICONS.movie}</div>`}
+              ${progressPct > 2 ? `<div class="card-progress-bar"><div class="card-progress-fill" style="width:${progressPct}%;"></div></div>` : ''}
+            </div>
+            <div class="list-item-text">
+              <div class="list-item-title-row">
+                <span class="movie-title" title="${safeName}">${safeName}</span>
+                <span class="badge badge-vod">${container}</span>
+                ${rating ? `<span class="badge badge-rating">${rating}</span>` : ''}
+                ${isCompleted ? `<span class="badge badge-watched">VISTO</span>` : ''}
+              </div>
+              <span class="list-item-sub">${remText || 'Film VOD'}</span>
+            </div>
+          </div>
+          <div class="list-item-actions">
             <button class="btn-card-vlc" title="Riproduci con VLC Media Player">VLC</button>
-            <button class="btn-card-fav ${isFav ? 'active' : ''}" style="width:26px;height:26px;border-radius:4px;" title="Preferiti">
+            <button class="btn-card-fav ${isFav ? 'active' : ''}" title="Preferiti">
               ${isFav ? ICONS.starFilled : ICONS.starOutline}
             </button>
+            <button class="btn-primary btn-list-action">Guarda</button>
           </div>
         </div>
-      </div>
-    `;
+      `;
 
-    const img = card.querySelector('.movie-poster-img');
-    if (img) {
-      img.addEventListener('error', () => {
-        img.style.display = 'none';
-        const fallback = card.querySelector('.movie-poster-fallback');
-        if (fallback) fallback.style.display = 'flex';
-      });
+      const img = card.querySelector('.list-poster-img');
+      if (img) {
+        img.addEventListener('error', () => {
+          img.style.display = 'none';
+          const fallback = card.querySelector('.list-poster-fallback');
+          if (fallback) fallback.style.display = 'flex';
+        });
+      }
+    } else {
+      card.innerHTML = `
+        <div class="movie-poster-box">
+          ${posterUrl 
+            ? `<img class="movie-poster-img" src="${posterUrl}" loading="lazy" alt="" />
+               <div class="movie-poster-fallback" style="display:none;">${ICONS.movie}<span>${safeName}</span></div>` 
+            : `<div class="movie-poster-fallback">${ICONS.movie}<span>${safeName}</span></div>`}
+          <div class="movie-overlay-badges">
+            <span class="badge badge-vod">${container}</span>
+            ${rating ? `<span class="badge badge-rating">${rating}</span>` : ''}
+            ${isCompleted ? `<span class="badge badge-watched">VISTO</span>` : ''}
+          </div>
+          ${progressPct > 2 ? `
+            <div class="card-progress-bar">
+              <div class="card-progress-fill" style="width: ${progressPct}%;"></div>
+            </div>
+          ` : ''}
+        </div>
+        <div class="movie-card-info">
+          <div class="movie-title" title="${safeName}">${safeName}</div>
+          <div class="movie-meta">
+            <span>${remText || 'Film VOD'}</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <button class="btn-card-vlc" title="Riproduci con VLC Media Player">VLC</button>
+              <button class="btn-card-fav ${isFav ? 'active' : ''}" style="width:26px;height:26px;border-radius:4px;" title="Preferiti">
+                ${isFav ? ICONS.starFilled : ICONS.starOutline}
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      const img = card.querySelector('.movie-poster-img');
+      if (img) {
+        img.addEventListener('error', () => {
+          img.style.display = 'none';
+          const fallback = card.querySelector('.movie-poster-fallback');
+          if (fallback) fallback.style.display = 'flex';
+        });
+      }
     }
 
     const favBtn = card.querySelector('.btn-card-fav');
-    favBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      onToggleFav(item, 'vod', favBtn);
-    });
+    if (favBtn) {
+      favBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onToggleFav(item, 'vod', favBtn);
+      });
+    }
 
     const vlcBtn = card.querySelector('.btn-card-vlc');
     if (vlcBtn && onDetail) {
@@ -230,42 +288,82 @@ export class UIManager {
     const safeName = UIManager.escapeHtml(name);
     const safeGenre = UIManager.escapeHtml(genre);
 
-    card.innerHTML = `
-      <div class="series-poster-box">
-        ${posterUrl 
-          ? `<img class="series-poster-img" src="${posterUrl}" loading="lazy" alt="" />
-             <div class="movie-poster-fallback" style="display:none;">${ICONS.series}<span>${safeName}</span></div>` 
-          : `<div class="movie-poster-fallback">${ICONS.series}<span>${safeName}</span></div>`}
-        <div class="movie-overlay-badges">
-          <span class="badge badge-series">SERIE</span>
-          ${rating ? `<span class="badge badge-rating">${rating}</span>` : ''}
+    if (viewMode === 'list') {
+      card.innerHTML = `
+        <div class="list-item-row">
+          <div class="list-item-left">
+            <div class="list-poster-thumb">
+              ${posterUrl 
+                ? `<img class="list-poster-img" src="${posterUrl}" loading="lazy" alt="" />
+                   <div class="list-poster-fallback" style="display:none;">${ICONS.series}</div>` 
+                : `<div class="list-poster-fallback">${ICONS.series}</div>`}
+            </div>
+            <div class="list-item-text">
+              <div class="list-item-title-row">
+                <span class="series-title" title="${safeName}">${safeName}</span>
+                <span class="badge badge-series">SERIE</span>
+                ${rating ? `<span class="badge badge-rating">${rating}</span>` : ''}
+              </div>
+              <span class="list-item-sub">${safeGenre}</span>
+            </div>
+          </div>
+          <div class="list-item-actions">
+            <button class="btn-card-fav ${isFav ? 'active' : ''}" title="Preferiti">
+              ${isFav ? ICONS.starFilled : ICONS.starOutline}
+            </button>
+            <button class="btn-primary btn-list-action">Episodi</button>
+          </div>
         </div>
-      </div>
-      <div class="series-card-info">
-        <div class="series-title" title="${safeName}">${safeName}</div>
-        <div class="series-meta">
-          <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;">${safeGenre}</span>
-          <button class="btn-card-fav ${isFav ? 'active' : ''}" style="width:26px;height:26px;border-radius:4px;" title="Preferiti">
-            ${isFav ? ICONS.starFilled : ICONS.starOutline}
-          </button>
-        </div>
-      </div>
-    `;
+      `;
 
-    const img = card.querySelector('.series-poster-img');
-    if (img) {
-      img.addEventListener('error', () => {
-        img.style.display = 'none';
-        const fallback = card.querySelector('.movie-poster-fallback');
-        if (fallback) fallback.style.display = 'flex';
-      });
+      const img = card.querySelector('.list-poster-img');
+      if (img) {
+        img.addEventListener('error', () => {
+          img.style.display = 'none';
+          const fallback = card.querySelector('.list-poster-fallback');
+          if (fallback) fallback.style.display = 'flex';
+        });
+      }
+    } else {
+      card.innerHTML = `
+        <div class="series-poster-box">
+          ${posterUrl 
+            ? `<img class="series-poster-img" src="${posterUrl}" loading="lazy" alt="" />
+               <div class="movie-poster-fallback" style="display:none;">${ICONS.series}<span>${safeName}</span></div>` 
+            : `<div class="movie-poster-fallback">${ICONS.series}<span>${safeName}</span></div>`}
+          <div class="movie-overlay-badges">
+            <span class="badge badge-series">SERIE</span>
+            ${rating ? `<span class="badge badge-rating">${rating}</span>` : ''}
+          </div>
+        </div>
+        <div class="series-card-info">
+          <div class="series-title" title="${safeName}">${safeName}</div>
+          <div class="series-meta">
+            <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;">${safeGenre}</span>
+            <button class="btn-card-fav ${isFav ? 'active' : ''}" style="width:26px;height:26px;border-radius:4px;" title="Preferiti">
+              ${isFav ? ICONS.starFilled : ICONS.starOutline}
+            </button>
+          </div>
+        </div>
+      `;
+
+      const img = card.querySelector('.series-poster-img');
+      if (img) {
+        img.addEventListener('error', () => {
+          img.style.display = 'none';
+          const fallback = card.querySelector('.movie-poster-fallback');
+          if (fallback) fallback.style.display = 'flex';
+        });
+      }
     }
 
     const favBtn = card.querySelector('.btn-card-fav');
-    favBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      onToggleFav(item, 'series', favBtn);
-    });
+    if (favBtn) {
+      favBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onToggleFav(item, 'series', favBtn);
+      });
+    }
 
     card.addEventListener('click', () => {
       onOpenSeries(item);
@@ -388,7 +486,7 @@ export class UIManager {
   }
 
   // --- SERIES EPISODES MODAL ---
-  static renderSeriesModal(series, seriesDetails, onPlayEpisode) {
+  static renderSeriesModal(series, seriesDetails, onPlayEpisode, accountId = null) {
     let overlay = document.getElementById('series-modal-overlay');
     if (!overlay) {
       overlay = document.createElement('div');
@@ -507,6 +605,12 @@ export class UIManager {
         const epExt = ep.container_extension || '';
         const thumbUrl = ep.info?.movie_image || ep.movie_image || ep.cover || '';
 
+        const epKey = `episode_${ep.id || ep.stream_id}`;
+        const progress = accountId ? WatchHistoryManager.getProgress(accountId, epKey) : null;
+        const isCompleted = accountId ? WatchHistoryManager.isCompleted(accountId, epKey) : false;
+        const progressPct = progress ? progress.percent : 0;
+        const remText = progress ? WatchHistoryManager.formatRemaining(progress.duration, progress.currentTime) : '';
+
         epEl.innerHTML = `
           <div class="episode-left">
             ${thumbUrl ? `
@@ -520,6 +624,8 @@ export class UIManager {
             <div class="episode-info-text">
               <div class="episode-title-row">
                 <span class="episode-title">${epTitle}</span>
+                ${isCompleted ? '<span class="badge badge-watched">VISTO</span>' : ''}
+                ${progressPct > 2 && !isCompleted ? `<span class="episode-chip" style="color:#60a5fa;border-color:rgba(37,99,235,0.4);">${remText || (progressPct + '%')}</span>` : ''}
                 ${epDuration ? `<span class="episode-chip">${epDuration}</span>` : ''}
                 ${epExt ? `<span class="episode-chip">${epExt.toUpperCase()}</span>` : ''}
               </div>
@@ -527,6 +633,11 @@ export class UIManager {
             </div>
           </div>
           <button class="episode-play-btn" title="Riproduci Episodio">${ICONS.play}</button>
+          ${progressPct > 2 && !isCompleted ? `
+            <div class="episode-card-progress">
+              <div class="episode-card-progress-fill" style="width: ${progressPct}%;"></div>
+            </div>
+          ` : ''}
         `;
 
         epEl.addEventListener('click', () => {
@@ -612,4 +723,62 @@ export class UIManager {
       container.appendChild(chip);
     });
   }
+
+  // --- CONTINUE WATCHING CARD GENERATOR ---
+  static createContinueWatchingCard(entry, onPlay, onRemove) {
+    const card = document.createElement('div');
+    card.className = 'cw-card';
+    const safeTitle = UIManager.escapeHtml(entry.title);
+    const safeSub = UIManager.escapeHtml(entry.subTitle);
+    const remText = WatchHistoryManager.formatRemaining(entry.duration, entry.currentTime);
+
+    card.innerHTML = `
+      <div class="cw-poster-box">
+        ${entry.poster 
+          ? `<img class="cw-poster-img" src="${entry.poster}" alt="" />
+             <div class="cw-poster-fallback" style="display:none;">${entry.type === 'series' ? ICONS.series : ICONS.movie}</div>`
+          : `<div class="cw-poster-fallback">${entry.type === 'series' ? ICONS.series : ICONS.movie}</div>`}
+        <button class="cw-dismiss-btn" title="Rimuovi da Continua a guardare">
+          ${ICONS.close}
+        </button>
+        <div class="cw-play-overlay">
+          <div class="cw-play-icon">${ICONS.play}</div>
+        </div>
+        <div class="cw-progress-bar">
+          <div class="cw-progress-fill" style="width: ${entry.percent}%;"></div>
+        </div>
+      </div>
+      <div class="cw-info">
+        <div class="cw-title" title="${safeTitle}">${safeTitle}</div>
+        <div class="cw-meta-row">
+          <span class="cw-sub">${safeSub}</span>
+          <span class="cw-rem">${remText || (entry.percent + '%')}</span>
+        </div>
+      </div>
+    `;
+
+    const img = card.querySelector('.cw-poster-img');
+    if (img) {
+      img.addEventListener('error', () => {
+        img.style.display = 'none';
+        const fb = card.querySelector('.cw-poster-fallback');
+        if (fb) fb.style.display = 'flex';
+      });
+    }
+
+    const dismissBtn = card.querySelector('.cw-dismiss-btn');
+    if (dismissBtn) {
+      dismissBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onRemove(entry);
+      });
+    }
+
+    card.addEventListener('click', () => {
+      onPlay(entry);
+    });
+
+    return card;
+  }
 }
+

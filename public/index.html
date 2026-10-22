@@ -8,11 +8,11 @@
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
   
   <!-- Modern Stylesheets -->
-  <link rel="stylesheet" href="css/main.css?v=2.6">
-  <link rel="stylesheet" href="css/login.css?v=2.6">
-  <link rel="stylesheet" href="css/playlist.css?v=2.6">
-  <link rel="stylesheet" href="css/player.css?v=2.6">
-  <link rel="stylesheet" href="css/animations.css?v=2.6">
+  <link rel="stylesheet" href="css/main.css?v=3.0">
+  <link rel="stylesheet" href="css/login.css?v=3.0">
+  <link rel="stylesheet" href="css/playlist.css?v=3.0">
+  <link rel="stylesheet" href="css/player.css?v=3.0">
+  <link rel="stylesheet" href="css/animations.css?v=3.0">
 </head>
 <body>
 
@@ -279,6 +279,21 @@
 
           </div>
 
+          <!-- Continue Watching Section (Dynamic, shown when items exist) -->
+          <div id="continue-watching-section" class="continue-watching-section" style="display: none;">
+            <div class="continue-watching-header">
+              <div class="continue-watching-title-group">
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                <h3 class="continue-watching-title">Continua a guardare</h3>
+                <span id="continue-watching-badge" class="continue-watching-badge">0</span>
+              </div>
+              <button id="btn-clear-history" class="btn-clear-history" title="Svuota cronologia">Cancella tutti</button>
+            </div>
+            <div id="continue-watching-list" class="continue-watching-list">
+              <!-- Dynamically populated from WatchHistoryManager -->
+            </div>
+          </div>
+
           <!-- Virtualized High Performance Grid Container -->
           <div id="virtual-scroll-container" class="virtual-scroll-container">
             <!-- VirtualGrid creates spacer & viewport dynamically -->
@@ -447,6 +462,16 @@
                 <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
               </button>
             </div>
+          <!-- Resume Playback Floating Banner -->
+          <div id="player-resume-banner" class="player-resume-banner" style="display: none;">
+            <div class="resume-banner-info">
+              <svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+              <span>Ripreso da <strong id="resume-banner-time">0:00</strong></span>
+            </div>
+            <button id="resume-restart-btn" class="btn-resume-restart">Ricomincia da capo</button>
+            <button id="resume-dismiss-btn" class="btn-resume-dismiss" title="Chiudi">
+              <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
           </div>
 
           <div id="player-loading" class="player-loading-spinner" style="display: none;">
@@ -469,7 +494,7 @@
   <script src="js/vendor/mpegts.min.js"></script>
 
   <!-- Main ES Module Orchestrator -->
-  <script type="module" src="js/app.js?v=2.6"></script>
+  <script type="module" src="js/app.js?v=3.0"></script>
 
 </body>
 </html>

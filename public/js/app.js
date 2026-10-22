@@ -3,11 +3,12 @@
  * Connects API, IndexedDB cache, VirtualGrid rendering engine, UI, and VideoPlayer.
  */
 
-import { XtreamAPI } from './api.js';
-import { dbManager } from './db.js';
-import { VirtualGrid } from './virtualGrid.js';
-import { VideoPlayer } from './player.js';
-import { UIManager } from './ui.js';
+import { XtreamAPI } from './api.js?v=3.0';
+import { dbManager } from './db.js?v=3.0';
+import { VirtualGrid } from './virtualGrid.js?v=3.0';
+import { VideoPlayer } from './player.js?v=3.0';
+import { UIManager } from './ui.js?v=3.0';
+import { WatchHistoryManager } from './history.js?v=3.0';
 
 class IPTVApp {
   constructor() {
@@ -39,6 +40,10 @@ class IPTVApp {
   async init() {
     // 1. Initialize Player
     this.player = new VideoPlayer();
+    this.player.onClose = () => {
+      this.renderContinueWatching();
+      this.virtualGrid?.refresh();
+    };
 
     // 2. Initialize Virtual Grid
     const gridContainer = document.getElementById('virtual-scroll-container');
@@ -377,6 +382,9 @@ class IPTVApp {
       const expDate = new Date(parseInt(this.currentAccount.userInfo.exp_date) * 1000);
       expEl.textContent = `Scade: ${expDate.toLocaleDateString()}`;
     }
+
+    // Render continue watching section
+    this.renderContinueWatching();
   }
 
   logout() {
@@ -642,7 +650,8 @@ class IPTVApp {
         (selected, type, favBtn) => this.toggleFavorite(selected, type, favBtn),
         isFav,
         (selected) => this.playStreamVlc(selected, 'vod'),
-        viewMode
+        viewMode,
+        this.currentAccount?.id
       );
     } else if (cardType === 'series') {
       return UIManager.createSeriesCard(
@@ -689,7 +698,7 @@ class IPTVApp {
       UIManager.renderSeriesModal(series, seriesDetails, (ep, epTitle) => {
         const streamUrl = XtreamAPI.buildStreamUrl(this.currentAccount, ep, 'series_episode');
         this.player.play(streamUrl, epTitle, 'series', ep, this.currentAccount);
-      });
+      }, this.currentAccount?.id);
     } catch (err) {
       console.error('Error opening series details:', err);
       UIManager.showToast('Errore Serie', 'Impossibile caricare gli episodi: ' + err.message, 'error');
@@ -728,6 +737,55 @@ class IPTVApp {
   }
 
   // =========================================================================
+  // CONTINUE WATCHING (RESUME PLAYBACK)
+  // =========================================================================
+
+  renderContinueWatching() {
+    const section = document.getElementById('continue-watching-section');
+    const list = document.getElementById('continue-watching-list');
+    const badge = document.getElementById('continue-watching-badge');
+    if (!section || !list) return;
+
+    if (!this.currentAccount || this.currentMode === 'live') {
+      section.style.display = 'none';
+      return;
+    }
+
+    const history = WatchHistoryManager.getHistory(this.currentAccount.id);
+    if (!history || history.length === 0) {
+      section.style.display = 'none';
+      return;
+    }
+
+    section.style.display = 'block';
+    if (badge) badge.textContent = String(history.length);
+    list.innerHTML = '';
+
+    history.forEach(entry => {
+      const card = UIManager.createContinueWatchingCard(
+        entry,
+        (selected) => this.playFromHistory(selected),
+        (selected) => {
+          WatchHistoryManager.removeItem(this.currentAccount.id, selected.id);
+          this.renderContinueWatching();
+          this.virtualGrid?.refresh();
+        }
+      );
+      list.appendChild(card);
+    });
+  }
+
+  playFromHistory(entry) {
+    if (!this.currentAccount || !entry || !entry.item) return;
+    if (entry.type === 'series') {
+      const streamUrl = XtreamAPI.buildStreamUrl(this.currentAccount, entry.item, 'series_episode');
+      this.player.play(streamUrl, entry.title, 'series', entry.item, this.currentAccount);
+    } else {
+      this.playStream(entry.item, 'vod');
+    }
+  }
+
+  // =========================================================================
   // DASHBOARD EVENT HANDLERS
   // =========================================================================
 
@@ -744,6 +802,7 @@ class IPTVApp {
         this.currentMode = mode;
 
         this.renderSidebarCategories();
+        this.renderContinueWatching();
 
         const firstCat = this.categories[mode]?.[0];
         if (firstCat && mode !== 'favorites') {
@@ -816,6 +875,19 @@ class IPTVApp {
         viewListBtn.classList.add('active');
         viewGridBtn.classList.remove('active');
         this.virtualGrid.setViewMode('list');
+      });
+    }
+
+    // Clear Continue Watching History
+    const clearHistBtn = document.getElementById('btn-clear-history');
+    if (clearHistBtn) {
+      clearHistBtn.addEventListener('click', () => {
+        if (this.currentAccount) {
+          WatchHistoryManager.clearHistory(this.currentAccount.id);
+          this.renderContinueWatching();
+          this.virtualGrid?.refresh();
+          UIManager.showToast('Cronologia Svuotata', 'Tutti i progressi di visione sono stati cancellati.', 'info', 2500);
+        }
       });
     }
 
