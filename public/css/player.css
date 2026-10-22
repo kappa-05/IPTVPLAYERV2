@@ -24,6 +24,14 @@
   pointer-events: auto;
 }
 
+#series-modal-overlay {
+  z-index: 1000;
+}
+
+#player-modal-overlay {
+  z-index: 1100;
+}
+
 /* 2. Video Player Modal */
 .player-modal {
   width: 100%;
@@ -32,7 +40,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   overflow: hidden;
-  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.9), var(--shadow-neon);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.85);
   display: flex;
   flex-direction: column;
   position: relative;
@@ -440,6 +448,18 @@
   color: var(--text-dim);
 }
 
+.badge-season-count {
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--color-primary-light);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+}
+
+.badge-episodes-total {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
 /* Season Tabs */
 .season-tabs-bar {
   display: flex;
@@ -449,9 +469,27 @@
   background: rgba(10, 14, 23, 0.7);
   border-bottom: 1px solid var(--border-subtle);
   overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+.season-tabs-bar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.season-tabs-bar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.season-tabs-bar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
 }
 
 .season-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 16px;
   border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.04);
@@ -460,12 +498,15 @@
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
-  transition: all 0.2s;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .season-tab-btn:hover {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-main);
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
 .season-tab-btn.active {
@@ -473,6 +514,33 @@
   border-color: var(--color-primary);
   color: #fff;
   box-shadow: 0 2px 10px rgba(99, 102, 241, 0.4);
+}
+
+.season-tab-title {
+  font-weight: 600;
+}
+
+.season-ep-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+  transition: all 0.2s;
+}
+
+.season-tab-btn:hover .season-ep-count-badge {
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--text-main);
+}
+
+.season-tab-btn.active .season-ep-count-badge {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
 }
 
 /* Episodes List */
@@ -489,7 +557,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 18px;
+  padding: 12px 18px;
   border-radius: var(--radius-md);
   background: rgba(15, 21, 35, 0.7);
   border: 1px solid var(--border-subtle);
@@ -508,10 +576,27 @@
   align-items: center;
   gap: 16px;
   overflow: hidden;
+  flex: 1;
+}
+
+.episode-thumb-box {
+  width: 76px;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.3);
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle);
+}
+
+.episode-thumb-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .episode-num-badge {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 800;
   color: var(--color-primary-light);
   width: 36px;
@@ -527,8 +612,16 @@
 .episode-info-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   overflow: hidden;
+  flex: 1;
+}
+
+.episode-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .episode-title {
@@ -538,6 +631,16 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.episode-chip {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .episode-plot {
@@ -561,6 +664,8 @@
   flex-shrink: 0;
   box-shadow: 0 2px 10px rgba(99, 102, 241, 0.3);
   transition: transform 0.2s;
+  cursor: pointer;
+  border: none;
 }
 
 .episode-card:hover .episode-play-btn {

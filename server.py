@@ -20,6 +20,8 @@ import socket
 import threading
 import subprocess
 import shutil
+import gzip
+import zlib
 
 # Unverified SSL context to prevent certificate validation errors on IPTV servers
 SSL_UNVERIFIED_CTX = ssl._create_unverified_context()
@@ -468,19 +470,32 @@ DEMO_SERIES_LIST = [
 ]
 
 def get_demo_series_info(series_id):
-    """Returns mock seasons and episodes for a series"""
+    """Returns mock seasons and episodes for a series, with rich multi-season coverage"""
+    sample_videos = [
+        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
+        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
+        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
+        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
+        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4"
+    ]
+
     series_map = {
         "3001": {
             "seasons": [
-                {"air_date": "2016-07-15", "episode_count": 8, "id": 1, "name": "Stagione 1", "overview": "La scomparsa di Will Byers", "season_number": 1},
-                {"air_date": "2017-10-27", "episode_count": 9, "id": 2, "name": "Stagione 2", "overview": "Il Mind Flayer attacca Hawkins", "season_number": 2}
+                {"air_date": "2016-07-15", "episode_count": 3, "id": 1, "name": "Stagione 1", "overview": "La scomparsa di Will Byers", "season_number": 1},
+                {"air_date": "2017-10-27", "episode_count": 2, "id": 2, "name": "Stagione 2", "overview": "Il Mind Flayer attacca Hawkins", "season_number": 2},
+                {"air_date": "2019-07-04", "episode_count": 2, "id": 3, "name": "Stagione 3", "overview": "La battaglia dello Starcourt Mall", "season_number": 3},
+                {"air_date": "2022-05-27", "episode_count": 2, "id": 4, "name": "Stagione 4", "overview": "L'incubo di Vecna", "season_number": 4}
             ],
             "info": {
                 "name": "Stranger Things",
                 "cover": "https://images.unsplash.com/photo-1618336753974-aae8e04506aa?w=600&q=80",
-                "plot": "La scomparsa di un bambino porta alla luce una rete di segreti governativi e minacce dimensionali.",
-                "genre": "Sci-Fi, Thriller",
-                "rating": "8.7"
+                "plot": "Quando un ragazzino svanisce nel nulla, una piccola città svela un mistero che coinvolge esperimenti segreti, terrificanti forze soprannaturali e una strana bambina.",
+                "genre": "Sci-Fi, Mistero, Dramma",
+                "rating": "8.7",
+                "cast": "Millie Bobby Brown, David Harbour, Winona Ryder"
             },
             "episodes": {
                 "1": [
@@ -490,7 +505,7 @@ def get_demo_series_info(series_id):
                         "title": "Capitolo Primo: La scomparsa di Will Byers",
                         "container_extension": "mp4",
                         "info": {"duration": "48m", "plot": "Sulla via di casa dopo una partita di D&D, Will vede qualcosa di spaventoso."},
-                        "direct_source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+                        "direct_source": sample_videos[0]
                     },
                     {
                         "id": "e3001_s1_e2",
@@ -498,7 +513,7 @@ def get_demo_series_info(series_id):
                         "title": "Capitolo Secondo: La stramba di Maple Street",
                         "container_extension": "mp4",
                         "info": {"duration": "55m", "plot": "I ragazzi nascondono la ragazza nel seminterrato mentre lo sceriffo Hopper indaga."},
-                        "direct_source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4"
+                        "direct_source": sample_videos[1]
                     },
                     {
                         "id": "e3001_s1_e3",
@@ -506,7 +521,7 @@ def get_demo_series_info(series_id):
                         "title": "Capitolo Terzo: Luci natalizie",
                         "container_extension": "mp4",
                         "info": {"duration": "51m", "plot": "Joyce cerca di comunicare con Will attraverso luci colorate sul muro."},
-                        "direct_source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+                        "direct_source": sample_videos[2]
                     }
                 ],
                 "2": [
@@ -516,13 +531,367 @@ def get_demo_series_info(series_id):
                         "title": "Capitolo Primo: MADMAX",
                         "container_extension": "mp4",
                         "info": {"duration": "48m", "plot": "Un anno dopo, una nuova ragazza arriva a scuola e Will continua ad avere visioni."},
-                        "direct_source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4"
+                        "direct_source": sample_videos[3]
+                    },
+                    {
+                        "id": "e3001_s2_e2",
+                        "episode_num": 2,
+                        "title": "Capitolo Secondo: Dolcetto o scherzetto, mattoide",
+                        "container_extension": "mp4",
+                        "info": {"duration": "56m", "plot": "I ragazzi festeggiano Halloween mentre una presenza oscura cresce sotto la città."},
+                        "direct_source": sample_videos[4]
+                    }
+                ],
+                "3": [
+                    {
+                        "id": "e3001_s3_e1",
+                        "episode_num": 1,
+                        "title": "Capitolo Primo: Suzy, mi ricevi?",
+                        "container_extension": "mp4",
+                        "info": {"duration": "50m", "plot": "L'estate del 1985 porta amore, un nuovo centro commerciale e topi molto strani."},
+                        "direct_source": sample_videos[5]
+                    },
+                    {
+                        "id": "e3001_s3_e2",
+                        "episode_num": 2,
+                        "title": "Capitolo Secondo: Incubi da centro commerciale",
+                        "container_extension": "mp4",
+                        "info": {"duration": "50m", "plot": "Dustin e Steve intercettano una trasmissione radiofonica russa in codice."},
+                        "direct_source": sample_videos[6]
+                    }
+                ],
+                "4": [
+                    {
+                        "id": "e3001_s4_e1",
+                        "episode_num": 1,
+                        "title": "Capitolo Primo: L'Hellfire Club",
+                        "container_extension": "mp4",
+                        "info": {"duration": "76m", "plot": "Separati tra Hawkins e la California, i ragazzi affrontano nuove sfide al liceo."},
+                        "direct_source": sample_videos[0]
+                    },
+                    {
+                        "id": "e3001_s4_e2",
+                        "episode_num": 2,
+                        "title": "Capitolo Secondo: La maledizione di Vecna",
+                        "container_extension": "mp4",
+                        "info": {"duration": "77m", "plot": "Una serie di omicidi inspiegabili sconvolge Hawkins mentre una nuova forza incombe."},
+                        "direct_source": sample_videos[1]
+                    }
+                ]
+            }
+        },
+        "3002": {
+            "seasons": [
+                {"air_date": "2008-01-20", "episode_count": 3, "id": 1, "name": "Stagione 1", "season_number": 1},
+                {"air_date": "2009-03-08", "episode_count": 2, "id": 2, "name": "Stagione 2", "season_number": 2},
+                {"air_date": "2010-03-21", "episode_count": 2, "id": 3, "name": "Stagione 3", "season_number": 3},
+                {"air_date": "2011-07-17", "episode_count": 2, "id": 4, "name": "Stagione 4", "season_number": 4},
+                {"air_date": "2012-07-15", "episode_count": 2, "id": 5, "name": "Stagione 5", "season_number": 5}
+            ],
+            "info": {
+                "name": "Breaking Bad",
+                "cover": "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&q=80",
+                "plot": "Un insegnante di chimica del liceo a cui è stato diagnosticato un cancro ai polmoni inoperabile decide di produrre metanfetamina per il futuro della famiglia.",
+                "genre": "Crime, Dramma, Thriller",
+                "rating": "9.5",
+                "cast": "Bryan Cranston, Aaron Paul, Anna Gunn"
+            },
+            "episodes": {
+                "1": [
+                    {
+                        "id": "e3002_s1_e1",
+                        "episode_num": 1,
+                        "title": "Questione di chimica (Pilot)",
+                        "container_extension": "mp4",
+                        "info": {"duration": "58m", "plot": "Walter White scopre di avere un tumore e si allea con l'ex studente Jesse Pinkman."},
+                        "direct_source": sample_videos[2]
+                    },
+                    {
+                        "id": "e3002_s1_e2",
+                        "episode_num": 2,
+                        "title": "Senza ritorno",
+                        "container_extension": "mp4",
+                        "info": {"duration": "48m", "plot": "Walt e Jesse devono sbarazzarsi di due spacciatori rimasti coinvolti."},
+                        "direct_source": sample_videos[3]
+                    },
+                    {
+                        "id": "e3002_s1_e3",
+                        "episode_num": 3,
+                        "title": "Conseguenze radicali",
+                        "container_extension": "mp4",
+                        "info": {"duration": "48m", "plot": "Walt affronta un dilemma morale decisivo sul destino di Krazy-8."},
+                        "direct_source": sample_videos[4]
+                    }
+                ],
+                "2": [
+                    {
+                        "id": "e3002_s2_e1",
+                        "episode_num": 1,
+                        "title": "Tutto torna",
+                        "container_extension": "mp4",
+                        "info": {"duration": "47m", "plot": "Walt e Jesse affrontano le minacce dello psicotico Tuco Salamanca."},
+                        "direct_source": sample_videos[0]
+                    },
+                    {
+                        "id": "e3002_s2_e2",
+                        "episode_num": 2,
+                        "title": "Grigliata",
+                        "container_extension": "mp4",
+                        "info": {"duration": "48m", "plot": "Rapiti da Tuco, Walt e Jesse tentano una fuga disperata nel deserto."},
+                        "direct_source": sample_videos[1]
+                    }
+                ],
+                "3": [
+                    {
+                        "id": "e3002_s3_e1",
+                        "episode_num": 1,
+                        "title": "Mai più",
+                        "container_extension": "mp4",
+                        "info": {"duration": "47m", "plot": "Walt cerca di ritirarsi dagli affari mentre Skyler scopre la verità."},
+                        "direct_source": sample_videos[5]
+                    },
+                    {
+                        "id": "e3002_s3_e2",
+                        "episode_num": 2,
+                        "title": "Cavallo senza nome",
+                        "container_extension": "mp4",
+                        "info": {"duration": "47m", "plot": "Due cugini del cartello messicano oltrepassano il confine in cerca di vendetta."},
+                        "direct_source": sample_videos[6]
+                    }
+                ],
+                "4": [
+                    {
+                        "id": "e3002_s4_e1",
+                        "episode_num": 1,
+                        "title": "Taglierino",
+                        "container_extension": "mp4",
+                        "info": {"duration": "47m", "plot": "Walt e Jesse attendono il verdetto di Gus Fring dopo gli eventi del laboratorio."},
+                        "direct_source": sample_videos[2]
+                    },
+                    {
+                        "id": "e3002_s4_e2",
+                        "episode_num": 2,
+                        "title": "Calibro 38",
+                        "container_extension": "mp4",
+                        "info": {"duration": "47m", "plot": "Sentendosi in trappola, Walt compra una pistola per difendersi da Gus."},
+                        "direct_source": sample_videos[3]
+                    }
+                ],
+                "5": [
+                    {
+                        "id": "e3002_s5_e1",
+                        "episode_num": 1,
+                        "title": "Vivi libero o muori",
+                        "container_extension": "mp4",
+                        "info": {"duration": "43m", "plot": "Dopo la caduta di Gus, Walt assume il pieno controllo dell'impero."},
+                        "direct_source": sample_videos[4]
+                    },
+                    {
+                        "id": "e3002_s5_e2",
+                        "episode_num": 2,
+                        "title": "Felina (Finale)",
+                        "container_extension": "mp4",
+                        "info": {"duration": "55m", "plot": "Walter White torna per chiudere ogni conto rimasto in sospeso."},
+                        "direct_source": sample_videos[0]
+                    }
+                ]
+            }
+        },
+        "3003": {
+            "seasons": [
+                {"air_date": "2023-01-15", "episode_count": 3, "id": 1, "name": "Stagione 1", "season_number": 1},
+                {"air_date": "2025-02-01", "episode_count": 2, "id": 2, "name": "Stagione 2", "season_number": 2}
+            ],
+            "info": {
+                "name": "The Last of Us",
+                "cover": "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=600&q=80",
+                "plot": "Vent'anni dopo che un'infezione fungina ha decimato il pianeta, Joel deve scortare la giovane Ellie attraverso un'America desolata.",
+                "genre": "Azione, Avventura, Dramma",
+                "rating": "8.8",
+                "cast": "Pedro Pascal, Bella Ramsey, Gabriel Luna"
+            },
+            "episodes": {
+                "1": [
+                    {
+                        "id": "e3003_s1_e1",
+                        "episode_num": 1,
+                        "title": "Quando sei perso nell'oscurità",
+                        "container_extension": "mp4",
+                        "info": {"duration": "81m", "plot": "L'inizio dell'epidemia sconvolge la vita di Joel."},
+                        "direct_source": sample_videos[1]
+                    },
+                    {
+                        "id": "e3003_s1_e2",
+                        "episode_num": 2,
+                        "title": "Gli infetti",
+                        "container_extension": "mp4",
+                        "info": {"duration": "53m", "plot": "Joel, Tess ed Ellie attraversano una Boston allagata e invasa dai Clicker."},
+                        "direct_source": sample_videos[2]
+                    },
+                    {
+                        "id": "e3003_s1_e3",
+                        "episode_num": 3,
+                        "title": "Molto, molto tempo",
+                        "container_extension": "mp4",
+                        "info": {"duration": "75m", "plot": "La storia toccante di Bill e Frank in un mondo in rovina."},
+                        "direct_source": sample_videos[3]
+                    }
+                ],
+                "2": [
+                    {
+                        "id": "e3003_s2_e1",
+                        "episode_num": 1,
+                        "title": "Ritorno a Jackson",
+                        "container_extension": "mp4",
+                        "info": {"duration": "60m", "plot": "Anni dopo, la quiete di Jackson viene turbata da una nuova minaccia."},
+                        "direct_source": sample_videos[4]
+                    },
+                    {
+                        "id": "e3003_s2_e2",
+                        "episode_num": 2,
+                        "title": "La spirale di Seattle",
+                        "container_extension": "mp4",
+                        "info": {"duration": "58m", "plot": "Ellie parte per Seattle determinata a compiere la sua vendetta."},
+                        "direct_source": sample_videos[5]
+                    }
+                ]
+            }
+        },
+        "3004": {
+            "seasons": [
+                {"air_date": "2013-09-12", "episode_count": 3, "id": 1, "name": "Stagione 1", "season_number": 1},
+                {"air_date": "2014-10-02", "episode_count": 2, "id": 2, "name": "Stagione 2", "season_number": 2},
+                {"air_date": "2016-05-05", "episode_count": 2, "id": 3, "name": "Stagione 3", "season_number": 3}
+            ],
+            "info": {
+                "name": "Peaky Blinders",
+                "cover": "https://images.unsplash.com/photo-1485846234645-a62644f84728?w=600&q=80",
+                "plot": "Birmingham, Inghilterra, 1919. Una famigerata gang guidata dall'ambizioso Thomas Shelby cattura l'attenzione dell'ispettore Campbell.",
+                "genre": "Crime, Dramma, Storico",
+                "rating": "8.8",
+                "cast": "Cillian Murphy, Paul Anderson, Helen McCrory"
+            },
+            "episodes": {
+                "1": [
+                    {
+                        "id": "e3004_s1_e1",
+                        "episode_num": 1,
+                        "title": "Episodio 1",
+                        "container_extension": "mp4",
+                        "info": {"duration": "57m", "plot": "Thomas Shelby entra in possesso per errore di una cassa di armi militari."},
+                        "direct_source": sample_videos[0]
+                    },
+                    {
+                        "id": "e3004_s1_e2",
+                        "episode_num": 2,
+                        "title": "Episodio 2",
+                        "container_extension": "mp4",
+                        "info": {"duration": "58m", "plot": "L'ispettore Campbell comincia a stringere il cerchio attorno agli Shelby."},
+                        "direct_source": sample_videos[1]
+                    },
+                    {
+                        "id": "e3004_s1_e3",
+                        "episode_num": 3,
+                        "title": "Episodio 3",
+                        "container_extension": "mp4",
+                        "info": {"duration": "56m", "plot": "Alle corse di Cheltenham, Tommy affronta il boss Billy Kimber."},
+                        "direct_source": sample_videos[2]
+                    }
+                ],
+                "2": [
+                    {
+                        "id": "e3004_s2_e1",
+                        "episode_num": 1,
+                        "title": "Episodio 1",
+                        "container_extension": "mp4",
+                        "info": {"duration": "59m", "plot": "La famiglia Shelby espande il proprio impero criminale verso Londra."},
+                        "direct_source": sample_videos[3]
+                    },
+                    {
+                        "id": "e3004_s2_e2",
+                        "episode_num": 2,
+                        "title": "Episodio 2",
+                        "container_extension": "mp4",
+                        "info": {"duration": "58m", "plot": "Tommy incontra il leader ebreo Alfie Solomons a Camden Town."},
+                        "direct_source": sample_videos[4]
+                    }
+                ],
+                "3": [
+                    {
+                        "id": "e3004_s3_e1",
+                        "episode_num": 1,
+                        "title": "Episodio 1",
+                        "container_extension": "mp4",
+                        "info": {"duration": "55m", "plot": "Il giorno del matrimonio di Tommy coincide con l'arrivo di misteriosi esiliati russi."},
+                        "direct_source": sample_videos[5]
+                    },
+                    {
+                        "id": "e3004_s3_e2",
+                        "episode_num": 2,
+                        "title": "Episodio 2",
+                        "container_extension": "mp4",
+                        "info": {"duration": "58m", "plot": "Tommy viene coinvolto in una cospirazione internazionale ad alto rischio."},
+                        "direct_source": sample_videos[6]
                     }
                 ]
             }
         }
     }
-    return series_map.get(str(series_id), series_map["3001"])
+
+    sid = str(series_id)
+    if sid in series_map:
+        return series_map[sid]
+
+    # Dynamic fallback for any other series ID: find in DEMO_SERIES_LIST or generate 3 seasons
+    series_meta = next((s for s in DEMO_SERIES_LIST if str(s.get("series_id")) == sid), None)
+    name = series_meta.get("name", "Serie TV") if series_meta else f"Serie {sid}"
+    cover = series_meta.get("cover", "") if series_meta else ""
+    plot = series_meta.get("plot", "Descrizione serie...") if series_meta else ""
+    genre = series_meta.get("genre", "Dramma") if series_meta else ""
+    rating = str(series_meta.get("rating", "8.0")) if series_meta else "8.0"
+    num_seasons = int(series_meta.get("seasons_count", 3)) if series_meta else 3
+
+    generated_seasons = []
+    generated_episodes = {}
+    for s_idx in range(1, num_seasons + 1):
+        s_str = str(s_idx)
+        generated_seasons.append({
+            "air_date": f"202{s_idx}-01-01",
+            "episode_count": 2,
+            "id": s_idx,
+            "name": f"Stagione {s_idx}",
+            "season_number": s_idx
+        })
+        generated_episodes[s_str] = [
+            {
+                "id": f"e{sid}_s{s_idx}_e1",
+                "episode_num": 1,
+                "title": f"Episodio 1",
+                "container_extension": "mp4",
+                "info": {"duration": "45m", "plot": f"Primo episodio della Stagione {s_idx}."},
+                "direct_source": sample_videos[0]
+            },
+            {
+                "id": f"e{sid}_s{s_idx}_e2",
+                "episode_num": 2,
+                "title": f"Episodio 2",
+                "container_extension": "mp4",
+                "info": {"duration": "50m", "plot": f"Secondo episodio della Stagione {s_idx}."},
+                "direct_source": sample_videos[1]
+            }
+        ]
+
+    return {
+        "info": {
+            "name": name,
+            "cover": cover,
+            "plot": plot,
+            "genre": genre,
+            "rating": rating
+        },
+        "seasons": generated_seasons,
+        "episodes": generated_episodes
+    }
 
 
 class IPTVRequestHandler(SimpleHTTPRequestHandler):
@@ -573,26 +942,48 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         if target_url.startswith('http%3A') or target_url.startswith('https%3A') or '%2F' in target_url:
             target_url = urllib.parse.unquote(target_url)
 
-        # Standard IPTV Player User-Agent
+        # Detect whether this is an API call or a media stream
+        lower_url = target_url.lower()
+        is_media_stream = any(lower_url.endswith(ext) or (ext + '?') in lower_url for ext in ('.ts', '.m3u8', '.mp4', '.mkv', '.avi'))
+        is_api_request = (
+            'player_api.php' in lower_url or
+            'get.php' in lower_url or
+            'xmltv' in lower_url or
+            '/api/' in lower_url or
+            ('action=' in lower_url and not is_media_stream)
+        )
+
         req_headers = {
-            'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20',
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                if is_api_request
+                else 'VLC/3.0.20 LibVLC/3.0.20'
+            ),
             'Accept': '*/*',
+            'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
         }
         # Forward Range header for partial content (seeking VOD, TS chunks)
         if 'Range' in self.headers:
             req_headers['Range'] = self.headers['Range']
 
+        # 1. Primary engine: requests (supports automatic gzip decompression, SSL bypass, redirects)
         try:
-            req = urllib.request.Request(target_url, headers=req_headers)
-            resp = NO_PROXY_OPENER.open(req, timeout=30)
-            actual_url = resp.geturl() or target_url
+            import requests
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-            status_code = resp.status
+            resp = requests.get(
+                target_url,
+                headers=req_headers,
+                stream=True,
+                timeout=25,
+                verify=False,
+                allow_redirects=True
+            )
+            actual_url = resp.url or target_url
+            status_code = resp.status_code
             content_type = resp.headers.get('Content-Type', 'application/octet-stream')
-            content_length = resp.headers.get('Content-Length')
-            content_range = resp.headers.get('Content-Range')
-            accept_ranges = resp.headers.get('Accept-Ranges', 'bytes')
 
             is_m3u8 = (
                 '.m3u8' in target_url.lower() or
@@ -604,12 +995,10 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
 
             # Check if this is an M3U8 playlist to rewrite
             if is_m3u8 and not is_head:
-                raw_data = resp.read()
-                # Check if it starts with #EXTM3U or was requested as m3u8
-                if raw_data.startswith(b'#EXTM3U') or is_m3u8:
+                raw_text = resp.text
+                if raw_text.startswith('#EXTM3U') or is_m3u8:
                     try:
-                        text = raw_data.decode('utf-8', errors='replace')
-                        rewritten_text = rewrite_m3u8(text, actual_url)
+                        rewritten_text = rewrite_m3u8(raw_text, actual_url)
                         rewritten_bytes = rewritten_text.encode('utf-8')
 
                         self.send_response(200)
@@ -625,76 +1014,146 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                     except Exception:
                         pass
 
-                # If not decoded as text or rewriting skipped, send raw_data
+            # For JSON API requests, deliver decompressed content cleanly
+            if is_api_request or 'application/json' in content_type.lower():
+                body_bytes = resp.content  # requests handles gzip/deflate automatically
                 self.send_response(status_code)
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
                 self.send_header('Access-Control-Allow-Headers', '*')
                 self.send_header('Access-Control-Expose-Headers', '*')
                 self.send_header('Content-Type', content_type)
-                self.send_header('Content-Length', str(len(raw_data)))
+                self.send_header('Content-Length', str(len(body_bytes)))
                 self.end_headers()
-                self.wfile.write(raw_data)
+                if not is_head:
+                    self.wfile.write(body_bytes)
                 return
 
-            # For regular streams (TS, MP4, MKV, or API JSON)
+            # For regular streams (TS, MP4, MKV)
             self.send_response(status_code)
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
             self.send_header('Access-Control-Allow-Headers', '*')
             self.send_header('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type')
             self.send_header('Content-Type', content_type)
-            if content_length:
-                self.send_header('Content-Length', content_length)
-            if content_range:
-                self.send_header('Content-Range', content_range)
-            if accept_ranges:
-                self.send_header('Accept-Ranges', accept_ranges)
+            if 'Content-Length' in resp.headers:
+                self.send_header('Content-Length', resp.headers['Content-Length'])
+            if 'Content-Range' in resp.headers:
+                self.send_header('Content-Range', resp.headers['Content-Range'])
+            if 'Accept-Ranges' in resp.headers:
+                self.send_header('Accept-Ranges', resp.headers['Accept-Ranges'])
             self.end_headers()
 
             if is_head:
                 return
 
-            # Stream response body in 64KB chunks
-            while True:
-                chunk = resp.read(65536)
+            for chunk in resp.iter_content(chunk_size=65536):
                 if not chunk:
                     break
                 try:
                     self.wfile.write(chunk)
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     break
+            return
 
-        except urllib.error.HTTPError as e:
-            # Map 407 (Proxy Auth) to 502 Bad Gateway to avoid triggering browser's native proxy dialog
-            client_status = 502 if e.code == 407 else e.code
-            self.send_response(client_status)
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            if not is_head:
-                err_body = {
-                    "error": f"Errore server IPTV ({e.code}): {e.reason}",
-                    "code": e.code,
-                    "upstream_reason": str(e.reason)
-                }
-                self.wfile.write(json.dumps(err_body).encode('utf-8'))
-        except urllib.error.URLError as e:
-            self.send_response(504)
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            if not is_head:
-                err_body = {"error": f"Impossibile raggiungere il server IPTV: {str(e.reason)}", "code": 504}
-                self.wfile.write(json.dumps(err_body).encode('utf-8'))
-        except Exception as e:
-            self.send_response(500)
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            if not is_head:
-                err_body = {"error": f"Errore Proxy: {str(e)}", "code": 500}
-                self.wfile.write(json.dumps(err_body).encode('utf-8'))
+        except Exception as req_err:
+            # Fallback to urllib if requests fails
+            try:
+                req = urllib.request.Request(target_url, headers=req_headers)
+                resp = NO_PROXY_OPENER.open(req, timeout=30)
+                actual_url = resp.geturl() or target_url
+
+                status_code = resp.status
+                content_type = resp.headers.get('Content-Type', 'application/octet-stream')
+                content_length = resp.headers.get('Content-Length')
+                content_range = resp.headers.get('Content-Range')
+                accept_ranges = resp.headers.get('Accept-Ranges', 'bytes')
+                content_encoding = resp.headers.get('Content-Encoding', '').lower()
+
+                raw_data = resp.read()
+
+                # Decompress if gzipped
+                if content_encoding == 'gzip' or raw_data.startswith(b'\x1f\x8b'):
+                    try:
+                        raw_data = gzip.decompress(raw_data)
+                    except Exception:
+                        pass
+                elif content_encoding == 'deflate':
+                    try:
+                        raw_data = zlib.decompress(raw_data)
+                    except Exception:
+                        pass
+
+                is_m3u8 = (
+                    '.m3u8' in target_url.lower() or
+                    '.m3u8' in actual_url.lower() or
+                    'mpegurl' in content_type.lower()
+                )
+
+                if is_m3u8 and not is_head:
+                    try:
+                        text = raw_data.decode('utf-8', errors='replace')
+                        rewritten_text = rewrite_m3u8(text, actual_url)
+                        rewritten_bytes = rewritten_text.encode('utf-8')
+                        self.send_response(200)
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
+                        self.send_header('Access-Control-Allow-Headers', '*')
+                        self.send_header('Access-Control-Expose-Headers', '*')
+                        self.send_header('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8')
+                        self.send_header('Content-Length', str(len(rewritten_bytes)))
+                        self.end_headers()
+                        self.wfile.write(rewritten_bytes)
+                        return
+                    except Exception:
+                        pass
+
+                self.send_response(status_code)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
+                self.send_header('Access-Control-Allow-Headers', '*')
+                self.send_header('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type')
+                self.send_header('Content-Type', content_type)
+                self.send_header('Content-Length', str(len(raw_data)))
+                if content_range:
+                    self.send_header('Content-Range', content_range)
+                if accept_ranges:
+                    self.send_header('Accept-Ranges', accept_ranges)
+                self.end_headers()
+
+                if not is_head:
+                    self.wfile.write(raw_data)
+                return
+
+            except urllib.error.HTTPError as e:
+                client_status = 502 if e.code == 407 else e.code
+                self.send_response(client_status)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                if not is_head:
+                    err_body = {
+                        "error": f"Errore server IPTV ({e.code}): {e.reason}",
+                        "code": e.code,
+                        "upstream_reason": str(e.reason)
+                    }
+                    self.wfile.write(json.dumps(err_body).encode('utf-8'))
+            except urllib.error.URLError as e:
+                self.send_response(504)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                if not is_head:
+                    err_body = {"error": f"Impossibile raggiungere il server IPTV: {str(e.reason)}", "code": 504}
+                    self.wfile.write(json.dumps(err_body).encode('utf-8'))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                if not is_head:
+                    err_body = {"error": f"Errore Proxy: {str(e)}", "code": 500}
+                    self.wfile.write(json.dumps(err_body).encode('utf-8'))
 
     def handle_tools(self):
         vlc = find_vlc()
@@ -932,8 +1391,8 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.handle_tools()
             return
 
-        # 2. Built-in Demo Xtream API: /api/demo/player_api.php
-        if path.startswith('/api/demo'):
+        # 6. Built-in Demo Xtream API: /api/demo/player_api.php or /player_api.php
+        if path.startswith('/api/demo') or path == '/player_api.php' or path.startswith('/player_api.php'):
             action = query.get('action', [None])[0]
             cat_id = query.get('category_id', [None])[0]
             series_id = query.get('series_id', [None])[0]

@@ -8,11 +8,11 @@
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
   
   <!-- Modern Stylesheets -->
-  <link rel="stylesheet" href="css/main.css">
-  <link rel="stylesheet" href="css/login.css">
-  <link rel="stylesheet" href="css/playlist.css">
-  <link rel="stylesheet" href="css/player.css">
-  <link rel="stylesheet" href="css/animations.css">
+  <link rel="stylesheet" href="css/main.css?v=2.6">
+  <link rel="stylesheet" href="css/login.css?v=2.6">
+  <link rel="stylesheet" href="css/playlist.css?v=2.6">
+  <link rel="stylesheet" href="css/player.css?v=2.6">
+  <link rel="stylesheet" href="css/animations.css?v=2.6">
 </head>
 <body>
 
@@ -39,13 +39,15 @@
           <p class="login-subtitle">Accesso ultra-rapido tramite Xtream Codes API</p>
         </div>
 
-        <form id="login-form" novalidate onsubmit="return false;">
+        <form id="login-form" novalidate autocomplete="on" onsubmit="event.preventDefault(); return false;">
           
           <!-- Server URL -->
           <div class="form-group">
             <label class="form-label" for="login-host">Server URL / Host</label>
             <div class="input-wrapper">
-              <span class="input-icon">🌐</span>
+              <span class="input-icon">
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+              </span>
               <input 
                 type="text" 
                 id="login-host" 
@@ -61,7 +63,9 @@
           <div class="form-group">
             <label class="form-label" for="login-username">Username</label>
             <div class="input-wrapper">
-              <span class="input-icon">👤</span>
+              <span class="input-icon">
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+              </span>
               <input 
                 type="text" 
                 id="login-username" 
@@ -77,7 +81,9 @@
           <div class="form-group">
             <label class="form-label" for="login-password">Password</label>
             <div class="input-wrapper">
-              <span class="input-icon">🔑</span>
+              <span class="input-icon">
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+              </span>
               <input 
                 type="password" 
                 id="login-password" 
@@ -86,7 +92,9 @@
                 required 
                 autocomplete="current-password"
               >
-              <button type="button" id="toggle-password-btn" class="password-toggle-btn" title="Mostra/Nascondi password">👁️</button>
+              <button type="button" id="toggle-password-btn" class="password-toggle-btn" title="Mostra/Nascondi password">
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+              </button>
             </div>
           </div>
 
@@ -94,8 +102,8 @@
           <div class="advanced-options">
             <div class="proxy-toggle-row">
               <div class="proxy-label-group">
-                <span class="proxy-title">🛡️ Bypass CORS (Proxy Attivo)</span>
-                <span class="proxy-desc">Consigliato per evitare il blocco del browser verso server IPTV</span>
+                <span class="proxy-title">Bypass CORS (Proxy Xtream)</span>
+                <span class="proxy-desc">Consigliato per evitare blocchi del browser verso server IPTV</span>
               </div>
               <label class="switch">
                 <input type="checkbox" id="proxy-toggle" checked>
@@ -104,14 +112,17 @@
             </div>
           </div>
 
+          <!-- Inline Error Banner -->
+          <div id="login-inline-error" class="login-inline-error" style="display: none;"></div>
+
           <!-- Submit Button -->
           <button type="submit" id="login-submit-btn" class="btn-primary">
-            <span>⚡ Accedi alla Playlist</span>
+            <span>Accedi alla Playlist</span>
           </button>
 
           <!-- 1-Click Demo Button -->
           <button type="button" id="demo-account-btn" class="btn-demo">
-            <span>🧪 Prova con Account Demo (1-Click)</span>
+            <span>Carica Account Demo</span>
           </button>
 
         </form>
@@ -151,19 +162,19 @@
         <!-- Center: 3 Main Categories + Favorites -->
         <nav class="category-nav-tabs">
           <button class="nav-tab-btn active" data-mode="live" id="nav-btn-live">
-            <span>📺 Canali Live</span>
+            <span>Canali Live</span>
             <span class="nav-tab-badge" id="nav-count-live">0</span>
           </button>
           <button class="nav-tab-btn" data-mode="vod" id="nav-btn-vod">
-            <span>🎬 Film VOD</span>
+            <span>Film VOD</span>
             <span class="nav-tab-badge" id="nav-count-vod">0</span>
           </button>
           <button class="nav-tab-btn" data-mode="series" id="nav-btn-series">
-            <span>🍿 Serie TV</span>
+            <span>Serie TV</span>
             <span class="nav-tab-badge" id="nav-count-series">0</span>
           </button>
           <button class="nav-tab-btn" data-mode="favorites" id="nav-btn-fav">
-            <span>⭐ Preferiti</span>
+            <span>Preferiti</span>
             <span class="nav-tab-badge" id="nav-count-fav">0</span>
           </button>
         </nav>
@@ -173,14 +184,18 @@
           
           <!-- Instant Search Box -->
           <div class="search-box">
-            <span class="search-icon">🔍</span>
+            <span class="search-icon">
+              <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            </span>
             <input 
               type="text" 
               id="stream-search-input" 
               class="search-input" 
               placeholder="Cerca canale, film o serie..."
             >
-            <span id="search-clear-btn" class="search-clear-btn" title="Cancella ricerca">✕</span>
+            <span id="search-clear-btn" class="search-clear-btn" title="Cancella ricerca">
+              <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </span>
           </div>
 
           <!-- Account Pill -->
@@ -192,12 +207,12 @@
 
           <!-- Refresh Playlist Cache -->
           <button id="btn-refresh-cache" class="header-btn" title="Aggiorna cache playlist dal server">
-            🔄
+            <svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
           </button>
 
           <!-- Logout -->
           <button id="btn-logout" class="header-btn header-btn-logout" title="Disconnetti account">
-            🚪
+            <svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
           </button>
 
         </div>
@@ -212,7 +227,7 @@
           
           <div class="sidebar-header">
             <div class="sidebar-title-row">
-              <span class="sidebar-title">📁 Categorie</span>
+              <span class="sidebar-title">Categorie</span>
               <span class="sidebar-counter" id="sidebar-category-counter"></span>
             </div>
             <input 
@@ -247,16 +262,16 @@
                 <option value="default">Ordina: Predefinito</option>
                 <option value="name-asc">Nome (A - Z)</option>
                 <option value="name-desc">Nome (Z - A)</option>
-                <option value="rating">Miglior Voto ★</option>
+                <option value="rating">Miglior Voto</option>
               </select>
 
               <!-- View Mode Toggle -->
               <div class="view-toggle-group">
                 <button id="view-grid-btn" class="view-toggle-btn active" title="Vista Griglia">
-                  ⊞
+                  <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
                 </button>
                 <button id="view-list-btn" class="view-toggle-btn" title="Vista Elenco">
-                  ☰
+                  <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
                 </button>
               </div>
 
@@ -271,7 +286,9 @@
 
           <!-- Empty State (Hidden when items present) -->
           <div id="empty-state-view" class="empty-state" style="display: none;">
-            <div class="empty-state-icon">📡</div>
+            <div class="empty-state-icon">
+              <svg viewBox="0 0 24 24" width="36" height="36" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path></svg>
+            </div>
             <div class="empty-state-title">Nessun contenuto trovato</div>
             <p class="empty-state-desc">Nessun canale o video corrisponde ai criteri di ricerca o alla categoria selezionata.</p>
           </div>
@@ -291,15 +308,17 @@
         <div class="player-header">
           <div class="player-title-info">
             <span id="player-type-badge" class="badge badge-live">LIVE</span>
-            <span id="player-format-badge" class="badge badge-format" style="background: rgba(255,255,255,0.12); font-size: 11px; font-weight: 700; cursor: pointer; border: 1px solid rgba(255,255,255,0.25); border-radius: 6px; padding: 3px 8px; user-select: none;" title="Clicca per forzare il cambio formato (HLS ↔ TS)">HLS</span>
-            <span id="player-audio-badge" class="badge badge-audio" style="display: none; background: rgba(14, 165, 233, 0.2); border: 1px solid rgba(14, 165, 233, 0.4); color: #38bdf8; font-size: 11px; font-weight: 700; cursor: pointer; border-radius: 6px; padding: 3px 8px; user-select: none;" title="Clicca per cambiare modalità audio (Diretto / AAC Transcodificato)">🔊 Audio: Diretto</span>
+            <span id="player-format-badge" class="badge badge-format" style="background: rgba(255,255,255,0.08); font-size: 11px; font-weight: 600; cursor: pointer; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 2px 7px; user-select: none;" title="Clicca per forzare il cambio formato (HLS ↔ TS)">HLS</span>
+            <span id="player-audio-badge" class="badge badge-audio" style="display: none; background: rgba(37, 99, 235, 0.15); border: 1px solid rgba(37, 99, 235, 0.35); color: #60a5fa; font-size: 11px; font-weight: 600; cursor: pointer; border-radius: var(--radius-sm); padding: 2px 7px; user-select: none;" title="Clicca per cambiare modalità audio (Diretto / AAC Transcodificato)">Audio: Diretto</span>
             <h3 id="player-stream-title" class="player-title">Riproduzione Stream</h3>
           </div>
 
           <div class="player-header-actions">
             <!-- Dedicated Audio & Volume Engine -->
             <div class="player-volume-panel" id="player-volume-panel">
-              <button id="player-mute-btn" class="player-vol-icon-btn" title="Muto / Riattiva Audio (Tasto M)">🔊</button>
+              <button id="player-mute-btn" class="player-vol-icon-btn" title="Muto / Riattiva Audio (Tasto M)">
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+              </button>
               <input type="range" id="player-volume-slider" min="0" max="1" step="0.02" value="1" class="player-vol-range" title="Regola Volume (Frecce Su/Giù)">
               <span id="player-volume-label" class="player-vol-pct">100%</span>
               <button id="player-boost-btn" class="player-boost-btn" title="Amplificatore Gain Audio WebAudio (100% / 150% / 200%)">100%</button>
@@ -307,10 +326,12 @@
 
             <!-- Instant 1-Click VLC Player Launch -->
             <button id="player-vlc-btn" class="player-vlc-btn" title="Apri stream in VLC Media Player (Supporto completo Dolby AC3, DTS, 4K)">
-              🚀 Apri in VLC
+              Apri in VLC
             </button>
 
-            <button id="player-close-btn" class="player-close-btn" title="Chiudi (Esc)">✕</button>
+            <button id="player-close-btn" class="player-close-btn" title="Chiudi (Esc)">
+              <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
           </div>
         </div>
 
@@ -321,7 +342,9 @@
           <!-- Center Ripple / Play Feedback Indicator -->
           <div id="player-center-feedback" class="player-center-feedback" style="display: none;">
             <div class="feedback-circle">
-              <span id="player-feedback-icon">▶</span>
+              <span id="player-feedback-icon">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              </span>
             </div>
           </div>
 
@@ -342,17 +365,17 @@
               <!-- Left: Play/Pause, -10s, +10s, Time Display / Live Badge -->
               <div class="player-ctrl-group player-ctrl-left">
                 <button id="player-play-btn" class="player-ctrl-btn player-ctrl-play" title="Riproduci / Pausa (Spazio)">
-                  <svg id="icon-ctrl-play" viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                  <svg id="icon-ctrl-play" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                     <polygon points="6 3 20 12 6 21 6 3"/>
                   </svg>
-                  <svg id="icon-ctrl-pause" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" style="display:none;">
+                  <svg id="icon-ctrl-pause" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" style="display:none;">
                     <rect x="6" y="4" width="4" height="16"/>
                     <rect x="14" y="4" width="4" height="16"/>
                   </svg>
                 </button>
 
                 <button id="player-rewind-btn" class="player-ctrl-btn player-ctrl-seek" title="Indietro di 10s (Freccia Sinistra)">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/>
                   </svg>
                   <span>10s</span>
@@ -360,7 +383,7 @@
 
                 <button id="player-forward-btn" class="player-ctrl-btn player-ctrl-seek" title="Avanti di 10s (Freccia Destra)">
                   <span>10s</span>
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M13 17l5-5-5-5M6 17l5-5-5-5"/>
                   </svg>
                 </button>
@@ -381,12 +404,16 @@
               <div class="player-ctrl-group player-ctrl-right">
                 <!-- Interactive audio switcher directly in bottom bar -->
                 <button id="player-bottom-audio-btn" class="player-ctrl-pill" style="display: none;" title="Modalità Audio: Clicca per attivare/disattivare la transcodifica AAC">
-                  <span id="player-bottom-audio-icon">🔊</span>
+                  <span id="player-bottom-audio-icon">
+                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                  </span>
                   <span id="player-bottom-audio-text">Audio: Diretto</span>
                 </button>
 
                 <div class="player-bottom-volume-wrap">
-                  <button id="player-bottom-mute-btn" class="player-ctrl-btn" title="Muto / Riattiva Audio (M)">🔊</button>
+                  <button id="player-bottom-mute-btn" class="player-ctrl-btn" title="Muto / Riattiva Audio (M)">
+                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                  </button>
                   <input type="range" id="player-bottom-vol-slider" min="0" max="1" step="0.02" value="1" class="player-bottom-vol-range" title="Volume (Frecce Su/Giù)">
                 </div>
 
@@ -405,16 +432,20 @@
           <!-- Intelligent Audio Diagnostic Banner (Shows when movie has Dolby AC3/DTS unsupported by browser) -->
           <div id="player-audio-notice" class="player-audio-notice" style="display: none;">
             <div class="audio-notice-content">
-              <span class="notice-icon">🔊</span>
+              <span class="notice-icon">
+                <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>
+              </span>
               <div class="notice-text-block">
                 <div class="notice-title">Audio Muto o Non Udibile?</div>
                 <div class="notice-desc">I film usano spesso audio Dolby (AC3/DTS) non supportato dal browser. Scegli una soluzione:</div>
               </div>
             </div>
             <div class="notice-btn-row">
-              <button id="btn-fix-audio-transcode" class="btn-audio-action btn-audio-accent">⚡ Transcodifica AAC (In Browser)</button>
-              <button id="btn-fix-audio-vlc" class="btn-audio-action btn-audio-vlc">🚀 Apri in VLC</button>
-              <button id="btn-dismiss-audio-notice" class="btn-audio-dismiss" title="Chiudi avviso">✕</button>
+              <button id="btn-fix-audio-transcode" class="btn-audio-action btn-audio-accent">Transcodifica AAC (In Browser)</button>
+              <button id="btn-fix-audio-vlc" class="btn-audio-action btn-audio-vlc">Apri in VLC</button>
+              <button id="btn-dismiss-audio-notice" class="btn-audio-dismiss" title="Chiudi avviso">
+                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
             </div>
           </div>
 
@@ -438,7 +469,7 @@
   <script src="js/vendor/mpegts.min.js"></script>
 
   <!-- Main ES Module Orchestrator -->
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/app.js?v=2.6"></script>
 
 </body>
 </html>

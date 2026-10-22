@@ -82,36 +82,38 @@ class IPTVApp {
     const hostInput = document.getElementById('login-host');
     const userInput = document.getElementById('login-username');
     const passInput = document.getElementById('login-password');
+    const inlineErr = document.getElementById('login-inline-error');
 
-    // Remove error highlight as soon as the user starts typing
+    // Remove error highlight and inline banner as soon as user interacts
+    const clearErrors = () => {
+      [hostInput, userInput, passInput].forEach(inp => inp?.classList.remove('input-error'));
+      if (inlineErr) {
+        inlineErr.style.display = 'none';
+        inlineErr.textContent = '';
+      }
+    };
+
     [hostInput, userInput, passInput].forEach(inp => {
       if (inp) {
-        inp.addEventListener('input', () => inp.classList.remove('input-error'));
+        inp.addEventListener('input', clearErrors);
+        inp.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            this.handleLogin();
+          }
+        });
       }
     });
 
     // Auto-extract credentials if user pastes a full Xtream / M3U link with credentials
     if (hostInput) {
-      const checkAndExtractUrl = () => {
-        const val = hostInput.value.trim();
-        if (val.includes('username=') && val.includes('password=')) {
-          try {
-            const urlObj = new URL(val.startsWith('http') ? val : `http://${val}`);
-            const u = urlObj.searchParams.get('username');
-            const p = urlObj.searchParams.get('password');
-            if (u && p) {
-              if (userInput) userInput.value = u;
-              if (passInput) passInput.value = p;
-              let pathname = (urlObj.pathname || '').replace(/\/(get\.php|player_api\.php)$/, '').replace(/\/+$/, '');
-              hostInput.value = `${urlObj.protocol}//${urlObj.host}${pathname}`;
-              UIManager.showToast('Credenziali Rilevate', 'Username e Password estratti automaticamente dal link!', 'success');
-            }
-          } catch (_) {}
-        }
-      };
+      const checkAndExtractUrl = () => this.autoExtractCredentials(true);
       hostInput.addEventListener('input', checkAndExtractUrl);
       hostInput.addEventListener('paste', () => setTimeout(checkAndExtractUrl, 50));
     }
+
+    const EYE_OPEN = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+    const EYE_OFF = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
 
     if (togglePassBtn) {
       togglePassBtn.addEventListener('click', (e) => {
@@ -120,10 +122,10 @@ class IPTVApp {
         if (pInput) {
           if (pInput.type === 'password') {
             pInput.type = 'text';
-            togglePassBtn.textContent = '🔒';
+            togglePassBtn.innerHTML = EYE_OFF;
           } else {
             pInput.type = 'password';
-            togglePassBtn.textContent = '👁️';
+            togglePassBtn.innerHTML = EYE_OPEN;
           }
         }
       });
@@ -132,29 +134,103 @@ class IPTVApp {
     if (demoBtn) {
       demoBtn.addEventListener('click', async (e) => {
         e.preventDefault();
+        clearErrors();
         const origin = window.location.origin;
         if (hostInput) hostInput.value = `${origin}/api/demo`;
         if (userInput) userInput.value = 'vip_user_2026';
         if (passInput) passInput.value = 'password123';
         if (proxyToggle) proxyToggle.checked = false; // Demo is local
-        [hostInput, userInput, passInput].forEach(inp => inp?.classList.remove('input-error'));
         UIManager.showToast('Profilo Demo Caricato', 'Accesso automatico in corso...', 'info');
         await this.handleLogin();
       });
     }
 
-    if (submitBtn) {
-      submitBtn.addEventListener('click', async (e) => {
+    let isSubmitting = false;
+    const onFormSubmit = async (e) => {
+      if (e) {
         e.preventDefault();
+        e.stopPropagation();
+      }
+      if (isSubmitting || this.isLoggingIn) return;
+      isSubmitting = true;
+      try {
         await this.handleLogin();
-      });
+      } finally {
+        setTimeout(() => { isSubmitting = false; }, 300);
+      }
+    };
+
+    if (submitBtn) {
+      submitBtn.addEventListener('click', onFormSubmit);
     }
 
     if (loginForm) {
-      loginForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        await this.handleLogin();
-      });
+      loginForm.addEventListener('submit', onFormSubmit);
+    }
+  }
+
+  /**
+   * Intelligently parses and extracts host, username, and password from
+   * any pasted M3U link, stream link, or query string.
+   */
+  extractCredentials(val) {
+    if (!val || typeof val !== 'string') return null;
+    const clean = val.trim();
+    if (!clean) return null;
+
+    // Pattern 1: URL with query parameters (username=..., password=... or user=..., pass=... or u=..., p=...)
+    const lower = clean.toLowerCase();
+    const hasQueryUser = lower.includes('username=') || lower.includes('user=') || lower.includes('?u=') || lower.includes('&u=');
+    const hasQueryPass = lower.includes('password=') || lower.includes('pass=') || lower.includes('&p=') || lower.includes('?p=');
+
+    if (hasQueryUser && hasQueryPass) {
+      try {
+        const urlObj = new URL(clean.startsWith('http://') || clean.startsWith('https://') ? clean : `http://${clean}`);
+        const u = urlObj.searchParams.get('username') || urlObj.searchParams.get('user') || urlObj.searchParams.get('u');
+        const p = urlObj.searchParams.get('password') || urlObj.searchParams.get('pass') || urlObj.searchParams.get('p');
+        if (u && p) {
+          let pathname = (urlObj.pathname || '').replace(/\/(get\.php|player_api\.php|xmltv\.php)$/i, '').replace(/\/+$/, '');
+          return {
+            host: `${urlObj.protocol}//${urlObj.host}${pathname}`,
+            username: u,
+            password: p
+          };
+        }
+      } catch (_) {}
+    }
+
+    // Pattern 2: Stream link with path components: http://host:port/live/username/password/123.ts (or /movie/..., /series/...)
+    const streamMatch = clean.match(/^(https?:\/\/[^\/]+)\/(?:live|movie|series)\/([^\/]+)\/([^\/]+)(?:\/.*)?$/i);
+    if (streamMatch) {
+      return {
+        host: streamMatch[1],
+        username: streamMatch[2],
+        password: streamMatch[3]
+      };
+    }
+
+    return null;
+  }
+
+  autoExtractCredentials(showToast = true) {
+    const hostInput = document.getElementById('login-host');
+    const userInput = document.getElementById('login-username');
+    const passInput = document.getElementById('login-password');
+    if (!hostInput) return;
+
+    const extracted = this.extractCredentials(hostInput.value);
+    if (extracted) {
+      if (userInput) userInput.value = extracted.username;
+      if (passInput) passInput.value = extracted.password;
+      hostInput.value = extracted.host;
+      if (showToast) {
+        UIManager.showToast('Credenziali Rilevate', 'Username, Password e Server estratti automaticamente dal link!', 'success');
+      }
+      const inlineErr = document.getElementById('login-inline-error');
+      if (inlineErr) {
+        inlineErr.style.display = 'none';
+        inlineErr.textContent = '';
+      }
     }
   }
 
@@ -193,36 +269,53 @@ class IPTVApp {
   async handleLogin() {
     if (this.isLoggingIn) return;
 
+    // Automatically extract credentials if full link was entered
+    this.autoExtractCredentials(false);
+
     const hostInput = document.getElementById('login-host');
     const userInput = document.getElementById('login-username');
     const passInput = document.getElementById('login-password');
-    const host = hostInput ? hostInput.value.trim() : '';
-    const username = userInput ? userInput.value.trim() : '';
-    const password = passInput ? passInput.value.trim() : '';
-    const useProxy = document.getElementById('proxy-toggle')?.checked ?? true;
+    const inlineErr = document.getElementById('login-inline-error');
     const submitBtn = document.getElementById('login-submit-btn');
+
+    let host = hostInput ? hostInput.value.trim() : '';
+    let username = userInput ? userInput.value.trim() : '';
+    let password = passInput ? passInput.value.trim() : '';
+    const useProxy = document.getElementById('proxy-toggle')?.checked ?? true;
 
     // Reset previous errors
     [hostInput, userInput, passInput].forEach(inp => inp?.classList.remove('input-error'));
+    if (inlineErr) {
+      inlineErr.style.display = 'none';
+      inlineErr.textContent = '';
+    }
+
+    const showLoginError = (title, msg) => {
+      UIManager.showToast(title, msg, 'warning');
+      if (inlineErr) {
+        inlineErr.textContent = msg;
+        inlineErr.style.display = 'flex';
+      }
+    };
 
     if (!host) {
       hostInput?.classList.add('input-error');
       hostInput?.focus();
-      UIManager.showToast('Server URL Mancante', 'Inserisci l\'indirizzo del tuo server Xtream Codes.', 'warning');
+      showLoginError('Server URL Mancante', 'Inserisci l\'indirizzo del tuo server Xtream Codes (es. http://server.com:8080).');
       return;
     }
 
     if (!username) {
       userInput?.classList.add('input-error');
       userInput?.focus();
-      UIManager.showToast('Username Mancante', 'Inserisci il nome utente del tuo account.', 'warning');
+      showLoginError('Username Mancante', 'Inserisci il nome utente del tuo account IPTV.');
       return;
     }
 
     if (!password) {
       passInput?.classList.add('input-error');
       passInput?.focus();
-      UIManager.showToast('Password Mancante', 'Inserisci la password del tuo account.', 'warning');
+      showLoginError('Password Mancante', 'Inserisci la password del tuo account IPTV.');
       return;
     }
 
@@ -243,8 +336,9 @@ class IPTVApp {
       // 2. Save account in IndexedDB
       await dbManager.saveAccount(account);
       localStorage.setItem('iptv_last_account', account.id);
+      await this.loadSavedAccounts();
 
-      UIManager.showToast('Accesso Riuscito!', `Benvenuto ${username}. Caricamento playlist super ottimizzato...`, 'success');
+      UIManager.showToast('Accesso Riuscito!', `Benvenuto ${username}. Caricamento playlist in corso...`, 'success');
 
       // 3. Switch to Dashboard
       this.showDashboard();
@@ -254,12 +348,17 @@ class IPTVApp {
 
     } catch (err) {
       console.error('Login error:', err);
-      UIManager.showToast('Errore di Accesso', err.message || 'Impossibile connettersi al server Xtream Codes.', 'error', 6000);
+      const errMsg = err.message || 'Impossibile connettersi al server Xtream Codes. Verifica URL, credenziali e connessione.';
+      UIManager.showToast('Errore di Accesso', errMsg, 'error', 7000);
+      if (inlineErr) {
+        inlineErr.textContent = errMsg;
+        inlineErr.style.display = 'flex';
+      }
     } finally {
       this.isLoggingIn = false;
       if (submitBtn) {
         submitBtn.disabled = false;
-        submitBtn.innerHTML = '<span>⚡ Accedi alla Playlist</span>';
+        submitBtn.innerHTML = '<span>Accedi alla Playlist</span>';
       }
     }
   }
@@ -375,7 +474,7 @@ class IPTVApp {
       const allFavItem = document.createElement('div');
       allFavItem.className = 'category-item active';
       allFavItem.innerHTML = `
-        <span class="category-item-name">⭐ Tutti i Preferiti</span>
+        <span class="category-item-name">Tutti i Preferiti</span>
         <span class="category-item-count">${this.favoritesMap.size}</span>
       `;
       container.appendChild(allFavItem);
@@ -389,7 +488,7 @@ class IPTVApp {
     const allItem = document.createElement('div');
     allItem.className = `category-item ${this.currentCategoryId === 'all' ? 'active' : ''}`;
     allItem.innerHTML = `
-      <span class="category-item-name">✨ Tutti i Contenuti</span>
+      <span class="category-item-name">Tutti i Contenuti</span>
       <span class="category-item-count">All</span>
     `;
     allItem.addEventListener('click', () => {
@@ -603,15 +702,18 @@ class IPTVApp {
       const res = await dbManager.toggleFavorite(this.currentAccount.id, type, item);
       const streamId = String(item.stream_id || item.series_id);
 
+      const starOutline = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>';
+      const starFilled = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="#fbbf24" stroke-width="2" fill="#fbbf24" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>';
+
       if (res.isFavorite) {
         this.favoritesMap.set(streamId, true);
         btnEl.classList.add('active');
-        btnEl.textContent = '★';
+        btnEl.innerHTML = starFilled;
         UIManager.showToast('Aggiunto ai Preferiti', item.name, 'success', 2000);
       } else {
         this.favoritesMap.delete(streamId);
         btnEl.classList.remove('active');
-        btnEl.textContent = '☆';
+        btnEl.innerHTML = starOutline;
         UIManager.showToast('Rimosso dai Preferiti', item.name, 'info', 2000);
       }
 
@@ -762,7 +864,16 @@ class IPTVApp {
   }
 }
 
-// Instantiate on DOMContentLoaded
-document.addEventListener('DOMContentLoaded', () => {
-  window.app = new IPTVApp();
-});
+// Reliable instant bootstrap
+function bootstrapApp() {
+  if (!(window.iptvApp instanceof IPTVApp)) {
+    window.iptvApp = new IPTVApp();
+    window.app = window.iptvApp;
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootstrapApp);
+} else {
+  bootstrapApp();
+}

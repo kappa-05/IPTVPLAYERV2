@@ -14,10 +14,8 @@ export class XtreamAPI {
     try {
       const parsed = new URL(clean);
       let pathname = parsed.pathname || '';
-      // Strip any API or script suffix like /player_api.php or /get.php
-      if (pathname.endsWith('/player_api.php') || pathname.endsWith('/get.php')) {
-        pathname = pathname.replace(/\/(player_api\.php|get\.php)$/, '');
-      }
+      // Strip any API, script, or portal suffix like /player_api.php, /get.php, /c, /portal
+      pathname = pathname.replace(/\/(player_api\.php|get\.php|xmltv\.php|c|portal|stalker|client_area)$/i, '');
       pathname = pathname.replace(/\/+$/, '');
       return `${parsed.protocol}//${parsed.host}${pathname}`;
     } catch {
@@ -65,7 +63,12 @@ export class XtreamAPI {
         throw new Error(errorDetail);
       }
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch (jsonErr) {
+        throw new Error('Risposta del server non in formato JSON valido. Verifica che l\'indirizzo sia un server Xtream Codes.');
+      }
       return data;
     } catch (err) {
       clearTimeout(timer);
@@ -81,32 +84,85 @@ export class XtreamAPI {
    */
   static async login(host, username, password, useProxy = true) {
     const cleanHost = this.normalizeHost(host);
-    const url = `${cleanHost}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
+    if (!cleanHost) throw new Error('Indirizzo Server URL non valido.');
 
-    const data = await this.fetchJSON(url, useProxy);
+    const buildUrl = (h) => `${h}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
+    const primaryUrl = buildUrl(cleanHost);
 
-    if (!data || !data.user_info) {
+    let data = null;
+    let primaryErr = null;
+
+    try {
+      data = await this.fetchJSON(primaryUrl, useProxy);
+    } catch (err) {
+      primaryErr = err;
+      // Smart protocol fallback: if http failed, try https; if https failed, try http!
+      let altHost = null;
+      if (cleanHost.startsWith('http://')) {
+        altHost = cleanHost.replace('http://', 'https://');
+      } else if (cleanHost.startsWith('https://')) {
+        altHost = cleanHost.replace('https://', 'http://');
+      }
+
+      if (altHost) {
+        try {
+          const altUrl = buildUrl(altHost);
+          data = await this.fetchJSON(altUrl, useProxy);
+          return this.validateAndFormatAccount(data, altHost, username, password, useProxy);
+        } catch (_) {
+          // Alt failed as well, propagate original error
+          throw primaryErr;
+        }
+      }
+      throw primaryErr;
+    }
+
+    return this.validateAndFormatAccount(data, cleanHost, username, password, useProxy);
+  }
+
+  static validateAndFormatAccount(data, host, username, password, useProxy) {
+    if (!data || typeof data !== 'object') {
       throw new Error('Risposta del server non valida. Verifica URL e credenziali.');
     }
 
-    const { user_info, server_info } = data;
+    const userInfo = data.user_info || data.userInfo;
+    const serverInfo = data.server_info || data.serverInfo || {};
 
-    if (user_info.auth !== 1) {
-      const statusMsg = user_info.status ? ` (Stato: ${user_info.status})` : '';
-      throw new Error(`Autenticazione fallita: Credenziali errate o account non attivo${statusMsg}.`);
+    if (!userInfo) {
+      if (data.message) {
+        throw new Error(data.message);
+      }
+      throw new Error('Il server non ha restituito dati utente (user_info mancante). Verifica che sia un server Xtream Codes.');
     }
 
-    // Generate unique account ID
-    const accountId = `${encodeURIComponent(cleanHost)}_${encodeURIComponent(username)}`;
+    const isAuth = userInfo.auth === 1 || 
+                   userInfo.auth === '1' || 
+                   userInfo.auth === true || 
+                   (typeof userInfo.status === 'string' && userInfo.status.toLowerCase() === 'active');
+
+    if (!isAuth) {
+      const status = (userInfo.status || '').toLowerCase();
+      if (status === 'expired') {
+        const expDate = userInfo.exp_date ? new Date(parseInt(userInfo.exp_date) * 1000).toLocaleDateString() : '';
+        throw new Error(`Account IPTV scaduto${expDate ? ' in data ' + expDate : ''}. Contatta il tuo fornitore per rinnovare la playlist.`);
+      }
+      if (status === 'disabled' || status === 'banned') {
+        throw new Error('Account IPTV disattivato o bloccato dal fornitore.');
+      }
+      throw new Error('Autenticazione fallita: Username o Password errati.');
+    }
+
+    const accountId = `${encodeURIComponent(host)}_${encodeURIComponent(username)}`;
 
     return {
       accountId,
-      host: cleanHost,
+      id: accountId,
+      host,
       username,
       password,
       useProxy,
-      userInfo: user_info,
-      serverInfo: server_info,
+      userInfo,
+      serverInfo,
       lastLogin: Date.now()
     };
   }

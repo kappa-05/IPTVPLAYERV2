@@ -1,7 +1,22 @@
 /**
  * IPTV Player V2 - UI Component Factory & Renderers
- * Generates cards, sidebars, modals, and toasts with safe fallbacks.
+ * Clean, Modern Professional Components (Zero Emojis, Crisp SVGs, Safe Fallbacks).
  */
+
+const ICONS = {
+  starOutline: '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>',
+  starFilled: '<svg viewBox="0 0 24 24" width="14" height="14" stroke="#fbbf24" stroke-width="2" fill="#fbbf24" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>',
+  close: '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>',
+  user: '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>',
+  trash: '<svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>',
+  play: '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>',
+  movie: '<svg viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="2" y="2" width="20" height="20" rx="2"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line></svg>',
+  series: '<svg viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="2" y="7" width="20" height="15" rx="2"></rect><polyline points="17 2 12 7 7 2"></polyline></svg>',
+  success: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="#10b981" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
+  error: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="#ef4444" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>',
+  warning: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="#f59e0b" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
+  info: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="#3b82f6" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>'
+};
 
 export class UIManager {
   static showToast(title, msg, type = 'info', duration = 3500) {
@@ -15,18 +30,18 @@ export class UIManager {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
 
-    let icon = 'ℹ️';
-    if (type === 'success') icon = '✅';
-    else if (type === 'error') icon = '⚠️';
-    else if (type === 'warning') icon = '⚡';
+    let iconSvg = ICONS.info;
+    if (type === 'success') iconSvg = ICONS.success;
+    else if (type === 'error') iconSvg = ICONS.error;
+    else if (type === 'warning') iconSvg = ICONS.warning;
 
     toast.innerHTML = `
-      <div class="toast-icon">${icon}</div>
+      <div class="toast-icon">${iconSvg}</div>
       <div class="toast-body">
         <div class="toast-title">${title}</div>
         <div class="toast-msg">${msg}</div>
       </div>
-      <div class="toast-close">✕</div>
+      <div class="toast-close">${ICONS.close}</div>
     `;
 
     const closeBtn = toast.querySelector('.toast-close');
@@ -46,6 +61,16 @@ export class UIManager {
     }, duration);
   }
 
+  static escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
   // --- CARD GENERATORS FOR VIRTUAL GRID ---
 
   static createLiveCard(item, onPlay, onToggleFav, isFav, viewMode = 'grid') {
@@ -55,6 +80,7 @@ export class UIManager {
     const logoUrl = item.stream_icon || '';
     const name = item.name || 'Canale Sconosciuto';
     const streamId = item.stream_id || '';
+    const safeName = UIManager.escapeHtml(name);
 
     if (viewMode === 'list') {
       card.innerHTML = `
@@ -62,20 +88,21 @@ export class UIManager {
           <div style="display:flex; align-items:center; gap:12px; overflow:hidden;">
             <div class="channel-logo-container" style="width:38px; height:38px;">
               ${logoUrl 
-                ? `<img class="channel-logo-img" src="${logoUrl}" alt="${name}" onerror="this.onerror=null; this.parentElement.innerHTML='<span class=\\'channel-fallback-logo\\'>TV</span>'">` 
+                ? `<img class="channel-logo-img" src="${logoUrl}" alt="" />
+                   <span class="channel-fallback-logo" style="display:none;">TV</span>` 
                 : '<span class="channel-fallback-logo">TV</span>'}
             </div>
             <div style="display:flex; flex-direction:column; overflow:hidden;">
-              <span class="channel-name" style="font-size:13.5px;">${name}</span>
+              <span class="channel-name" style="font-size:13.5px;">${safeName}</span>
               <span style="font-size:11px; color:var(--text-dim);">ID: ${streamId}</span>
             </div>
           </div>
           <div style="display:flex; align-items:center; gap:8px;">
             <button class="btn-card-fav ${isFav ? 'active' : ''}" title="Preferiti">
-              ${isFav ? '★' : '☆'}
+              ${isFav ? ICONS.starFilled : ICONS.starOutline}
             </button>
-            <button class="btn-primary" style="padding:6px 14px; font-size:12px; width:auto; border-radius:6px;">
-              ▶ Guarda
+            <button class="btn-primary" style="padding:6px 14px; font-size:12px; width:auto; border-radius:4px;">
+              Guarda
             </button>
           </div>
         </div>
@@ -85,23 +112,33 @@ export class UIManager {
         <div class="channel-card-top">
           <div class="channel-logo-container">
             ${logoUrl 
-              ? `<img class="channel-logo-img" src="${logoUrl}" alt="${name}" onerror="this.onerror=null; this.parentElement.innerHTML='<span class=\\'channel-fallback-logo\\'>TV</span>'">` 
+              ? `<img class="channel-logo-img" src="${logoUrl}" alt="" />
+                 <span class="channel-fallback-logo" style="display:none;">TV</span>` 
               : '<span class="channel-fallback-logo">TV</span>'}
           </div>
           <div class="channel-card-actions">
             <button class="btn-card-fav ${isFav ? 'active' : ''}" title="Aggiungi ai preferiti">
-              ${isFav ? '★' : '☆'}
+              ${isFav ? ICONS.starFilled : ICONS.starOutline}
             </button>
           </div>
         </div>
         <div class="channel-card-body">
-          <div class="channel-name" title="${name}">${name}</div>
+          <div class="channel-name" title="${safeName}">${safeName}</div>
           <div class="channel-meta-row">
             <span class="channel-id-badge">#${streamId}</span>
             <span class="badge badge-live"><span class="live-pulse"></span> LIVE</span>
           </div>
         </div>
       `;
+    }
+
+    const img = card.querySelector('.channel-logo-img');
+    if (img) {
+      img.addEventListener('error', () => {
+        img.style.display = 'none';
+        const fallback = card.querySelector('.channel-fallback-logo');
+        if (fallback) fallback.style.display = 'flex';
+      });
     }
 
     const favBtn = card.querySelector('.btn-card-fav');
@@ -125,30 +162,41 @@ export class UIManager {
     const name = item.name || 'Film';
     const rating = item.rating ? parseFloat(item.rating).toFixed(1) : (item.rating_5based ? (item.rating_5based * 2).toFixed(1) : null);
     const container = (item.container_extension || 'MP4').toUpperCase();
+    const safeName = UIManager.escapeHtml(name);
 
     card.innerHTML = `
       <div class="movie-poster-box">
         ${posterUrl 
-          ? `<img class="movie-poster-img" src="${posterUrl}" loading="lazy" alt="${name}" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'movie-poster-fallback\\'>🎬<span>${name}</span></div>'">` 
-          : `<div class="movie-poster-fallback">🎬<span>${name}</span></div>`}
+          ? `<img class="movie-poster-img" src="${posterUrl}" loading="lazy" alt="" />
+             <div class="movie-poster-fallback" style="display:none;">${ICONS.movie}<span>${safeName}</span></div>` 
+          : `<div class="movie-poster-fallback">${ICONS.movie}<span>${safeName}</span></div>`}
         <div class="movie-overlay-badges">
           <span class="badge badge-vod">${container}</span>
-          ${rating ? `<span class="badge badge-rating">★ ${rating}</span>` : ''}
+          ${rating ? `<span class="badge badge-rating">${rating}</span>` : ''}
         </div>
       </div>
       <div class="movie-card-info">
-        <div class="movie-title" title="${name}">${name}</div>
+        <div class="movie-title" title="${safeName}">${safeName}</div>
         <div class="movie-meta">
           <span>Film VOD</span>
           <div style="display: flex; align-items: center; gap: 6px;">
-            <button class="btn-card-vlc" title="Riproduci con VLC Media Player (Dolby, DTS, 4K)">🚀 VLC</button>
-            <button class="btn-card-fav ${isFav ? 'active' : ''}" style="width:24px;height:24px;font-size:12px;" title="Preferiti">
-              ${isFav ? '★' : '☆'}
+            <button class="btn-card-vlc" title="Riproduci con VLC Media Player">VLC</button>
+            <button class="btn-card-fav ${isFav ? 'active' : ''}" style="width:26px;height:26px;border-radius:4px;" title="Preferiti">
+              ${isFav ? ICONS.starFilled : ICONS.starOutline}
             </button>
           </div>
         </div>
       </div>
     `;
+
+    const img = card.querySelector('.movie-poster-img');
+    if (img) {
+      img.addEventListener('error', () => {
+        img.style.display = 'none';
+        const fallback = card.querySelector('.movie-poster-fallback');
+        if (fallback) fallback.style.display = 'flex';
+      });
+    }
 
     const favBtn = card.querySelector('.btn-card-fav');
     favBtn.addEventListener('click', (e) => {
@@ -179,27 +227,39 @@ export class UIManager {
     const name = item.name || 'Serie TV';
     const rating = item.rating ? parseFloat(item.rating).toFixed(1) : (item.rating_5based ? (item.rating_5based * 2).toFixed(1) : null);
     const genre = item.genre || 'Serie TV';
+    const safeName = UIManager.escapeHtml(name);
+    const safeGenre = UIManager.escapeHtml(genre);
 
     card.innerHTML = `
       <div class="series-poster-box">
         ${posterUrl 
-          ? `<img class="series-poster-img" src="${posterUrl}" loading="lazy" alt="${name}" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'movie-poster-fallback\\'>🍿<span>${name}</span></div>'">` 
-          : `<div class="movie-poster-fallback">🍿<span>${name}</span></div>`}
+          ? `<img class="series-poster-img" src="${posterUrl}" loading="lazy" alt="" />
+             <div class="movie-poster-fallback" style="display:none;">${ICONS.series}<span>${safeName}</span></div>` 
+          : `<div class="movie-poster-fallback">${ICONS.series}<span>${safeName}</span></div>`}
         <div class="movie-overlay-badges">
           <span class="badge badge-series">SERIE</span>
-          ${rating ? `<span class="badge badge-rating">★ ${rating}</span>` : ''}
+          ${rating ? `<span class="badge badge-rating">${rating}</span>` : ''}
         </div>
       </div>
       <div class="series-card-info">
-        <div class="series-title" title="${name}">${name}</div>
+        <div class="series-title" title="${safeName}">${safeName}</div>
         <div class="series-meta">
-          <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;">${genre}</span>
-          <button class="btn-card-fav ${isFav ? 'active' : ''}" style="width:24px;height:24px;font-size:12px;" title="Preferiti">
-            ${isFav ? '★' : '☆'}
+          <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;">${safeGenre}</span>
+          <button class="btn-card-fav ${isFav ? 'active' : ''}" style="width:26px;height:26px;border-radius:4px;" title="Preferiti">
+            ${isFav ? ICONS.starFilled : ICONS.starOutline}
           </button>
         </div>
       </div>
     `;
+
+    const img = card.querySelector('.series-poster-img');
+    if (img) {
+      img.addEventListener('error', () => {
+        img.style.display = 'none';
+        const fallback = card.querySelector('.movie-poster-fallback');
+        if (fallback) fallback.style.display = 'flex';
+      });
+    }
 
     const favBtn = card.querySelector('.btn-card-fav');
     favBtn.addEventListener('click', (e) => {
@@ -214,6 +274,119 @@ export class UIManager {
     return card;
   }
 
+  /**
+   * Normalizes seasons metadata and episodes across various Xtream Codes panel formats.
+   */
+  static normalizeSeriesData(seriesDetails = {}) {
+    const seasonsMetaMap = new Map();
+    const episodesMap = new Map();
+
+    if (!seriesDetails || typeof seriesDetails !== 'object') {
+      return { seasonsMetaMap, episodesMap, seasonKeys: ['1'] };
+    }
+
+    // 1. Normalize Seasons Metadata
+    const rawSeasons = seriesDetails.seasons;
+    if (Array.isArray(rawSeasons)) {
+      rawSeasons.forEach((s, idx) => {
+        if (!s) return;
+        let sNum = null;
+        if (s.season_number !== undefined && s.season_number !== null) {
+          sNum = String(s.season_number);
+        } else if (s.id !== undefined && s.id !== null && !isNaN(Number(s.id))) {
+          sNum = String(s.id);
+        } else {
+          sNum = String(idx + 1);
+        }
+        seasonsMetaMap.set(sNum, s);
+      });
+    } else if (rawSeasons && typeof rawSeasons === 'object') {
+      Object.entries(rawSeasons).forEach(([k, s]) => {
+        if (!s) return;
+        let sNum = String(k);
+        const match = sNum.match(/\d+/);
+        if (match) {
+          sNum = String(parseInt(match[0], 10));
+        }
+        if (typeof s === 'object' && s.season_number !== undefined && s.season_number !== null) {
+          sNum = String(s.season_number);
+        }
+        seasonsMetaMap.set(sNum, typeof s === 'object' ? s : { name: `Stagione ${sNum}` });
+      });
+    }
+
+    // 2. Normalize Episodes Data
+    const rawEpisodes = seriesDetails.episodes;
+    if (Array.isArray(rawEpisodes)) {
+      rawEpisodes.forEach((ep) => {
+        if (!ep) return;
+        let sNum = '1';
+        if (ep.season !== undefined && ep.season !== null && String(ep.season).trim() !== '') {
+          const m = String(ep.season).match(/\d+/);
+          sNum = m ? String(parseInt(m[0], 10)) : String(ep.season);
+        } else if (ep.season_num !== undefined && ep.season_num !== null) {
+          const m = String(ep.season_num).match(/\d+/);
+          sNum = m ? String(parseInt(m[0], 10)) : String(ep.season_num);
+        }
+        if (!episodesMap.has(sNum)) {
+          episodesMap.set(sNum, []);
+        }
+        episodesMap.get(sNum).push(ep);
+      });
+    } else if (rawEpisodes && typeof rawEpisodes === 'object') {
+      Object.entries(rawEpisodes).forEach(([rawKey, bucket]) => {
+        let bucketList = [];
+        if (Array.isArray(bucket)) {
+          bucketList = bucket;
+        } else if (bucket && typeof bucket === 'object') {
+          bucketList = Object.values(bucket);
+        }
+
+        let defaultSeasonNum = String(rawKey);
+        const m = defaultSeasonNum.match(/\d+/);
+        if (m) {
+          defaultSeasonNum = String(parseInt(m[0], 10));
+        }
+
+        bucketList.forEach((ep) => {
+          if (!ep) return;
+          let epSeason = defaultSeasonNum;
+          if (ep.season !== undefined && ep.season !== null && String(ep.season).trim() !== '') {
+            const epMatch = String(ep.season).match(/\d+/);
+            if (epMatch) {
+              epSeason = String(parseInt(epMatch[0], 10));
+            }
+          }
+          if (!episodesMap.has(epSeason)) {
+            episodesMap.set(epSeason, []);
+          }
+          episodesMap.get(epSeason).push(ep);
+        });
+      });
+    }
+
+    // 3. Union ALL season keys from both episodesMap and seasonsMetaMap
+    const allKeysSet = new Set([
+      ...episodesMap.keys(),
+      ...seasonsMetaMap.keys()
+    ]);
+
+    const seasonKeys = Array.from(allKeysSet).filter(k => k && k.trim() !== '').sort((a, b) => {
+      const numA = parseInt(a, 10);
+      const numB = parseInt(b, 10);
+      if (!isNaN(numA) && !isNaN(numB)) {
+        return numA - numB;
+      }
+      return a.localeCompare(b, undefined, { numeric: true });
+    });
+
+    if (seasonKeys.length === 0) {
+      seasonKeys.push('1');
+    }
+
+    return { seasonsMetaMap, episodesMap, seasonKeys };
+  }
+
   // --- SERIES EPISODES MODAL ---
   static renderSeriesModal(series, seriesDetails, onPlayEpisode) {
     let overlay = document.getElementById('series-modal-overlay');
@@ -224,35 +397,47 @@ export class UIManager {
       document.body.appendChild(overlay);
     }
 
-    const info = seriesDetails.info || series;
-    const seasons = seriesDetails.seasons || [];
-    const episodesMap = seriesDetails.episodes || {};
+    const { seasonsMetaMap, episodesMap: normEpisodesMap, seasonKeys } = this.normalizeSeriesData(seriesDetails);
 
-    const name = info.name || series.name;
-    const cover = info.cover || series.cover || '';
+    const info = (seriesDetails && seriesDetails.info) || series || {};
+    const name = info.name || series.name || 'Serie TV';
+    const cover = info.cover || series.cover || series.stream_icon || '';
     const plot = info.plot || series.plot || 'Nessuna descrizione disponibile per questa serie TV.';
-    const genre = info.genre || series.genre || 'Dramma / Avventura';
+    const genre = info.genre || series.genre || 'Dramma / Serie TV';
     const cast = info.cast || series.cast || '';
-    const rating = info.rating || series.rating || '';
+    const rating = info.rating ? parseFloat(info.rating).toFixed(1) : (series.rating ? parseFloat(series.rating).toFixed(1) : '');
+
+    const activeSeasonsCount = seasonKeys.filter(k => (normEpisodesMap.get(k) || []).length > 0).length || seasonKeys.length;
+    const totalEpisodesCount = Array.from(normEpisodesMap.values()).reduce((acc, list) => acc + list.length, 0);
+
+    const safeName = UIManager.escapeHtml(name);
+    const safeGenre = UIManager.escapeHtml(genre);
+    const safePlot = UIManager.escapeHtml(plot);
+    const safeCast = UIManager.escapeHtml(cast);
 
     overlay.innerHTML = `
       <div class="series-modal">
         <div class="series-hero">
           <div class="series-hero-poster">
-            ${cover ? `<img src="${cover}" alt="${name}">` : '<div class="movie-poster-fallback">🍿</div>'}
+            ${cover 
+              ? `<img src="${cover}" alt="" />
+                 <div class="movie-poster-fallback" style="display:none;">${ICONS.series}<span>${safeName}</span></div>` 
+              : `<div class="movie-poster-fallback">${ICONS.series}<span>${safeName}</span></div>`}
           </div>
           <div class="series-hero-content">
             <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-              <h2 class="series-hero-title">${name}</h2>
-              <div class="player-close-btn" id="series-modal-close">✕</div>
+              <h2 class="series-hero-title">${safeName}</h2>
+              <div class="player-close-btn" id="series-modal-close" title="Chiudi">${ICONS.close}</div>
             </div>
             <div class="series-hero-meta">
               <span class="badge badge-series">SERIE TV</span>
-              ${rating ? `<span class="badge badge-rating">★ ${rating}</span>` : ''}
-              <span style="color:var(--text-dim); font-size:12px;">${genre}</span>
+              ${rating ? `<span class="badge badge-rating">${rating}</span>` : ''}
+              <span class="badge badge-season-count">${activeSeasonsCount} ${activeSeasonsCount === 1 ? 'Stagione' : 'Stagioni'}</span>
+              ${totalEpisodesCount > 0 ? `<span class="badge badge-episodes-total">${totalEpisodesCount} ep. totali</span>` : ''}
+              <span style="color:var(--text-dim); font-size:12px;">${safeGenre}</span>
             </div>
-            <p class="series-hero-plot">${plot}</p>
-            ${cast ? `<div class="series-hero-cast"><strong>Cast:</strong> ${cast}</div>` : ''}
+            <p class="series-hero-plot">${safePlot}</p>
+            ${safeCast ? `<div class="series-hero-cast"><strong>Cast:</strong> ${safeCast}</div>` : ''}
           </div>
         </div>
 
@@ -266,6 +451,15 @@ export class UIManager {
       </div>
     `;
 
+    const heroImg = overlay.querySelector('.series-hero-poster img');
+    if (heroImg) {
+      heroImg.addEventListener('error', () => {
+        heroImg.style.display = 'none';
+        const fb = overlay.querySelector('.series-hero-poster .movie-poster-fallback');
+        if (fb) fb.style.display = 'flex';
+      });
+    }
+
     overlay.classList.add('active');
 
     // Close handler
@@ -278,46 +472,61 @@ export class UIManager {
     const tabsContainer = overlay.querySelector('#season-tabs-container');
     const episodesContainer = overlay.querySelector('#episodes-list-container');
 
-    // If no seasons array, inspect keys in episodesMap
-    const seasonKeys = seasons.length > 0 
-      ? seasons.map(s => String(s.season_number || s.id || 1)) 
-      : Object.keys(episodesMap);
-
-    if (seasonKeys.length === 0) {
-      seasonKeys.push("1");
-    }
-
     const renderEpisodesForSeason = (seasonNum) => {
-      const episodes = episodesMap[seasonNum] || episodesMap[String(seasonNum)] || [];
+      const episodes = (normEpisodesMap.get(String(seasonNum)) || []).slice();
       episodesContainer.innerHTML = '';
 
       if (episodes.length === 0) {
         episodesContainer.innerHTML = `
           <div class="empty-state" style="padding:40px 0;">
-            <div class="empty-state-icon">📺</div>
+            <div class="empty-state-icon">${ICONS.series}</div>
             <div class="empty-state-title">Nessun episodio trovato</div>
-            <div class="empty-state-desc">Non ci sono episodi registrati per questa stagione.</div>
+            <div class="empty-state-desc">Non ci sono episodi registrati per la Stagione ${seasonNum}.</div>
           </div>
         `;
         return;
       }
 
+      // Sort episodes numerically ascending
+      episodes.sort((a, b) => {
+        const aNum = parseInt(a.episode_num ?? a.num ?? a.id ?? 0, 10);
+        const bNum = parseInt(b.episode_num ?? b.num ?? b.id ?? 0, 10);
+        if (!isNaN(aNum) && !isNaN(bNum) && aNum !== bNum) {
+          return aNum - bNum;
+        }
+        return String(a.title || '').localeCompare(String(b.title || ''), undefined, { numeric: true });
+      });
+
       episodes.forEach((ep) => {
         const epEl = document.createElement('div');
         epEl.className = 'episode-card';
-        const epNum = ep.episode_num || ep.id;
+        const epNum = ep.episode_num !== undefined ? ep.episode_num : (ep.num || ep.id || 1);
         const epTitle = ep.title || `Episodio ${epNum}`;
-        const epPlot = ep.info?.plot || 'Guarda questo episodio';
+        const epPlot = ep.info?.plot || ep.plot || 'Guarda questo episodio';
+        const epDuration = ep.info?.duration || (ep.info?.duration_secs ? `${Math.floor(ep.info.duration_secs / 60)} min` : '');
+        const epExt = ep.container_extension || '';
+        const thumbUrl = ep.info?.movie_image || ep.movie_image || ep.cover || '';
 
         epEl.innerHTML = `
           <div class="episode-left">
-            <div class="episode-num-badge">E${epNum}</div>
+            ${thumbUrl ? `
+              <div class="episode-thumb-box">
+                <img src="${thumbUrl}" alt="E${epNum}" onerror="this.parentElement.style.display='none'; this.parentElement.nextElementSibling.style.display='flex';">
+              </div>
+              <div class="episode-num-badge" style="display:none;">E${epNum}</div>
+            ` : `
+              <div class="episode-num-badge">E${epNum}</div>
+            `}
             <div class="episode-info-text">
-              <span class="episode-title">${epTitle}</span>
+              <div class="episode-title-row">
+                <span class="episode-title">${epTitle}</span>
+                ${epDuration ? `<span class="episode-chip">${epDuration}</span>` : ''}
+                ${epExt ? `<span class="episode-chip">${epExt.toUpperCase()}</span>` : ''}
+              </div>
               <span class="episode-plot">${epPlot}</span>
             </div>
           </div>
-          <button class="episode-play-btn" title="Riproduci Episodio">▶</button>
+          <button class="episode-play-btn" title="Riproduci Episodio">${ICONS.play}</button>
         `;
 
         epEl.addEventListener('click', () => {
@@ -328,12 +537,32 @@ export class UIManager {
       });
     };
 
-    // Render Season Tabs
+    let defaultSeason = seasonKeys.find(k => k === '1' && (normEpisodesMap.get(k) || []).length > 0);
+    if (!defaultSeason) {
+      defaultSeason = seasonKeys.find(k => (normEpisodesMap.get(k) || []).length > 0) || seasonKeys[0];
+    }
+
     tabsContainer.innerHTML = '';
-    seasonKeys.forEach((sNum, index) => {
+    seasonKeys.forEach((sNum) => {
+      const meta = seasonsMetaMap.get(sNum);
+      const eps = normEpisodesMap.get(sNum) || [];
+      const count = eps.length;
+
+      let label = `Stagione ${sNum}`;
+      if (sNum === '0') {
+        label = (meta && meta.name) ? meta.name : 'Speciali';
+      } else if (meta && meta.name) {
+        label = meta.name;
+      }
+
       const tabBtn = document.createElement('button');
-      tabBtn.className = `season-tab-btn ${index === 0 ? 'active' : ''}`;
-      tabBtn.textContent = `Stagione ${sNum}`;
+      tabBtn.className = `season-tab-btn ${sNum === defaultSeason ? 'active' : ''}`;
+      tabBtn.setAttribute('data-season', sNum);
+
+      tabBtn.innerHTML = `
+        <span class="season-tab-title">${label}</span>
+        <span class="season-ep-count-badge">${count} ep</span>
+      `;
 
       tabBtn.addEventListener('click', () => {
         tabsContainer.querySelectorAll('.season-tab-btn').forEach(b => b.classList.remove('active'));
@@ -344,9 +573,8 @@ export class UIManager {
       tabsContainer.appendChild(tabBtn);
     });
 
-    // Default select first season
-    if (seasonKeys[0]) {
-      renderEpisodesForSeason(seasonKeys[0]);
+    if (defaultSeason) {
+      renderEpisodesForSeason(defaultSeason);
     }
   }
 
@@ -364,13 +592,13 @@ export class UIManager {
 
       chip.innerHTML = `
         <div class="account-chip-info">
-          <div class="account-chip-icon">👤</div>
+          <div class="account-chip-icon">${ICONS.user}</div>
           <div class="account-chip-text">
             <span class="account-chip-user">${acc.username}</span>
             <span class="account-chip-host">${acc.host}</span>
           </div>
         </div>
-        <button class="account-delete-btn" title="Elimina profilo">🗑️</button>
+        <button class="account-delete-btn" title="Elimina profilo">${ICONS.trash}</button>
       `;
 
       chip.addEventListener('click', () => onSelect(acc));

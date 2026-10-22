@@ -183,7 +183,7 @@ export class VideoPlayer {
         } else if ((e.code === 'Space' || e.key === 'k' || e.key === 'K') && e.target.tagName !== 'INPUT') {
           e.preventDefault();
           this.togglePlay();
-          this.showCenterFeedback(this.video?.paused ? '⏸' : '▶');
+          this.showCenterFeedback(this.video?.paused ? 'PAUSA' : 'PLAY');
         } else if (e.key === 'f' || e.key === 'F') {
           e.preventDefault();
           this.toggleFullscreen();
@@ -792,16 +792,16 @@ export class VideoPlayer {
     this.errorBanner.innerHTML = `
       <div style="font-weight: 600; margin-bottom: 8px; font-size: 14px;">${msg}</div>
       <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
-        <button id="player-retry-btn" style="padding: 7px 16px; border: 1px solid rgba(255,255,255,0.4); background: rgba(255,255,255,0.18); color: #fff; border-radius: 8px; font-weight: 600; cursor: pointer;">
-          🔄 Riprova
+        <button id="player-retry-btn" style="padding: 7px 16px; border: 1px solid var(--border-subtle); background: rgba(255,255,255,0.08); color: #fff; border-radius: 4px; font-weight: 600; cursor: pointer;">
+          Riprova
         </button>
         ${isLive ? `
-          <button id="player-switch-fmt-btn" style="padding: 7px 16px; border: 1px solid #3b82f6; background: rgba(59,130,246,0.3); color: #93c5fd; border-radius: 8px; font-weight: 600; cursor: pointer;">
-            ⚡ Prova Formato ${altFormat}
+          <button id="player-switch-fmt-btn" style="padding: 7px 16px; border: 1px solid #3b82f6; background: rgba(59,130,246,0.25); color: #93c5fd; border-radius: 4px; font-weight: 600; cursor: pointer;">
+            Prova Formato ${altFormat}
           </button>
         ` : ''}
-        <button id="player-close-err-btn" style="padding: 7px 16px; border: 1px solid rgba(255,255,255,0.2); background: transparent; color: rgba(255,255,255,0.7); border-radius: 8px; font-weight: 600; cursor: pointer;">
-          ✕ Chiudi
+        <button id="player-close-err-btn" style="padding: 7px 16px; border: 1px solid var(--border-subtle); background: transparent; color: rgba(255,255,255,0.7); border-radius: 4px; font-weight: 600; cursor: pointer;">
+          Chiudi
         </button>
       </div>
     `;
@@ -835,7 +835,7 @@ export class VideoPlayer {
     if (this.playBtn) {
       this.playBtn.addEventListener('click', () => {
         this.togglePlay();
-        this.showCenterFeedback(this.video?.paused ? '⏸' : '▶');
+        this.showCenterFeedback(this.video?.paused ? 'PAUSA' : 'PLAY');
       });
     }
 
@@ -844,7 +844,7 @@ export class VideoPlayer {
       this.video.addEventListener('click', (e) => {
         e.stopPropagation();
         this.togglePlay();
-        this.showCenterFeedback(this.video?.paused ? '⏸' : '▶');
+        this.showCenterFeedback(this.video?.paused ? 'PAUSA' : 'PLAY');
       });
 
       // Double-click video to toggle fullscreen
@@ -1136,13 +1136,17 @@ export class VideoPlayer {
       this.bottomVolSlider.value = isMuted ? '0' : vol.toString();
     }
 
-    const icon = isMuted ? '🔇' : (vol < 0.5 ? '🔉' : '🔊');
+    const volSvgHigh = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
+    const volSvgLow = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
+    const volSvgMuted = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>';
+
+    const iconSvg = isMuted ? volSvgMuted : (vol < 0.5 ? volSvgLow : volSvgHigh);
     if (this.muteBtn) {
-      this.muteBtn.textContent = icon;
+      this.muteBtn.innerHTML = iconSvg;
       this.muteBtn.title = isMuted ? 'Riattiva Audio (M)' : 'Disattiva Audio (M)';
     }
     if (this.bottomMuteBtn) {
-      this.bottomMuteBtn.textContent = icon;
+      this.bottomMuteBtn.innerHTML = iconSvg;
       this.bottomMuteBtn.title = isMuted ? 'Riattiva Audio (M)' : 'Disattiva Audio (M)';
     }
 
@@ -1398,20 +1402,23 @@ export class VideoPlayer {
       } else {
         this.audioBadge.style.display = 'inline-block';
         if (isTranscoding) {
-          this.audioBadge.textContent = '⚡ Audio: AAC (Transcodificato)';
+          this.audioBadge.textContent = 'Audio: AAC (Transcodificato)';
           this.audioBadge.title = 'Modalità: Audio AAC convertito in tempo reale per il browser. Clicca per tornare ad Audio Diretto.';
-          this.audioBadge.style.background = 'rgba(99, 102, 241, 0.3)';
-          this.audioBadge.style.borderColor = 'rgba(99, 102, 241, 0.6)';
-          this.audioBadge.style.color = '#c7d2fe';
+          this.audioBadge.style.background = 'rgba(37, 99, 235, 0.2)';
+          this.audioBadge.style.borderColor = 'rgba(37, 99, 235, 0.5)';
+          this.audioBadge.style.color = '#93c5fd';
         } else {
-          this.audioBadge.textContent = '🔊 Audio: Diretto';
+          this.audioBadge.textContent = 'Audio: Diretto';
           this.audioBadge.title = 'Modalità: Traccia audio originale diretta. Clicca per attivare la Transcodifica AAC.';
-          this.audioBadge.style.background = 'rgba(14, 165, 233, 0.2)';
-          this.audioBadge.style.borderColor = 'rgba(14, 165, 233, 0.4)';
-          this.audioBadge.style.color = '#38bdf8';
+          this.audioBadge.style.background = 'rgba(255, 255, 255, 0.08)';
+          this.audioBadge.style.borderColor = 'var(--border-subtle)';
+          this.audioBadge.style.color = 'var(--text-main)';
         }
       }
     }
+
+    const volSvgLow = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
+    const zapSvg = '<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>';
 
     if (this.bottomAudioBtn) {
       if (isLive || !this.currentStream) {
@@ -1420,12 +1427,12 @@ export class VideoPlayer {
         this.bottomAudioBtn.style.display = 'inline-flex';
         if (isTranscoding) {
           this.bottomAudioBtn.classList.add('transcoding');
-          if (this.bottomAudioIcon) this.bottomAudioIcon.textContent = '⚡';
+          if (this.bottomAudioIcon) this.bottomAudioIcon.innerHTML = zapSvg;
           if (this.bottomAudioText) this.bottomAudioText.textContent = 'AAC Transcodificato';
           this.bottomAudioBtn.title = 'Modalità: Audio AAC (attivo). Clicca per tornare ad Audio Diretto.';
         } else {
           this.bottomAudioBtn.classList.remove('transcoding');
-          if (this.bottomAudioIcon) this.bottomAudioIcon.textContent = '🔊';
+          if (this.bottomAudioIcon) this.bottomAudioIcon.innerHTML = volSvgLow;
           if (this.bottomAudioText) this.bottomAudioText.textContent = 'Audio: Diretto';
           this.bottomAudioBtn.title = 'Modalità: Traccia audio originale diretta. Clicca per attivare la Transcodifica AAC.';
         }
