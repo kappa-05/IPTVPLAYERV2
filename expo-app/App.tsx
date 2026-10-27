@@ -333,22 +333,23 @@ export default function App() {
         setSelectedSeries(item.rawItem || item);
         return;
       }
+      const itemType: MediaType = item.type || (item.stream_type === 'movie' || item.container_extension ? 'vod' : (item.series_id ? 'series' : 'live'));
       const streamUrl = XtreamAPI.buildStreamUrl(
         account,
         item.rawItem || item,
-        item.type || 'live',
-        item.type === 'live' ? 'm3u8' : item.container_extension
+        itemType,
+        itemType === 'live' ? 'm3u8' : (item.container_extension || 'mp4')
       );
 
       const sid = String(item.streamId);
       const epg = epgMap[sid];
-      const subTitle = epg?.current ? `${epg.current.title} (${epg.current.start} - ${epg.current.end})` : undefined;
+      const subTitle = (itemType === 'live' && epg?.current) ? `${epg.current.title} (${epg.current.start} - ${epg.current.end})` : undefined;
 
       setPlayingStream({
         streamId: item.streamId,
         title: item.title,
         subTitle,
-        type: item.type,
+        type: itemType,
         streamUrl,
         poster: item.icon,
         rawItem: item.rawItem || item
@@ -360,7 +361,7 @@ export default function App() {
       account,
       item,
       currentTab as MediaType,
-      currentTab === 'live' ? 'm3u8' : item.container_extension
+      currentTab === 'live' ? 'm3u8' : (item.container_extension || 'mp4')
     );
 
     const sid = String(item.stream_id || item.id);

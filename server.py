@@ -884,13 +884,27 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                     try:
                         with open(m3u8_path, 'r', encoding='utf-8') as f:
                             raw_m3u8 = f.read()
+                        
+                        sess_data = HLS_STREAM_MGR.sessions.get(sid, {})
+                        proc = sess_data.get('proc')
+                        is_finished = proc and proc.poll() is not None and proc.returncode == 0
+
                         rewritten_lines = []
+                        has_endlist = False
                         for line in raw_m3u8.splitlines():
                             s = line.strip()
+                            if s == '#EXT-X-ENDLIST':
+                                has_endlist = True
                             if s and not s.startswith('#'):
                                 rewritten_lines.append(f"/api/hls/{sid}/{s}")
                             else:
                                 rewritten_lines.append(line)
+                                if s.startswith('#EXTM3U') and is_finished:
+                                    rewritten_lines.append('#EXT-X-PLAYLIST-TYPE:VOD')
+
+                        if is_finished and not has_endlist:
+                            rewritten_lines.append('#EXT-X-ENDLIST')
+
                         m3u8_bytes = "\n".join(rewritten_lines).encode('utf-8')
                         self.send_response(200)
                         self.send_header('Access-Control-Allow-Origin', '*')

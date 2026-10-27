@@ -311,13 +311,10 @@ export class XtreamAPI {
     return data;
   }
 
-  static buildStreamUrl(account: Account, item: any, type: MediaType, ext: string = 'm3u8'): string {
+  static buildStreamUrl(account: Account, item: any, type: MediaType, ext?: string): string {
     // If the stream object already carries a direct_source (e.g. from M3U playlist)
     if (item.direct_source) {
       if (Platform.OS === 'web') {
-        if (type === 'vod' || type === 'series') {
-          return this.getHlsUrl(item.direct_source);
-        }
         if (account.useProxy) {
           return this.getProxyUrl(item.direct_source, true);
         }
@@ -338,24 +335,19 @@ export class XtreamAPI {
 
     let targetUrl = '';
     if (type === 'live') {
-      const extension = ext.replace(/^\./, '');
+      const extension = (ext || 'm3u8').replace(/^\./, '');
       targetUrl = `${cleanHost}/live/${username}/${pass}/${sid}.${extension}`;
     } else if (type === 'vod') {
-      const extension = (item.container_extension || ext || 'mp4').replace(/^\./, '');
+      const rawExt = (item.container_extension || ext || 'mp4').replace(/^\./, '').toLowerCase();
+      const extension = (rawExt === 'mkv' || rawExt === 'avi' || rawExt === 'ts') ? 'mp4' : rawExt;
       targetUrl = `${cleanHost}/movie/${username}/${pass}/${sid}.${extension}`;
     } else if (type === 'series') {
-      const extension = (item.container_extension || ext || 'mp4').replace(/^\./, '');
+      const rawExt = (item.container_extension || ext || 'mp4').replace(/^\./, '').toLowerCase();
+      const extension = (rawExt === 'mkv' || rawExt === 'avi' || rawExt === 'ts') ? 'mp4' : rawExt;
       targetUrl = `${cleanHost}/series/${username}/${pass}/${sid}.${extension}`;
     }
 
     if (Platform.OS === 'web') {
-      // Definitive VOD & Series fix: route movies and series through the real-time HLS remuxing pipeline!
-      // This transcodes AC3/DTS Dolby audio to standard AAC on the fly and packages into standard HLS (.m3u8)
-      // Guaranteed to play natively on Apple AVPlayer (iOS Safari) and via hls.js on Android/Chrome/Desktop!
-      if (type === 'vod' || type === 'series') {
-        return this.getHlsUrl(targetUrl);
-      }
-
       const isHttpsPage = typeof window !== 'undefined' && window.location?.protocol === 'https:';
       const isHttpTarget = targetUrl.startsWith('http://');
 

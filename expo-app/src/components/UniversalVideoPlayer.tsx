@@ -82,12 +82,40 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const controlsTimeoutRef = useRef<any>(null);
+  const [trackWidth, setTrackWidth] = useState<number>(0);
+
+  const isMovieOrSeries = stream?.type === 'vod' || stream?.type === 'series' || stream?.streamUrl.includes('/movie/') || stream?.streamUrl.includes('/series/');
+  const isLive = !isMovieOrSeries && (stream?.type === 'live' || stream?.streamUrl.includes('/live/'));
+
+  // Fetch duration via server ffprobe if not yet known (especially useful for transcoded or remote VOD streams)
+  useEffect(() => {
+    if (visible && stream && isMovieOrSeries) {
+      let rawUrl = stream.streamUrl;
+      if (rawUrl.includes('/api/proxy?url=')) {
+        rawUrl = decodeURIComponent(rawUrl.split('/api/proxy?url=')[1]);
+      } else if (rawUrl.includes('/api/hls/master.m3u8?url=')) {
+        rawUrl = decodeURIComponent(rawUrl.split('/api/hls/master.m3u8?url=')[1]);
+      }
+      if (rawUrl.startsWith('http')) {
+        fetch(`/api/media_info?url=${encodeURIComponent(rawUrl)}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data && data.duration && data.duration > 0 && isFinite(data.duration)) {
+              setDuration(prev => (prev > 0 && isFinite(prev) ? prev : data.duration));
+            }
+          })
+          .catch(() => {});
+      }
+    }
+  }, [visible, stream, isMovieOrSeries]);
 
   useEffect(() => {
     if (visible && stream) {
       setLoading(true);
       setErrorMsg(null);
       setIsPlaying(true);
+      setCurrentTime(0);
+      setDuration(0);
       resetControlsTimer();
 
       if (Platform.OS === 'web') {
@@ -137,7 +165,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video || !stream) return;
 
     const streamUrl = stream.streamUrl;
-    const isM3U8 = streamUrl.toLowerCase().includes('.m3u8') || stream.type === 'live';
+    const isM3U8 = streamUrl.toLowerCase().includes('.m3u8') || (isLive && !streamUrl.includes('/movie/') && !streamUrl.includes('/series/'));
     const canNativeHls = typeof video.canPlayType === 'function' && Boolean(video.canPlayType('application/vnd.apple.mpegurl'));
 
     video.onwaiting = () => setLoading(true);
@@ -150,15 +178,42 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     };
     video.onpause = () => setIsPlaying(false);
     video.onvolumechange = () => setIsMuted(video.muted);
+    video.onloadedmetadata = () => {
+      if (video.duration && isFinite(video.duration) && video.duration > 0) {
+        setDuration(video.duration);
+      }
+    };
+    video.ondurationchange = () => {
+      if (video.duration && isFinite(video.duration) && video.duration > 0) {
+        setDuration(video.duration);
+      }
+    };
     video.ontimeupdate = () => {
       setCurrentTime(video.currentTime);
-      setDuration(video.duration || 0);
+      if (video.duration && isFinite(video.duration) && video.duration > 0) {
+        setDuration(video.duration);
+      }
     };
     video.onerror = () => {
       console.warn('HTML5 Video Error:', video.error);
       const code = video.error ? video.error.code : 'ignoto';
 
-      // Graceful fallback for VOD/Series: if HLS failed, retry via direct proxy
+      // Fallback 1: If direct stream failed on VOD/Series (Code 4 unsupported format), retry via HLS remuxing
+      if (!stream.streamUrl.includes('/api/hls/master.m3u8') && !stream.streamUrl.includes('/api/transcode') && isMovieOrSeries) {
+        console.log(`Direct stream error (Code ${code}), falling back to HLS remuxing pipeline...`);
+        let hlsUrl = '';
+        if (stream.streamUrl.includes('/api/proxy?url=')) {
+          hlsUrl = stream.streamUrl.replace('/api/proxy?url=', '/api/hls/master.m3u8?url=');
+        } else {
+          hlsUrl = `/api/hls/master.m3u8?url=${encodeURIComponent(stream.streamUrl)}`;
+        }
+        stream.streamUrl = hlsUrl;
+        cleanupWebPlayer();
+        initWebPlayer();
+        return;
+      }
+
+      // Fallback 2: if HLS failed, retry via direct proxy
       if (stream.streamUrl.includes('/api/hls/master.m3u8')) {
         console.log('HLS pipeline error, falling back to direct proxy stream...');
         const proxyUrl = stream.streamUrl.replace('/api/hls/master.m3u8', '/api/proxy');
@@ -192,7 +247,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     } else if (isM3U8 && HlsClass && HlsClass.isSupported()) {
       const hls = new HlsClass({
         enableWorker: true,
-        lowLatencyMode: stream.type === 'live',
+        lowLatencyMode: isLive,
         backBufferLength: 60
       });
       hlsRef.current = hls;
@@ -302,13 +357,35 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
+  const seekTo = (targetSecs: number) => {
+    resetControlsTimer();
+    const maxDur = duration > 0 && isFinite(duration) ? duration : (webVideoRef.current?.duration || 0);
+    if (maxDur <= 0) return;
+    const clamped = Math.max(0, Math.min(maxDur, targetSecs));
+    if (Platform.OS === 'web' && webVideoRef.current) {
+      webVideoRef.current.currentTime = clamped;
+      setCurrentTime(clamped);
+    } else if (nativeVideoRef.current && maxDur > 0) {
+      nativeVideoRef.current.setPositionAsync(clamped * 1000);
+      setCurrentTime(clamped);
+    }
+  };
+
   const seekRelative = (offsetSecs: number) => {
     resetControlsTimer();
     if (Platform.OS === 'web' && webVideoRef.current) {
-      webVideoRef.current.currentTime = Math.max(0, Math.min(duration, webVideoRef.current.currentTime + offsetSecs));
-    } else if (nativeVideoRef.current && duration > 0) {
-      const newPos = Math.max(0, Math.min(duration * 1000, (currentTime + offsetSecs) * 1000));
-      nativeVideoRef.current.setPositionAsync(newPos);
+      const vid = webVideoRef.current;
+      const cur = vid.currentTime || currentTime || 0;
+      const maxDur = duration > 0 && isFinite(duration) ? duration : (vid.duration && isFinite(vid.duration) ? vid.duration : 86400);
+      const target = Math.max(0, Math.min(maxDur, cur + offsetSecs));
+      vid.currentTime = target;
+      setCurrentTime(target);
+    } else if (nativeVideoRef.current) {
+      const cur = currentTime || 0;
+      const maxDur = duration > 0 ? duration : 86400;
+      const target = Math.max(0, Math.min(maxDur, cur + offsetSecs));
+      nativeVideoRef.current.setPositionAsync(target * 1000);
+      setCurrentTime(target);
     }
   };
 
@@ -335,7 +412,8 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const formatTime = (seconds: number) => {
-    const totalSecs = Math.floor(seconds || 0);
+    if (!isFinite(seconds) || isNaN(seconds) || seconds <= 0) return '0:00';
+    const totalSecs = Math.floor(seconds);
     const hrs = Math.floor(totalSecs / 3600);
     const mins = Math.floor((totalSecs % 3600) / 60);
     const secs = totalSecs % 60;
@@ -345,10 +423,18 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
+  const handleTimelinePress = (e: any) => {
+    if (duration <= 0 || !isFinite(duration)) return;
+    const nativeEvent = e.nativeEvent;
+    const clickX = nativeEvent.locationX ?? nativeEvent.offsetX ?? 0;
+    const w = trackWidth > 0 ? trackWidth : 1;
+    const ratio = Math.max(0, Math.min(1, clickX / w));
+    seekTo(ratio * duration);
+  };
+
   if (!visible || !stream) return null;
 
-  const isLive = stream.type === 'live';
-  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const progressPercent = (duration > 0 && isFinite(duration)) ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -533,12 +619,20 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
 
               {/* Bottom Controls */}
               <View style={styles.bottomBar}>
-                {!isLive && duration > 0 && (
-                  <View style={styles.timelineContainer}>
+                {!isLive && (
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    style={styles.timelineContainer}
+                    onPress={handleTimelinePress}
+                    onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+                  >
                     <View style={styles.timelineTrack}>
                       <View style={[styles.timelinePlayed, { width: `${progressPercent}%` }]} />
+                      {duration > 0 && (
+                        <View style={[styles.timelineThumb, { left: `${progressPercent}%` }]} />
+                      )}
                     </View>
-                  </View>
+                  </TouchableOpacity>
                 )}
 
                 <View style={styles.bottomControlsRow}>
@@ -772,17 +866,34 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(5, 7, 11, 0.8)'
   },
   timelineContainer: {
-    marginBottom: 10
+    width: '100%',
+    paddingVertical: 8,
+    marginBottom: 6,
+    // @ts-ignore
+    cursor: 'pointer'
   },
   timelineTrack: {
-    height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 2,
-    overflow: 'hidden'
+    height: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    borderRadius: 3,
+    position: 'relative',
+    overflow: 'visible'
   },
   timelinePlayed: {
     height: '100%',
-    backgroundColor: colors.primary
+    backgroundColor: colors.primary,
+    borderRadius: 3
+  },
+  timelineThumb: {
+    position: 'absolute',
+    top: -4,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#fff',
+    marginLeft: -7,
+    // @ts-ignore
+    boxShadow: '0 0 6px rgba(0,0,0,0.6)'
   },
   bottomControlsRow: {
     flexDirection: 'row',
