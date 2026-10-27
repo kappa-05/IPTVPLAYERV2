@@ -108,6 +108,7 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.mobileScrollView}
         contentContainerStyle={styles.mobilePillsScroll}
       >
         <TouchableOpacity
@@ -239,21 +240,40 @@ const styles = StyleSheet.create({
     backgroundColor: colors.backgroundSecondary,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    paddingVertical: 6,
-    width: '100%'
+    height: 48,
+    maxHeight: 48,
+    minHeight: 48,
+    width: '100%',
+    flexGrow: 0,
+    flexShrink: 0,
+    overflow: 'hidden'
+  },
+  mobileScrollView: {
+    height: 48,
+    maxHeight: 48,
+    flexGrow: 0,
+    flexShrink: 0
   },
   mobilePillsScroll: {
     paddingHorizontal: 10,
     gap: 6,
-    alignItems: 'center'
+    height: 48,
+    alignItems: 'center',
+    flexDirection: 'row'
   },
   pill: {
     backgroundColor: colors.card,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 12,
+    height: 32,
+    maxHeight: 32,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: colors.border
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    flexGrow: 0,
+    flexShrink: 0
   },
   pillActive: {
     backgroundColor: 'rgba(59, 130, 246, 0.15)',

@@ -243,20 +243,31 @@ const styles = StyleSheet.create({
     backgroundColor: colors.backgroundSecondary,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    paddingVertical: 6
+    height: 44,
+    maxHeight: 44,
+    flexGrow: 0,
+    flexShrink: 0
   },
   catScroll: {
     paddingHorizontal: 12,
     gap: 6,
-    alignItems: 'center'
+    height: 44,
+    alignItems: 'center',
+    flexDirection: 'row'
   },
   catPill: {
     paddingHorizontal: 10,
-    paddingVertical: 5,
+    height: 30,
+    maxHeight: 30,
     borderRadius: 6,
     backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: colors.border
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    flexGrow: 0,
+    flexShrink: 0
   },
   catPillActive: {
     backgroundColor: 'rgba(59, 130, 246, 0.18)',
@@ -273,26 +284,35 @@ const styles = StyleSheet.create({
   },
   channelStrip: {
     backgroundColor: '#0c0f17',
-    paddingVertical: 8,
+    height: 50,
+    maxHeight: 50,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border
+    borderBottomColor: colors.border,
+    flexGrow: 0,
+    flexShrink: 0
   },
   channelScroll: {
     paddingHorizontal: 12,
     gap: 8,
-    alignItems: 'center'
+    height: 50,
+    alignItems: 'center',
+    flexDirection: 'row'
   },
   channelChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 8,
-    paddingVertical: 6,
+    height: 34,
+    maxHeight: 34,
     borderRadius: 6,
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,
-    maxWidth: 160
+    maxWidth: 160,
+    alignSelf: 'center',
+    flexGrow: 0,
+    flexShrink: 0
   },
   channelChipActive: {
     backgroundColor: 'rgba(59, 130, 246, 0.15)',

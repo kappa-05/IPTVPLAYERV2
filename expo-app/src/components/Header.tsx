@@ -382,22 +382,31 @@ const styles = StyleSheet.create({
   },
   tabsScrollView: {
     width: '100%',
-    flexGrow: 0
+    height: 44,
+    maxHeight: 44,
+    flexGrow: 0,
+    flexShrink: 0
   },
   tabsContainer: {
     flexDirection: 'row',
     gap: 6,
+    height: 44,
+    alignItems: 'center',
     paddingVertical: 2
   },
   tab: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingVertical: 7,
+    height: 36,
+    maxHeight: 36,
     paddingHorizontal: 12,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: 'transparent'
+    borderColor: 'transparent',
+    alignSelf: 'center',
+    flexGrow: 0,
+    flexShrink: 0
   },
   tabActive: {
     backgroundColor: colors.primaryMuted,

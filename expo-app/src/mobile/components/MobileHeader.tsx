@@ -161,6 +161,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
+            style={styles.chipsScrollWrapper}
             contentContainerStyle={styles.chipsScroll}
           >
             <TouchableOpacity
@@ -305,7 +306,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 12,
     paddingBottom: 8,
-    gap: 8
+    gap: 8,
+    height: 44,
+    maxHeight: 44,
+    flexGrow: 0,
+    flexShrink: 0
   },
   filterSheetBtn: {
     flexDirection: 'row',
@@ -313,11 +318,15 @@ const styles = StyleSheet.create({
     gap: 4,
     backgroundColor: colors.surface,
     paddingHorizontal: 8,
-    paddingVertical: 5,
+    height: 30,
+    maxHeight: 30,
     borderRadius: 6,
     borderWidth: 1,
     borderColor: colors.border,
-    maxWidth: 130
+    maxWidth: 130,
+    alignSelf: 'center',
+    flexGrow: 0,
+    flexShrink: 0
   },
   filterSheetBtnActive: {
     backgroundColor: 'rgba(59, 130, 246, 0.15)',
@@ -331,18 +340,31 @@ const styles = StyleSheet.create({
   filterSheetBtnTextActive: {
     color: colors.primary
   },
+  chipsScrollWrapper: {
+    height: 36,
+    maxHeight: 36,
+    flexGrow: 0,
+    flexShrink: 0
+  },
   chipsScroll: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6
+    gap: 6,
+    height: 36
   },
   chip: {
     backgroundColor: colors.card,
     paddingHorizontal: 10,
-    paddingVertical: 5,
+    height: 28,
+    maxHeight: 28,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: colors.border
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    flexGrow: 0,
+    flexShrink: 0
   },
   chipActive: {
     backgroundColor: 'rgba(59, 130, 246, 0.18)',

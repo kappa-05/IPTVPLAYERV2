@@ -157,7 +157,7 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
       />
 
       {/* Main Content Area */}
-      <View style={styles.mainContent}>
+      <View style={[styles.mainContent, { flexDirection: width >= 900 ? 'row' : 'column' }]}>
         {activeTab === 'epg' && account ? (
           <EpgGuideView
             account={account}
