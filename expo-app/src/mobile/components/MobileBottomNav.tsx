@@ -16,11 +16,11 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   favoritesCount = 0
 }) => {
   const tabs: { key: NavTab; label: string; icon: keyof typeof Ionicons.glyphMap; iconActive: keyof typeof Ionicons.glyphMap }[] = [
-    { key: 'live', label: 'Canali', icon: 'tv-outline', iconActive: 'tv' },
-    { key: 'epg', label: 'Guida TV', icon: 'calendar-outline', iconActive: 'calendar' },
-    { key: 'vod', label: 'Film', icon: 'film-outline', iconActive: 'film' },
+    { key: 'live', label: 'Live', icon: 'tv-outline', iconActive: 'tv' },
+    { key: 'vod', label: 'Film/VOD', icon: 'film-outline', iconActive: 'film' },
     { key: 'series', label: 'Serie TV', icon: 'albums-outline', iconActive: 'albums' },
-    { key: 'favorites', label: 'Preferiti', icon: 'star-outline', iconActive: 'star' }
+    { key: 'favorites', label: 'Preferiti', icon: 'star-outline', iconActive: 'star' },
+    { key: 'epg', label: 'Guida TV', icon: 'calendar-outline', iconActive: 'calendar' }
   ];
 
   return (

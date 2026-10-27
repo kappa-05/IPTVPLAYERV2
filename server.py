@@ -1468,10 +1468,10 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             version_info = {
                 "app": "IPTV Player V2",
-                "version": "2.2.0",
+                "version": "2.3.0",
                 "branch": "main",
-                "latest_update": "mobile & tablet dedicated UI with locked pill heights and bottom navigation",
-                "features": ["mobile_ui", "desktop_ui", "epg_guide", "m3u_support", "xtream_support"]
+                "latest_update": "mobile bottom nav reorder (Live, Film/VOD, Serie TV, Preferiti, Guida TV) + device native video player (Apple AVPlayer on iOS)",
+                "features": ["mobile_ui", "desktop_ui", "device_native_player", "apple_avplayer_ios", "epg_guide", "m3u_support", "xtream_support"]
             }
             self.wfile.write(json.dumps(version_info, ensure_ascii=False, indent=2).encode('utf-8'))
             return

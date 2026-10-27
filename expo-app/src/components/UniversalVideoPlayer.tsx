@@ -50,7 +50,21 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
   onClose,
   onOpenEpg
 }) => {
-  const { width, height } = useWindowDimensions();
+  const { width } = useWindowDimensions();
+
+  // OS & Device Detection
+  const isIOS = Platform.OS === 'ios' || (Platform.OS === 'web' && typeof navigator !== 'undefined' && (
+    /iPhone|iPad|iPod/i.test(navigator.userAgent || '') ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  ));
+
+  const isAndroid = Platform.OS === 'android' || (Platform.OS === 'web' && typeof navigator !== 'undefined' && (
+    /Android/i.test(navigator.userAgent || '')
+  ));
+
+  const isMobileDevice = Platform.OS !== 'web' || isIOS || isAndroid || (typeof navigator !== 'undefined' && (
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|mobile|Tablet/i.test(navigator.userAgent || '')
+  )) || width < 900;
 
   // Web HTML5 Video Ref
   const webVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -98,10 +112,22 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     }
     if (webVideoRef.current) {
       try {
-        webVideoRef.current.pause();
-        webVideoRef.current.removeAttribute('src');
-        webVideoRef.current.load();
+        const vid = webVideoRef.current;
+        vid.pause();
+        vid.removeAttribute('src');
+        vid.load();
       } catch {}
+    }
+  };
+
+  const tryEnterAppleFullscreen = (video: HTMLVideoElement) => {
+    if (isIOS && typeof (video as any).webkitEnterFullscreen === 'function') {
+      try {
+        (video as any).webkitEnterFullscreen();
+      } catch (err) {
+        // Fullscreen may require direct user touch
+        console.log('Apple fullscreen deferred until user touch:', err);
+      }
     }
   };
 
@@ -112,11 +138,15 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const streamUrl = stream.streamUrl;
     const isM3U8 = streamUrl.toLowerCase().includes('.m3u8') || stream.type === 'live';
+    const canNativeHls = typeof video.canPlayType === 'function' && Boolean(video.canPlayType('application/vnd.apple.mpegurl'));
 
     video.onwaiting = () => setLoading(true);
     video.onplaying = () => {
       setLoading(false);
       setIsPlaying(true);
+      if (isIOS) {
+        tryEnterAppleFullscreen(video);
+      }
     };
     video.onpause = () => setIsPlaying(false);
     video.onvolumechange = () => setIsMuted(video.muted);
@@ -124,14 +154,29 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       setCurrentTime(video.currentTime);
       setDuration(video.duration || 0);
     };
-    video.onerror = (e) => {
+    video.onerror = () => {
       console.warn('HTML5 Video Error:', video.error);
       const code = video.error ? video.error.code : 'ignoto';
       setErrorMsg(`Errore riproduzione stream (Codice ${code}). Il formato potrebbe non essere supportato dal browser.`);
       setLoading(false);
     };
 
-    if (isM3U8 && HlsClass && HlsClass.isSupported()) {
+    // When exiting Apple's native player (tapping 'Fine' / 'Done'), dismiss the modal smoothly
+    const handleWebkitEnd = () => {
+      onClose();
+    };
+    video.addEventListener('webkitendfullscreen', handleWebkitEnd, { once: true });
+
+    // Use native Apple AVPlayer HLS engine if supported (iPhone / iPad / Safari)
+    if (isM3U8 && canNativeHls) {
+      video.src = streamUrl;
+      video.load();
+      video.play().then(() => {
+        tryEnterAppleFullscreen(video);
+      }).catch((e) => {
+        console.log('Autoplay waiting for user touch:', e);
+      });
+    } else if (isM3U8 && HlsClass && HlsClass.isSupported()) {
       const hls = new HlsClass({
         enableWorker: true,
         lowLatencyMode: true,
@@ -167,9 +212,28 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
         }
       });
     } else {
-      // Standard MP4/MKV or native HLS supported (e.g. Safari)
+      // Standard MP4/MKV
       video.src = streamUrl;
+      video.load();
       video.play().catch(() => {});
+    }
+  };
+
+  const handleLaunchNativePlayer = () => {
+    if (Platform.OS === 'web' && webVideoRef.current) {
+      const video = webVideoRef.current;
+      video.play().catch(() => {});
+      if (isIOS && typeof (video as any).webkitEnterFullscreen === 'function') {
+        try {
+          (video as any).webkitEnterFullscreen();
+        } catch (e) {
+          console.warn('Could not enter Apple fullscreen:', e);
+        }
+      } else if (typeof video.requestFullscreen === 'function') {
+        video.requestFullscreen().catch(() => {});
+      }
+    } else if (nativeVideoRef.current) {
+      nativeVideoRef.current.presentFullscreenPlayer();
     }
   };
 
@@ -230,6 +294,10 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     if (Platform.OS === 'web') {
       const video = webVideoRef.current;
       if (video) {
+        if (isIOS && typeof (video as any).webkitEnterFullscreen === 'function') {
+          (video as any).webkitEnterFullscreen();
+          return;
+        }
         if (!document.fullscreenElement) {
           video.requestFullscreen?.().catch(() => {
             document.documentElement.requestFullscreen?.();
@@ -264,10 +332,10 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       <View
         style={styles.container}
         // @ts-ignore
-        onMouseMove={resetControlsTimer}
-        onTouchStart={resetControlsTimer}
+        onMouseMove={!isMobileDevice ? resetControlsTimer : undefined}
+        onTouchStart={!isMobileDevice ? resetControlsTimer : undefined}
       >
-        {/* Web HTML5 Video with HLS.js Support */}
+        {/* Web HTML5 Video with Native Device Player Controls on Mobile */}
         {Platform.OS === 'web' ? (
           <video
             // @ts-ignore
@@ -278,7 +346,8 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
               backgroundColor: '#000',
               objectFit: 'contain'
             }}
-            playsInline
+            playsInline={!isIOS}
+            controls={isMobileDevice}
             autoPlay
           />
         ) : (
@@ -288,7 +357,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
               ref={nativeVideoRef}
               style={styles.video}
               source={{ uri: stream.streamUrl }}
-              useNativeControls={false}
+              useNativeControls={true}
               resizeMode={ResizeModeEnum ? ResizeModeEnum.CONTAIN : 'contain'}
               shouldPlay={true}
               onPlaybackStatusUpdate={(status: any) => {
@@ -311,6 +380,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
         {loading && (
           <View style={styles.centerFeedback} pointerEvents="none">
             <ActivityIndicator size="large" color="#fff" />
+            <Text style={styles.centerLoadingText}>Caricamento stream in corso...</Text>
           </View>
         )}
 
@@ -319,118 +389,180 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
           <View style={styles.centerFeedback}>
             <Ionicons name="alert-circle-outline" size={38} color={colors.accentRed} />
             <Text style={styles.errorText}>{errorMsg}</Text>
-            <TouchableOpacity
-              style={styles.retryBtn}
-              onPress={() => {
-                setErrorMsg(null);
-                setLoading(true);
-                if (Platform.OS === 'web') {
-                  initWebPlayer();
-                } else if (nativeVideoRef.current) {
-                  nativeVideoRef.current.replayAsync();
-                }
-              }}
-            >
-              <Text style={styles.retryBtnText}>Riprova</Text>
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+              <TouchableOpacity
+                style={styles.retryBtn}
+                onPress={() => {
+                  setErrorMsg(null);
+                  setLoading(true);
+                  if (Platform.OS === 'web') {
+                    initWebPlayer();
+                  } else if (nativeVideoRef.current) {
+                    nativeVideoRef.current.replayAsync();
+                  }
+                }}
+              >
+                <Text style={styles.retryBtnText}>Riprova</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.retryBtn, { backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border }]}
+                onPress={onClose}
+              >
+                <Text style={styles.retryBtnText}>Chiudi</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
-        {/* Controls Overlay */}
-        {showControls && (
-          <View style={styles.overlay} pointerEvents="box-none">
-            {/* Top Bar */}
-            <View style={styles.topBar}>
-              <View style={styles.topTitleContainer}>
-                <View style={styles.typeBadge}>
-                  <Text style={styles.typeBadgeText}>
-                    {isLive ? 'LIVE' : stream.type === 'series' ? 'SERIE' : 'VOD'}
-                  </Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.streamTitle} numberOfLines={1}>
+        {/* MOBILE FLOATING HEADER: Leaves bottom area unobstructed for device's native controls */}
+        {isMobileDevice ? (
+          <View style={styles.mobileFloatingOverlay} pointerEvents="box-none">
+            <View style={styles.mobileTopBar}>
+              <TouchableOpacity
+                style={styles.mobileBackBtn}
+                onPress={onClose}
+                accessibilityLabel="Chiudi player"
+              >
+                <Ionicons name="chevron-back" size={20} color="#fff" />
+                <Text style={styles.mobileBackBtnText}>Chiudi</Text>
+              </TouchableOpacity>
+
+              <View style={styles.mobileTitleCol}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <View style={styles.typeBadge}>
+                    <Text style={styles.typeBadgeText}>
+                      {isLive ? 'LIVE' : stream.type === 'series' ? 'SERIE' : 'VOD'}
+                    </Text>
+                  </View>
+                  <Text style={styles.mobileStreamTitle} numberOfLines={1}>
                     {stream.title}
                   </Text>
-                  {stream.subTitle ? (
-                    <Text style={styles.streamSubtitle} numberOfLines={1}>
-                      {stream.subTitle}
-                    </Text>
-                  ) : null}
                 </View>
+                {stream.subTitle ? (
+                  <Text style={styles.mobileStreamSub} numberOfLines={1}>
+                    {stream.subTitle}
+                  </Text>
+                ) : null}
               </View>
 
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                {isLive && onOpenEpg && (
-                  <TouchableOpacity style={styles.guideBtn} onPress={onOpenEpg}>
-                    <Ionicons name="calendar-outline" size={16} color="#fff" />
-                    <Text style={styles.guideBtnText}>Guida TV</Text>
+              <View style={styles.mobileRightActions}>
+                {isIOS && (
+                  <TouchableOpacity
+                    style={styles.applePlayerBtn}
+                    onPress={handleLaunchNativePlayer}
+                    accessibilityLabel="Apri Player Apple Schermo Intero"
+                  >
+                    <Ionicons name="expand" size={15} color="#fff" />
+                    <Text style={styles.applePlayerBtnText}>Apple</Text>
                   </TouchableOpacity>
                 )}
 
-                <TouchableOpacity style={styles.iconBtn} onPress={onClose}>
-                  <Ionicons name="close" size={22} color="#fff" />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Center tap area to toggle play/pause */}
-            <TouchableOpacity style={styles.centerTapArea} activeOpacity={1} onPress={togglePlayPause} />
-
-            {/* Bottom Controls */}
-            <View style={styles.bottomBar}>
-              {!isLive && duration > 0 && (
-                <View style={styles.timelineContainer}>
-                  <View style={styles.timelineTrack}>
-                    <View style={[styles.timelinePlayed, { width: `${progressPercent}%` }]} />
-                  </View>
-                </View>
-              )}
-
-              <View style={styles.bottomControlsRow}>
-                <View style={styles.bottomLeftControls}>
-                  <TouchableOpacity style={styles.iconBtn} onPress={togglePlayPause}>
-                    <Ionicons name={isPlaying ? 'pause' : 'play'} size={20} color="#fff" />
+                {isLive && onOpenEpg && (
+                  <TouchableOpacity style={styles.guideBtn} onPress={onOpenEpg}>
+                    <Ionicons name="calendar-outline" size={15} color="#fff" />
+                    <Text style={styles.guideBtnText}>Guida</Text>
                   </TouchableOpacity>
-
-                  {!isLive && (
-                    <>
-                      <TouchableOpacity style={styles.iconBtn} onPress={() => seekRelative(-10)}>
-                        <Ionicons name="play-back" size={18} color="#fff" />
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.iconBtn} onPress={() => seekRelative(10)}>
-                        <Ionicons name="play-forward" size={18} color="#fff" />
-                      </TouchableOpacity>
-                    </>
-                  )}
-
-                  {isLive ? (
-                    <View style={styles.liveIndicator}>
-                      <View style={styles.liveRedDot} />
-                      <Text style={styles.liveText}>DIRETTA</Text>
-                    </View>
-                  ) : (
-                    <Text style={styles.timeText}>
-                      {formatTime(currentTime)} / {formatTime(duration)}
-                    </Text>
-                  )}
-                </View>
-
-                <View style={styles.bottomRightControls}>
-                  <TouchableOpacity style={styles.iconBtn} onPress={toggleMute}>
-                    <Ionicons
-                      name={isMuted ? 'volume-mute' : 'volume-high'}
-                      size={18}
-                      color="#fff"
-                    />
-                  </TouchableOpacity>
-
-                  <TouchableOpacity style={styles.iconBtn} onPress={toggleFullscreen}>
-                    <Ionicons name="expand" size={18} color="#fff" />
-                  </TouchableOpacity>
-                </View>
+                )}
               </View>
             </View>
           </View>
+        ) : (
+          /* DESKTOP CONTROLS OVERLAY */
+          showControls && (
+            <View style={styles.overlay} pointerEvents="box-none">
+              {/* Top Bar */}
+              <View style={styles.topBar}>
+                <View style={styles.topTitleContainer}>
+                  <View style={styles.typeBadge}>
+                    <Text style={styles.typeBadgeText}>
+                      {isLive ? 'LIVE' : stream.type === 'series' ? 'SERIE' : 'VOD'}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.streamTitle} numberOfLines={1}>
+                      {stream.title}
+                    </Text>
+                    {stream.subTitle ? (
+                      <Text style={styles.streamSubtitle} numberOfLines={1}>
+                        {stream.subTitle}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  {isLive && onOpenEpg && (
+                    <TouchableOpacity style={styles.guideBtn} onPress={onOpenEpg}>
+                      <Ionicons name="calendar-outline" size={16} color="#fff" />
+                      <Text style={styles.guideBtnText}>Guida TV</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  <TouchableOpacity style={styles.iconBtn} onPress={onClose}>
+                    <Ionicons name="close" size={22} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Center tap area to toggle play/pause */}
+              <TouchableOpacity style={styles.centerTapArea} activeOpacity={1} onPress={togglePlayPause} />
+
+              {/* Bottom Controls */}
+              <View style={styles.bottomBar}>
+                {!isLive && duration > 0 && (
+                  <View style={styles.timelineContainer}>
+                    <View style={styles.timelineTrack}>
+                      <View style={[styles.timelinePlayed, { width: `${progressPercent}%` }]} />
+                    </View>
+                  </View>
+                )}
+
+                <View style={styles.bottomControlsRow}>
+                  <View style={styles.bottomLeftControls}>
+                    <TouchableOpacity style={styles.iconBtn} onPress={togglePlayPause}>
+                      <Ionicons name={isPlaying ? 'pause' : 'play'} size={20} color="#fff" />
+                    </TouchableOpacity>
+
+                    {!isLive && (
+                      <>
+                        <TouchableOpacity style={styles.iconBtn} onPress={() => seekRelative(-10)}>
+                          <Ionicons name="play-back" size={18} color="#fff" />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.iconBtn} onPress={() => seekRelative(10)}>
+                          <Ionicons name="play-forward" size={18} color="#fff" />
+                        </TouchableOpacity>
+                      </>
+                    )}
+
+                    {isLive ? (
+                      <View style={styles.liveIndicator}>
+                        <View style={styles.liveRedDot} />
+                        <Text style={styles.liveText}>DIRETTA</Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.timeText}>
+                        {formatTime(currentTime)} / {formatTime(duration)}
+                      </Text>
+                    )}
+                  </View>
+
+                  <View style={styles.bottomRightControls}>
+                    <TouchableOpacity style={styles.iconBtn} onPress={toggleMute}>
+                      <Ionicons
+                        name={isMuted ? 'volume-mute' : 'volume-high'}
+                        size={18}
+                        color="#fff"
+                      />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity style={styles.iconBtn} onPress={toggleFullscreen}>
+                      <Ionicons name="expand" size={18} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            </View>
+          )
         )}
       </View>
     </Modal>
@@ -456,7 +588,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.65)',
-    zIndex: 5
+    zIndex: 25
+  },
+  centerLoadingText: {
+    color: '#fff',
+    fontSize: 13,
+    marginTop: 10,
+    fontWeight: '500'
   },
   errorText: {
     color: colors.accentRed,
@@ -466,7 +604,6 @@ const styles = StyleSheet.create({
     maxWidth: 340
   },
   retryBtn: {
-    marginTop: 10,
     backgroundColor: colors.primary,
     paddingHorizontal: 14,
     paddingVertical: 7,
@@ -477,6 +614,74 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700'
   },
+  // Mobile Floating Overlay Styles
+  mobileFloatingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 20
+  },
+  mobileTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    paddingTop: Platform.OS === 'web' ? 10 : 36,
+    backgroundColor: 'rgba(5, 7, 11, 0.85)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)'
+  },
+  mobileBackBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8
+  },
+  mobileBackBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700'
+  },
+  mobileTitleCol: {
+    flex: 1,
+    marginHorizontal: 10
+  },
+  mobileStreamTitle: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+    flex: 1
+  },
+  mobileStreamSub: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    marginTop: 2
+  },
+  mobileRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  applePlayerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 8
+  },
+  applePlayerBtnText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  // Desktop Controls Overlay Styles
   overlay: {
     position: 'absolute',
     top: 0,

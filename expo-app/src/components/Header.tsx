@@ -160,20 +160,6 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.tab, activeTab === 'epg' && styles.tabActive]}
-          onPress={() => onTabChange('epg')}
-        >
-          <Ionicons
-            name="calendar-outline"
-            size={16}
-            color={activeTab === 'epg' ? colors.primary : colors.textSecondary}
-          />
-          <Text style={[styles.tabText, activeTab === 'epg' && styles.tabTextActive]}>
-            Guida TV
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
           style={[styles.tab, activeTab === 'vod' && styles.tabActive]}
           onPress={() => onTabChange('vod')}
         >
@@ -234,6 +220,20 @@ export const Header: React.FC<HeaderProps> = ({
               </Text>
             </View>
           )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'epg' && styles.tabActive]}
+          onPress={() => onTabChange('epg')}
+        >
+          <Ionicons
+            name="calendar-outline"
+            size={16}
+            color={activeTab === 'epg' ? colors.primary : colors.textSecondary}
+          />
+          <Text style={[styles.tabText, activeTab === 'epg' && styles.tabTextActive]}>
+            Guida TV
+          </Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
