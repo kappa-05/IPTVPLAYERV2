@@ -1461,6 +1461,21 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.handle_tools()
             return
 
+        # 5c. Live Version & Commit Status: /api/version or /version
+        if path in ('/api/version', '/version'):
+            self.send_response(200)
+            self.end_cors_headers(content_type="application/json; charset=utf-8")
+            self.end_headers()
+            version_info = {
+                "app": "IPTV Player V2",
+                "version": "2.2.0",
+                "branch": "main",
+                "latest_update": "mobile & tablet dedicated UI with locked pill heights and bottom navigation",
+                "features": ["mobile_ui", "desktop_ui", "epg_guide", "m3u_support", "xtream_support"]
+            }
+            self.wfile.write(json.dumps(version_info, ensure_ascii=False, indent=2).encode('utf-8'))
+            return
+
         # 5b. Demo M3U Playlist: /demo.m3u or /playlist.m3u
         if path in ('/demo.m3u', '/playlist.m3u', '/api/demo/playlist.m3u'):
             self.send_response(200)
