@@ -98,7 +98,7 @@ export const Header: React.FC<HeaderProps> = ({
                 </View>
               )}
               <Text style={styles.accountUsername} numberOfLines={1}>
-                {account.name || account.username}
+                {`Ciao ${account.username || account.name || 'Utente'}`}
               </Text>
               <TouchableOpacity onPress={onLogout} style={styles.logoutBtn} accessibilityLabel="Disconnetti">
                 <Ionicons name="log-out-outline" size={16} color={colors.textMuted} />
@@ -361,7 +361,7 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 12,
     fontWeight: '600',
-    maxWidth: 120
+    maxWidth: 160
   },
   logoutBtn: {
     padding: 2

@@ -1,11 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   TextInput,
-  ScrollView,
   Platform
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -55,6 +54,22 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
 
   const selectedCategoryName = categories.find(c => c.category_id === selectedCategoryId)?.category_name;
 
+  // Category navigation list: ['all', ...category_ids]
+  const allCatIds = useMemo(() => ['all', ...categories.map(c => c.category_id)], [categories]);
+  const currentIndex = allCatIds.indexOf(selectedCategoryId);
+
+  const handlePrevCategory = () => {
+    if (allCatIds.length <= 1) return;
+    const newIdx = currentIndex <= 0 ? allCatIds.length - 1 : currentIndex - 1;
+    onSelectCategory(allCatIds[newIdx]);
+  };
+
+  const handleNextCategory = () => {
+    if (allCatIds.length <= 1) return;
+    const newIdx = currentIndex >= allCatIds.length - 1 ? 0 : currentIndex + 1;
+    onSelectCategory(allCatIds[newIdx]);
+  };
+
   return (
     <View style={styles.container}>
       {/* Top Navbar */}
@@ -68,7 +83,9 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
             <Text style={styles.brandTitle}>
               IPTV <Text style={styles.brandAccent}>PLAYER</Text>
             </Text>
-            <Text style={styles.tabSubtitle}>{getTabTitle()}</Text>
+            <Text style={styles.tabSubtitle} numberOfLines={1}>
+              {account ? `Ciao ${account.username || account.name || 'Utente'}` : getTabTitle()}
+            </Text>
           </View>
         </View>
 
@@ -131,69 +148,55 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
         </View>
       )}
 
-      {/* Category Pills Bar (for live, vod, series) */}
+      {/* Centered Expanded Category Bar */}
       {activeTab !== 'favorites' && activeTab !== 'epg' && categories.length > 0 && (
         <View style={styles.categoryBar}>
-          {/* Quick All-Categories Sheet Trigger */}
+          {/* Previous Category Stepper */}
           <TouchableOpacity
-            style={[styles.filterSheetBtn, selectedCategoryId !== 'all' && styles.filterSheetBtnActive]}
-            onPress={onOpenCategorySheet}
+            style={styles.catArrowBtn}
+            onPress={handlePrevCategory}
+            accessibilityLabel="Categoria precedente"
           >
-            <Ionicons
-              name="options-outline"
-              size={13}
-              color={selectedCategoryId !== 'all' ? colors.primary : colors.textSecondary}
-            />
-            <Text
-              style={[styles.filterSheetBtnText, selectedCategoryId !== 'all' && styles.filterSheetBtnTextActive]}
-              numberOfLines={1}
-            >
-              {selectedCategoryId !== 'all' ? (selectedCategoryName || 'Categoria') : 'Filtra'}
-            </Text>
+            <Ionicons name="chevron-back" size={17} color={colors.textSecondary} />
+          </TouchableOpacity>
+
+          {/* Centered Expanded Category Button */}
+          <TouchableOpacity
+            style={[styles.categoryCenterBtn, selectedCategoryId !== 'all' && styles.categoryCenterBtnActive]}
+            onPress={onOpenCategorySheet}
+            activeOpacity={0.7}
+            accessibilityLabel="Seleziona categoria"
+          >
+            <View style={styles.catCenterLeft}>
+              <Ionicons
+                name={selectedCategoryId === 'all' ? "layers-outline" : "folder-outline"}
+                size={16}
+                color={selectedCategoryId !== 'all' ? colors.primary : colors.textSecondary}
+              />
+              <Text
+                style={[styles.catCenterText, selectedCategoryId !== 'all' && styles.catCenterTextActive]}
+                numberOfLines={1}
+              >
+                {selectedCategoryId === 'all'
+                  ? `Tutte le Categorie (${totalCount || categories.length})`
+                  : (selectedCategoryName || 'Categoria')}
+              </Text>
+            </View>
             <Ionicons
               name="chevron-down"
-              size={12}
+              size={15}
               color={selectedCategoryId !== 'all' ? colors.primary : colors.textMuted}
             />
           </TouchableOpacity>
 
-          {/* Horizontal Chips */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.chipsScrollWrapper}
-            contentContainerStyle={styles.chipsScroll}
+          {/* Next Category Stepper */}
+          <TouchableOpacity
+            style={styles.catArrowBtn}
+            onPress={handleNextCategory}
+            accessibilityLabel="Categoria successiva"
           >
-            <TouchableOpacity
-              style={[styles.chip, selectedCategoryId === 'all' && styles.chipActive]}
-              onPress={() => onSelectCategory('all')}
-            >
-              <Text style={[styles.chipText, selectedCategoryId === 'all' && styles.chipTextActive]}>
-                Tutti {totalCount !== undefined ? `(${totalCount})` : ''}
-              </Text>
-            </TouchableOpacity>
-
-            {categories.slice(0, 20).map(cat => {
-              const isSelected = selectedCategoryId === cat.category_id;
-              return (
-                <TouchableOpacity
-                  key={cat.category_id}
-                  style={[styles.chip, isSelected && styles.chipActive]}
-                  onPress={() => onSelectCategory(cat.category_id)}
-                >
-                  <Text style={[styles.chipText, isSelected && styles.chipTextActive]} numberOfLines={1}>
-                    {cat.category_name}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-
-            {categories.length > 20 && (
-              <TouchableOpacity style={styles.chipMore} onPress={onOpenCategorySheet}>
-                <Text style={styles.chipMoreText}>+ Altre ({categories.length - 20})</Text>
-              </TouchableOpacity>
-            )}
-          </ScrollView>
+            <Ionicons name="chevron-forward" size={17} color={colors.textSecondary} />
+          </TouchableOpacity>
         </View>
       )}
     </View>
@@ -306,58 +309,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 12,
     paddingBottom: 8,
-    gap: 8,
+    gap: 6,
     height: 44,
     maxHeight: 44,
     flexGrow: 0,
     flexShrink: 0
   },
-  filterSheetBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.surface,
-    paddingHorizontal: 8,
-    height: 30,
-    maxHeight: 30,
+  catArrowBtn: {
+    width: 34,
+    height: 34,
     borderRadius: 6,
-    borderWidth: 1,
-    borderColor: colors.border,
-    maxWidth: 130,
-    alignSelf: 'center',
-    flexGrow: 0,
-    flexShrink: 0
-  },
-  filterSheetBtnActive: {
-    backgroundColor: 'rgba(59, 130, 246, 0.15)',
-    borderColor: colors.primary
-  },
-  filterSheetBtnText: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    fontWeight: '600'
-  },
-  filterSheetBtnTextActive: {
-    color: colors.primary
-  },
-  chipsScrollWrapper: {
-    height: 36,
-    maxHeight: 36,
-    flexGrow: 0,
-    flexShrink: 0
-  },
-  chipsScroll: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    height: 36
-  },
-  chip: {
     backgroundColor: colors.card,
-    paddingHorizontal: 10,
-    height: 28,
-    maxHeight: 28,
-    borderRadius: 6,
     borderWidth: 1,
     borderColor: colors.border,
     alignItems: 'center',
@@ -366,26 +328,38 @@ const styles = StyleSheet.create({
     flexGrow: 0,
     flexShrink: 0
   },
-  chipActive: {
-    backgroundColor: 'rgba(59, 130, 246, 0.18)',
+  categoryCenterBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.card,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 10,
+    height: 34,
+    alignSelf: 'center'
+  },
+  categoryCenterBtnActive: {
+    backgroundColor: 'rgba(59, 130, 246, 0.12)',
     borderColor: colors.primary
   },
-  chipText: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    fontWeight: '600'
+  catCenterLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    flex: 1,
+    marginRight: 6
   },
-  chipTextActive: {
+  catCenterText: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontWeight: '600',
+    flex: 1
+  },
+  catCenterTextActive: {
     color: colors.primary,
     fontWeight: '700'
-  },
-  chipMore: {
-    paddingHorizontal: 8,
-    paddingVertical: 5
-  },
-  chipMoreText: {
-    color: colors.textMuted,
-    fontSize: 11,
-    fontWeight: '600'
   }
 });

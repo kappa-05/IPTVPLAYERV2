@@ -50,7 +50,7 @@ export const MobileAccountSheet: React.FC<MobileAccountSheetProps> = ({
             <View style={styles.profileInfo}>
               <View style={styles.nameRow}>
                 <Text style={styles.profileName} numberOfLines={1}>
-                  {account ? (account.name || account.username) : 'Nessun Account'}
+                  {account ? `Ciao ${account.username || account.name || 'Utente'}` : 'Nessun Account'}
                 </Text>
                 {account && (
                   <View style={styles.badgeType}>
