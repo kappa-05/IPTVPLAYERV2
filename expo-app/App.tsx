@@ -129,7 +129,7 @@ export default function App() {
         }
         setAccount(current);
         loadFavorites(current.id);
-        loadCategoriesAndStreams(current, 'live', 'all');
+        loadCategoriesAndStreams(current, 'live');
       } else {
         setLoginModalVisible(true);
       }
@@ -172,7 +172,7 @@ export default function App() {
   const loadCategoriesAndStreams = async (
     targetAccount: Account,
     tab: MediaType | 'favorites',
-    catId: string = 'all',
+    catId?: string,
     forceRefresh: boolean = false
   ) => {
     if (tab === 'favorites') {
@@ -198,21 +198,34 @@ export default function App() {
       }
       setCategories(cats);
 
+      // Determine initial category to select:
+      // If catId was explicitly provided (e.g. user selected from sheet/sidebar), use it.
+      // Otherwise, the user requested that the first category selected is NOT 'all', but the first available category right after it (cats[0])!
+      let targetCatId = catId;
+      if (!targetCatId) {
+        if (cats && cats.length > 0) {
+          targetCatId = String(cats[0].category_id);
+        } else {
+          targetCatId = 'all';
+        }
+      }
+      setSelectedCategoryId(targetCatId);
+
       // 2. Fetch Streams for Category
       let streamList: any[] | null = null;
       if (!forceRefresh) {
-        streamList = await StorageService.getCachedStreams(targetAccount.id, tab, catId);
+        streamList = await StorageService.getCachedStreams(targetAccount.id, tab, targetCatId);
       }
 
       if (!streamList || streamList.length === 0) {
-        streamList = await XtreamAPI.getStreams(targetAccount, tab, catId === 'all' ? undefined : catId);
-        await StorageService.cacheStreams(targetAccount.id, tab, catId, streamList);
+        streamList = await XtreamAPI.getStreams(targetAccount, tab, targetCatId === 'all' ? undefined : targetCatId);
+        await StorageService.cacheStreams(targetAccount.id, tab, targetCatId, streamList);
       }
       setStreams(streamList);
 
       if (tab === 'live') {
         setLiveCategories(cats);
-        if (catId === 'all') {
+        if (targetCatId === 'all' || liveChannels.length === 0) {
           setLiveChannels(streamList as LiveStream[]);
         }
       }
@@ -225,19 +238,19 @@ export default function App() {
 
   const handleTabChange = async (newTab: NavTab) => {
     setActiveTab(newTab);
-    setSelectedCategoryId('all');
     setSearchQuery('');
     setCategorySearchQuery('');
     if (!account) return;
 
     if (newTab === 'epg') {
       if (liveChannels.length === 0) {
-        await loadCategoriesAndStreams(account, 'live', 'all');
+        await loadCategoriesAndStreams(account, 'live');
       }
     } else if (newTab === 'favorites') {
       loadFavorites(account.id);
     } else {
-      loadCategoriesAndStreams(account, newTab, 'all');
+      // Automatically selects the first available category after 'all' (cats[0])
+      loadCategoriesAndStreams(account, newTab);
     }
   };
 
@@ -262,7 +275,7 @@ export default function App() {
     setAccount(newAccount);
     loadFavorites(newAccount.id);
     const targetTab = activeTab === 'epg' ? 'live' : activeTab;
-    loadCategoriesAndStreams(newAccount, targetTab, 'all', true);
+    loadCategoriesAndStreams(newAccount, targetTab, undefined, true);
   };
 
   const handleLogout = async () => {

@@ -1003,7 +1003,8 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
 
         # Detect whether this is an API call or a media stream
         lower_url = target_url.lower()
-        is_media_stream = any(lower_url.endswith(ext) or (ext + '?') in lower_url for ext in ('.ts', '.m3u8', '.mp4', '.mkv', '.avi'))
+        is_mkv = lower_url.endswith('.mkv') or ('.mkv?' in lower_url) or lower_url.endswith('.avi') or ('.avi?' in lower_url) or lower_url.endswith('.flv') or ('.flv?' in lower_url)
+        is_media_stream = any(lower_url.endswith(ext) or (ext + '?') in lower_url for ext in ('.ts', '.m3u8', '.mp4', '.mkv', '.avi', '.mov', '.flv'))
         is_api_request = (
             'player_api.php' in lower_url or
             'get.php' in lower_url or
@@ -1011,6 +1012,11 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             '/api/' in lower_url or
             ('action=' in lower_url and not is_media_stream)
         )
+
+        # HTML5 browsers (especially Safari on iOS) cannot demux or play MKV/AVI containers natively.
+        # If ffmpeg is available, transparently delegate to ffmpeg real-time remuxer to output progressive MP4!
+        if is_mkv and find_ffmpeg():
+            return self.handle_transcode(is_head=is_head, override_url=target_url)
 
         req_headers = {
             'User-Agent': (
@@ -1089,6 +1095,13 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 return
 
             # For regular streams (TS, MP4, MKV)
+            # Ensure correct MIME type for video media streams so Safari & mobile browsers won't reject with MediaError Code 4
+            if is_media_stream or '/movie/' in lower_url or '/series/' in lower_url:
+                if is_m3u8:
+                    content_type = 'application/vnd.apple.mpegurl'
+                elif not is_api_request:
+                    content_type = 'video/mp4'
+
             self.send_response(status_code)
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
@@ -1101,6 +1114,8 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 self.send_header('Content-Range', resp.headers['Content-Range'])
             if 'Accept-Ranges' in resp.headers:
                 self.send_header('Accept-Ranges', resp.headers['Accept-Ranges'])
+            else:
+                self.send_header('Accept-Ranges', 'bytes')
             self.end_headers()
 
             if is_head:
@@ -1267,10 +1282,10 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
 
-    def handle_transcode(self, is_head=False):
+    def handle_transcode(self, is_head=False, override_url=None):
         parsed = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(parsed.query)
-        target_url = qs.get('url', [None])[0]
+        target_url = override_url or qs.get('url', [None])[0]
         ss_val = qs.get('ss', [None])[0] or qs.get('start', [None])[0]
 
         # Fallback for unescaped url parameter
@@ -1468,10 +1483,10 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             version_info = {
                 "app": "IPTV Player V2",
-                "version": "2.3.0",
+                "version": "2.4.0",
                 "branch": "main",
-                "latest_update": "mobile bottom nav reorder (Live, Film/VOD, Serie TV, Preferiti, Guida TV) + device native video player (Apple AVPlayer on iOS)",
-                "features": ["mobile_ui", "desktop_ui", "device_native_player", "apple_avplayer_ios", "epg_guide", "m3u_support", "xtream_support"]
+                "latest_update": "VOD & Series remux fix (automatic transcoding of MKV/AVI/AC3 to MP4, ffmpeg Docker support) + default to first category instead of all",
+                "features": ["mobile_ui", "desktop_ui", "device_native_player", "vod_remux_transcode", "first_category_default", "apple_avplayer_ios", "epg_guide", "m3u_support", "xtream_support"]
             }
             self.wfile.write(json.dumps(version_info, ensure_ascii=False, indent=2).encode('utf-8'))
             return

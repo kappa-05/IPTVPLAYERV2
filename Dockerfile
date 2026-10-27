@@ -20,8 +20,8 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Installa curl per gli health check di Render
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+# Installa curl per gli health check di Render e ffmpeg per il remuxing VOD (MKV/AC3 -> MP4)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ffmpeg && rm -rf /var/lib/apt/lists/*
 
 # Copia il server Python
 COPY server.py ./
