@@ -401,7 +401,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
           <View style={styles.centerFeedback}>
             <Ionicons name="alert-circle-outline" size={38} color={colors.accentRed} />
             <Text style={styles.errorText}>{errorMsg}</Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 12 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 10, marginTop: 14 }}>
               <TouchableOpacity
                 style={styles.retryBtn}
                 onPress={() => {
@@ -415,49 +415,6 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
                 }}
               >
                 <Text style={styles.retryBtnText}>Riprova</Text>
-              </TouchableOpacity>
-
-              {/* Force Transcoder Button if not already using it */}
-              {!stream.streamUrl.includes('/api/transcode') && (
-                <TouchableOpacity
-                  style={[styles.retryBtn, { backgroundColor: '#d97706' }]}
-                  onPress={() => {
-                    setErrorMsg(null);
-                    setLoading(true);
-                    let transcodeUrl = '';
-                    if (stream.streamUrl.includes('/api/proxy?url=')) {
-                      transcodeUrl = stream.streamUrl.replace('/api/proxy?url=', '/api/transcode?url=');
-                    } else {
-                      transcodeUrl = `/api/transcode?url=${encodeURIComponent(stream.streamUrl)}`;
-                    }
-                    stream.streamUrl = transcodeUrl;
-                    if (Platform.OS === 'web' && webVideoRef.current) {
-                      webVideoRef.current.src = transcodeUrl;
-                      webVideoRef.current.load();
-                      webVideoRef.current.play().catch(() => {});
-                    }
-                  }}
-                >
-                  <Text style={styles.retryBtnText}>⚡ Remux MP4</Text>
-                </TouchableOpacity>
-              )}
-
-              {/* Open in VLC */}
-              <TouchableOpacity
-                style={[styles.retryBtn, { backgroundColor: '#ea580c' }]}
-                onPress={() => {
-                  let rawUrl = stream.streamUrl;
-                  if (rawUrl.includes('/api/proxy?url=')) {
-                    rawUrl = decodeURIComponent(rawUrl.split('/api/proxy?url=')[1]);
-                  } else if (rawUrl.includes('/api/transcode?url=')) {
-                    rawUrl = decodeURIComponent(rawUrl.split('/api/transcode?url=')[1]);
-                  }
-                  if (typeof window !== 'undefined') {
-                    window.open(`vlc://${rawUrl}`, '_system');
-                  }
-                }}
-              >
-                <Text style={styles.retryBtnText}>🚀 Apri in VLC</Text>
               </TouchableOpacity>
 
               <TouchableOpacity

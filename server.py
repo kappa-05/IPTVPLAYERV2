@@ -328,7 +328,7 @@ DEMO_VOD_STREAMS = [
         "category_id": "101",
         "container_extension": "mp4",
         "custom_sid": "",
-        "direct_source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+        "direct_source": "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4"
     },
     {
         "num": 2,
@@ -341,7 +341,7 @@ DEMO_VOD_STREAMS = [
         "added": "1705000000",
         "category_id": "101",
         "container_extension": "mp4",
-        "direct_source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4"
+        "direct_source": "https://raw.githubusercontent.com/mediaelement/mediaelement-files/master/big_buck_bunny.mp4"
     },
     {
         "num": 3,
@@ -354,7 +354,7 @@ DEMO_VOD_STREAMS = [
         "added": "1702000000",
         "category_id": "102",
         "container_extension": "mp4",
-        "direct_source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+        "direct_source": "http://vjs.zencdn.net/v/oceans.mp4"
     },
     {
         "num": 4,
@@ -367,7 +367,7 @@ DEMO_VOD_STREAMS = [
         "added": "1698000000",
         "category_id": "102",
         "container_extension": "mp4",
-        "direct_source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4"
+        "direct_source": "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-576p.mp4"
     },
     {
         "num": 5,
@@ -380,7 +380,7 @@ DEMO_VOD_STREAMS = [
         "added": "1695000000",
         "category_id": "103",
         "container_extension": "mp4",
-        "direct_source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4"
+        "direct_source": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4"
     },
     {
         "num": 6,
@@ -393,7 +393,7 @@ DEMO_VOD_STREAMS = [
         "added": "1690000000",
         "category_id": "103",
         "container_extension": "mp4",
-        "direct_source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4"
+        "direct_source": "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-1080p.mp4"
     },
     {
         "num": 7,
@@ -406,7 +406,7 @@ DEMO_VOD_STREAMS = [
         "added": "1701000000",
         "category_id": "106",
         "container_extension": "mp4",
-        "direct_source": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4"
+        "direct_source": "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4"
     }
 ]
 
@@ -476,13 +476,13 @@ DEMO_SERIES_LIST = [
 def get_demo_series_info(series_id):
     """Returns mock seasons and episodes for a series, with rich multi-season coverage"""
     sample_videos = [
-        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
-        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
-        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
-        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
-        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4"
+        "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4",
+        "https://raw.githubusercontent.com/mediaelement/mediaelement-files/master/big_buck_bunny.mp4",
+        "http://vjs.zencdn.net/v/oceans.mp4",
+        "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-576p.mp4",
+        "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+        "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-1080p.mp4",
+        "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4"
     ]
 
     series_map = {
@@ -939,14 +939,19 @@ def get_demo_channel_epg(stream_id):
 
 
 class IPTVRequestHandler(SimpleHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=PUBLIC_DIR, **kwargs)
 
     def end_headers(self):
-        # Prevent browser from caching stale CSS/JS during development
-        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-        self.send_header('Pragma', 'no-cache')
-        self.send_header('Expires', '0')
+        # Do NOT send no-store on media streams or proxy/transcode responses (breaks iOS AVPlayer byte-range playback)
+        path_lower = getattr(self, 'path', '').lower()
+        is_media = any(ext in path_lower for ext in ('/api/proxy', '/api/transcode', '.ts', '.m3u8', '.mp4', '.mkv', '.avi', '.mov', '.mp3'))
+        if not is_media:
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Expires', '0')
         super().end_headers()
 
     def end_cors_headers(self, content_type="application/json"):
@@ -1021,13 +1026,12 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         req_headers = {
             'User-Agent': (
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-                if is_api_request
-                else 'VLC/3.0.20 LibVLC/3.0.20'
             ),
             'Accept': '*/*',
-            'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
         }
+        if is_api_request:
+            req_headers['Accept-Encoding'] = 'gzip, deflate'
         # Forward Range header for partial content (seeking VOD, TS chunks)
         if 'Range' in self.headers:
             req_headers['Range'] = self.headers['Range']
@@ -1102,23 +1106,74 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 elif not is_api_request:
                     content_type = 'video/mp4'
 
+            # If the upstream returned 200 OK despite client requesting Range (some IPTV CDNs ignore Range headers),
+            # synthesize a 206 Partial Content response for Safari/AVPlayer so it does not fail with Code 4!
+            client_range = self.headers.get('Range')
+            total_content_len = int(resp.headers.get('Content-Length', 0))
+            is_synthesized_range = False
+            r_start, r_end, bytes_to_send = 0, 0, None
+
+            if status_code == 200 and client_range and client_range.startswith('bytes=') and not is_m3u8:
+                try:
+                    rng_val = client_range[6:].split('-')
+                    r_start = int(rng_val[0]) if rng_val[0] else 0
+                    if len(rng_val) > 1 and rng_val[1]:
+                        r_end = int(rng_val[1])
+                    else:
+                        r_end = (total_content_len - 1) if total_content_len > 0 else (r_start + 1048575)
+                    if total_content_len > 0:
+                        r_end = min(r_end, total_content_len - 1)
+
+                    status_code = 206
+                    is_synthesized_range = True
+                    bytes_to_send = max(0, r_end - r_start + 1)
+                except Exception:
+                    is_synthesized_range = False
+
             self.send_response(status_code)
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
             self.send_header('Access-Control-Allow-Headers', '*')
             self.send_header('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type')
             self.send_header('Content-Type', content_type)
-            if 'Content-Length' in resp.headers:
-                self.send_header('Content-Length', resp.headers['Content-Length'])
-            if 'Content-Range' in resp.headers:
-                self.send_header('Content-Range', resp.headers['Content-Range'])
+
+            if is_synthesized_range:
+                self.send_header('Content-Range', f"bytes {r_start}-{r_end}/{total_content_len if total_content_len > 0 else '*'}")
+                self.send_header('Content-Length', str(bytes_to_send))
+            else:
+                if 'Content-Length' in resp.headers:
+                    self.send_header('Content-Length', resp.headers['Content-Length'])
+                if 'Content-Range' in resp.headers:
+                    self.send_header('Content-Range', resp.headers['Content-Range'])
+
             if 'Accept-Ranges' in resp.headers:
                 self.send_header('Accept-Ranges', resp.headers['Accept-Ranges'])
             else:
                 self.send_header('Accept-Ranges', 'bytes')
+            self.send_header('Cache-Control', 'public, max-age=3600')
             self.end_headers()
 
             if is_head:
+                return
+
+            if is_synthesized_range and bytes_to_send is not None:
+                bytes_left = bytes_to_send
+                current_offset = 0
+                for chunk in resp.iter_content(chunk_size=65536):
+                    if not chunk or bytes_left <= 0:
+                        break
+                    chunk_len = len(chunk)
+                    if current_offset + chunk_len <= r_start:
+                        current_offset += chunk_len
+                        continue
+                    start_in_chunk = max(0, r_start - current_offset)
+                    slice_len = min(chunk_len - start_in_chunk, bytes_left)
+                    try:
+                        self.wfile.write(chunk[start_in_chunk:start_in_chunk + slice_len])
+                        bytes_left -= slice_len
+                        current_offset += chunk_len
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                        break
                 return
 
             for chunk in resp.iter_content(chunk_size=65536):
@@ -1193,6 +1248,9 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                     self.send_header('Content-Range', content_range)
                 if accept_ranges:
                     self.send_header('Accept-Ranges', accept_ranges)
+                else:
+                    self.send_header('Accept-Ranges', 'bytes')
+                self.send_header('Cache-Control', 'public, max-age=3600')
                 self.end_headers()
 
                 if not is_head:
@@ -1332,11 +1390,12 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             ffmpeg_path,
             "-hide_banner",
             "-loglevel", "error",
-            "-reconnect", "1",
-            "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "5",
-            "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
         ]
+        if target_url.startswith(('http://', 'https://')):
+            cmd.extend([
+                "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "-headers", "Accept: */*\r\n",
+            ])
 
         if start_seconds > 0:
             cmd.extend(["-ss", str(start_seconds)])
@@ -1357,8 +1416,9 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
         self.send_header('Access-Control-Allow-Headers', '*')
+        self.send_header('Access-Control-Expose-Headers', 'Content-Type, Content-Length, Accept-Ranges')
         self.send_header('Content-Type', 'video/mp4')
-        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Cache-Control', 'public, max-age=3600')
         self.end_headers()
 
         if is_head:
@@ -1413,7 +1473,7 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             cmd = [
                 ffprobe_path,
                 "-v", "error",
-                "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
+                "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "-show_entries", "format=duration",
                 "-of", "json",
                 target_url
@@ -1483,10 +1543,10 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             version_info = {
                 "app": "IPTV Player V2",
-                "version": "2.4.0",
+                "version": "2.5.0",
                 "branch": "main",
-                "latest_update": "VOD & Series remux fix (automatic transcoding of MKV/AVI/AC3 to MP4, ffmpeg Docker support) + default to first category instead of all",
-                "features": ["mobile_ui", "desktop_ui", "device_native_player", "vod_remux_transcode", "first_category_default", "apple_avplayer_ios", "epg_guide", "m3u_support", "xtream_support"]
+                "latest_update": "Definitive VOD streaming fix: HTTP/1.1 RFC 7233 range-slicing, AVPlayer byte-range caching, real-time FFmpeg remuxing, zero VLC button, first category default",
+                "features": ["mobile_ui", "desktop_ui", "device_native_player", "vod_definitive_fix", "first_category_default", "apple_avplayer_ios", "epg_guide", "m3u_support", "xtream_support"]
             }
             self.wfile.write(json.dumps(version_info, ensure_ascii=False, indent=2).encode('utf-8'))
             return
@@ -1510,7 +1570,7 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 cat_name = cat_map.get(str(v.get('category_id')), 'Cinema')
                 logo = v.get('stream_icon', '')
                 name = v.get('name', 'Film VOD')
-                url = v.get('direct_source', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4')
+                url = v.get('direct_source', 'https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4')
                 m3u_lines.append(f'#EXTINF:-1 tvg-name="{name}" tvg-logo="{logo}" group-title="{cat_name}",{name}')
                 m3u_lines.append(url)
             self.wfile.write("\n".join(m3u_lines).encode('utf-8'))

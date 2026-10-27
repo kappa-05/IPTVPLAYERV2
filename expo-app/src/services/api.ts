@@ -323,38 +323,21 @@ export class XtreamAPI {
     const pass = password || '';
     const sid = item.stream_id || item.id;
 
-    let isTranscodeNeeded = false;
     let targetUrl = '';
     if (type === 'live') {
       const extension = ext.replace(/^\./, '');
       targetUrl = `${cleanHost}/live/${username}/${pass}/${sid}.${extension}`;
     } else if (type === 'vod') {
       const extension = (item.container_extension || ext || 'mp4').replace(/^\./, '');
-      const lowerExt = extension.toLowerCase();
-      if (lowerExt === 'mkv' || lowerExt === 'avi' || lowerExt === 'flv' || lowerExt === 'wmv') {
-        isTranscodeNeeded = true;
-      }
       targetUrl = `${cleanHost}/movie/${username}/${pass}/${sid}.${extension}`;
     } else if (type === 'series') {
       const extension = (item.container_extension || ext || 'mp4').replace(/^\./, '');
-      const lowerExt = extension.toLowerCase();
-      if (lowerExt === 'mkv' || lowerExt === 'avi' || lowerExt === 'flv' || lowerExt === 'wmv') {
-        isTranscodeNeeded = true;
-      }
       targetUrl = `${cleanHost}/series/${username}/${pass}/${sid}.${extension}`;
     }
 
     if (Platform.OS === 'web') {
       const isHttpsPage = typeof window !== 'undefined' && window.location?.protocol === 'https:';
       const isHttpTarget = targetUrl.startsWith('http://');
-
-      // If stream has an incompatible browser container (MKV/AVI), route through ffmpeg remuxer
-      if (isTranscodeNeeded) {
-        if (typeof window !== 'undefined' && window.location) {
-          return `${window.location.origin}/api/transcode?url=${encodeURIComponent(targetUrl)}`;
-        }
-        return `/api/transcode?url=${encodeURIComponent(targetUrl)}`;
-      }
 
       if (useProxy || (isHttpsPage && isHttpTarget)) {
         return this.getProxyUrl(targetUrl, true);
