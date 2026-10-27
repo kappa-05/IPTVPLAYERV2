@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: iptv-player-v2
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: EXPO
+        value: "1"
+      - key: PORT
+        value: "8080"

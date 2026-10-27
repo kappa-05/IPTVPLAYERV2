@@ -122,6 +122,11 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 PORT = int(os.environ.get('PORT', 8080))
 PUBLIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public')
 
+if '--expo' in sys.argv or os.environ.get('EXPO') == '1':
+    expo_dist = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'expo-app', 'dist')
+    if os.path.isdir(expo_dist):
+        PUBLIC_DIR = expo_dist
+
 # Realistic Mock Xtream Dataset for Instant Demo Mode
 DEMO_USER_INFO = {
     "user_info": {
@@ -150,29 +155,29 @@ DEMO_USER_INFO = {
 }
 
 DEMO_LIVE_CATEGORIES = [
-    {"category_id": "1", "category_name": "⭐ Canali Nazionali IT", "parent_id": 0},
-    {"category_id": "2", "category_name": "🎬 Cinema HD & 4K", "parent_id": 0},
-    {"category_id": "3", "category_name": "⚽ Sport & Calcio Live", "parent_id": 0},
-    {"category_id": "4", "category_name": "🌍 Documentari & Natura", "parent_id": 0},
-    {"category_id": "5", "category_name": "👶 Bambini & Ragazzi", "parent_id": 0},
-    {"category_id": "6", "category_name": "🎵 Musica & Radio TV", "parent_id": 0},
-    {"category_id": "7", "category_name": "📰 Notizie 24/7", "parent_id": 0}
+    {"category_id": "1", "category_name": "Canali Nazionali", "parent_id": 0},
+    {"category_id": "2", "category_name": "Cinema", "parent_id": 0},
+    {"category_id": "3", "category_name": "Sport", "parent_id": 0},
+    {"category_id": "4", "category_name": "Documentari", "parent_id": 0},
+    {"category_id": "5", "category_name": "Bambini", "parent_id": 0},
+    {"category_id": "6", "category_name": "Musica", "parent_id": 0},
+    {"category_id": "7", "category_name": "Notizie", "parent_id": 0}
 ]
 
 DEMO_VOD_CATEGORIES = [
-    {"category_id": "101", "category_name": "🔥 Novità & Top Cinema 2026", "parent_id": 0},
-    {"category_id": "102", "category_name": "💥 Azione & Adrenalina", "parent_id": 0},
-    {"category_id": "103", "category_name": "🚀 Fantascienza & Cyberpunk", "parent_id": 0},
-    {"category_id": "104", "category_name": "🎭 Commedia & Risate", "parent_id": 0},
-    {"category_id": "105", "category_name": "🕵️ Thriller & Mistero", "parent_id": 0},
-    {"category_id": "106", "category_name": "🎨 Animazione & Famiglia", "parent_id": 0}
+    {"category_id": "101", "category_name": "Novita Cinema", "parent_id": 0},
+    {"category_id": "102", "category_name": "Azione", "parent_id": 0},
+    {"category_id": "103", "category_name": "Fantascienza", "parent_id": 0},
+    {"category_id": "104", "category_name": "Commedia", "parent_id": 0},
+    {"category_id": "105", "category_name": "Thriller", "parent_id": 0},
+    {"category_id": "106", "category_name": "Animazione", "parent_id": 0}
 ]
 
 DEMO_SERIES_CATEGORIES = [
-    {"category_id": "201", "category_name": "🏆 Serie TV Più Votate", "parent_id": 0},
-    {"category_id": "202", "category_name": "⚡ Serie Crime & Suspense", "parent_id": 0},
-    {"category_id": "203", "category_name": "🌌 Serie Sci-Fi & Fantasy", "parent_id": 0},
-    {"category_id": "204", "category_name": "🏛️ Serie Drammatiche & Storiche", "parent_id": 0}
+    {"category_id": "201", "category_name": "Serie TV Piu Votate", "parent_id": 0},
+    {"category_id": "202", "category_name": "Crime", "parent_id": 0},
+    {"category_id": "203", "category_name": "Fantascienza", "parent_id": 0},
+    {"category_id": "204", "category_name": "Drammatiche e Storiche", "parent_id": 0}
 ]
 
 DEMO_LIVE_STREAMS = [
@@ -894,6 +899,46 @@ def get_demo_series_info(series_id):
     }
 
 
+def get_demo_channel_epg(stream_id):
+    import time
+    now = int(time.time())
+    channel = next((s for s in DEMO_LIVE_STREAMS if str(s.get("stream_id")) == str(stream_id)), None)
+    cname = channel.get("name", "Canale TV") if channel else "Canale TV"
+
+    listings = [
+        {"title": "Rassegna Stampa & Notizie", "desc": f"Le prime pagine dei quotidiani e le notizie del mattino su {cname}.", "offset": -7200, "dur": 3600},
+        {"title": "Mattina Live - Approfondimenti", "desc": "Storie di cronaca, costume e attualità con ospiti in studio.", "offset": -3600, "dur": 3600},
+        {"title": f"Edizione Straordinaria Telegiornale", "desc": "Notiziario completo in diretta con i servizi degli inviati.", "offset": 0, "dur": 2700},
+        {"title": "Mezzogiorno in Diretta", "desc": "Cucina, consigli per la salute e territorio italiano.", "offset": 2700, "dur": 4500},
+        {"title": "TG Pomeriggio & Meteo", "desc": "Aggiornamento meteo e previsioni regionali per le prossime 24 ore.", "offset": 7200, "dur": 1800},
+        {"title": "Film del Pomeriggio", "desc": "Grande cinema per tutta la famiglia con audio restaurato.", "offset": 9000, "dur": 6000},
+        {"title": "Game Show Serale", "desc": "Quiz a premi e giochi per i concorrenti in studio.", "offset": 15000, "dur": 3600},
+        {"title": "Telegiornale Prima Serata", "desc": "Il notiziario principale della giornata con collegamenti dal mondo.", "offset": 18600, "dur": 2400},
+        {"title": "Prima Serata Evento", "desc": "Il grande show televisivo con musica, ospiti e intrattenimento.", "offset": 21000, "dur": 7200},
+    ]
+
+    epg_list = []
+    for idx, item in enumerate(listings):
+        start_ts = now + item["offset"]
+        stop_ts = start_ts + item["dur"]
+        start_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_ts))
+        stop_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stop_ts))
+        epg_list.append({
+            "id": str(idx + 1),
+            "epg_id": str(stream_id),
+            "title": item["title"],
+            "lang": "it",
+            "start": start_str,
+            "end": stop_str,
+            "description": item["desc"],
+            "start_timestamp": str(start_ts),
+            "stop_timestamp": str(stop_ts),
+            "now_playing": 1 if (start_ts <= now < stop_ts) else 0
+        })
+
+    return {"epg_listings": epg_list}
+
+
 class IPTVRequestHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=PUBLIC_DIR, **kwargs)
@@ -948,6 +993,17 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         # Decode if percent-encoded
         if target_url.startswith('http%3A') or target_url.startswith('https%3A') or '%2F' in target_url:
             target_url = urllib.parse.unquote(target_url)
+
+        # Safely unwrap recursive/nested proxy URLs
+        for _ in range(5):
+            if target_url.startswith('/api/proxy?url='):
+                target_url = urllib.parse.unquote(target_url[len('/api/proxy?url='):])
+            elif target_url.startswith('http://localhost:8080/api/proxy?url='):
+                target_url = urllib.parse.unquote(target_url[len('http://localhost:8080/api/proxy?url='):])
+            elif target_url.startswith('http://127.0.0.1:8080/api/proxy?url='):
+                target_url = urllib.parse.unquote(target_url[len('http://127.0.0.1:8080/api/proxy?url='):])
+            else:
+                break
 
         # Detect whether this is an API call or a media stream
         lower_url = target_url.lower()
@@ -1368,6 +1424,17 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"duration": 0, "error": str(e)}).encode('utf-8'))
 
+    def do_HEAD(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        if path == '/api/proxy':
+            self.handle_proxy(is_head=True)
+            return
+        if path == '/api/transcode':
+            self.handle_transcode(is_head=True)
+            return
+        super().do_HEAD()
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -1398,11 +1465,37 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.handle_tools()
             return
 
+        # 5b. Demo M3U Playlist: /demo.m3u or /playlist.m3u
+        if path in ('/demo.m3u', '/playlist.m3u', '/api/demo/playlist.m3u'):
+            self.send_response(200)
+            self.end_cors_headers(content_type="audio/x-mpegurl; charset=utf-8")
+            self.end_headers()
+            cat_map = {c['category_id']: c['category_name'] for c in DEMO_LIVE_CATEGORIES + DEMO_VOD_CATEGORIES}
+            m3u_lines = ["#EXTM3U"]
+            for s in DEMO_LIVE_STREAMS:
+                cat_name = cat_map.get(str(s.get('category_id')), 'Canali Nazionali')
+                logo = s.get('stream_icon', '')
+                tvg_id = s.get('epg_channel_id', '')
+                name = s.get('name', 'Canale Live')
+                url = s.get('direct_source', 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8')
+                m3u_lines.append(f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}" tvg-logo="{logo}" group-title="{cat_name}",{name}')
+                m3u_lines.append(url)
+            for v in DEMO_VOD_STREAMS:
+                cat_name = cat_map.get(str(v.get('category_id')), 'Cinema')
+                logo = v.get('stream_icon', '')
+                name = v.get('name', 'Film VOD')
+                url = v.get('direct_source', 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4')
+                m3u_lines.append(f'#EXTINF:-1 tvg-name="{name}" tvg-logo="{logo}" group-title="{cat_name}",{name}')
+                m3u_lines.append(url)
+            self.wfile.write("\n".join(m3u_lines).encode('utf-8'))
+            return
+
         # 6. Built-in Demo Xtream API: /api/demo/player_api.php or /player_api.php
         if path.startswith('/api/demo') or path == '/player_api.php' or path.startswith('/player_api.php'):
             action = query.get('action', [None])[0]
             cat_id = query.get('category_id', [None])[0]
             series_id = query.get('series_id', [None])[0]
+            stream_id = query.get('stream_id', [None])[0]
 
             self.send_response(200)
             self.end_cors_headers()
@@ -1434,6 +1527,8 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                     response_data = DEMO_SERIES_LIST
             elif action == 'get_series_info':
                 response_data = get_demo_series_info(series_id or "3001")
+            elif action in ('get_short_epg', 'get_simple_data_table'):
+                response_data = get_demo_channel_epg(stream_id or "1001")
             else:
                 response_data = {"error": f"Action non riconosciuta: {action}"}
 
@@ -1454,9 +1549,11 @@ def run_server():
     os.makedirs(PUBLIC_DIR, exist_ok=True)
     server_address = ('', PORT)
     try:
+        mode_str = "React Native (Expo Web)" if "expo-app" in PUBLIC_DIR else "Vanilla JS (Classico)"
         httpd = ThreadingHTTPServer(server_address, IPTVRequestHandler)
         print("=" * 60)
-        print(f"[IPTV Player V2] Server Attivo!")
+        print(f"[IPTV Player V2] Server Attivo! Modo: {mode_str}")
+        print(f">> Directory servita: {PUBLIC_DIR}")
         print(f">> Browser: http://localhost:{PORT}")
         print(f">> Proxy CORS: http://localhost:{PORT}/api/proxy?url=...")
         print(f">> Demo Xtream API: http://localhost:{PORT}/api/demo/player_api.php")

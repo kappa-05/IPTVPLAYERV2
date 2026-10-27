@@ -1,0 +1,11 @@
+.git
+.github
+node_modules
+expo-app/node_modules
+expo-app/.expo
+expo-app/dist
+__pycache__
+*.pyc
+*.pyo
+*.bat
+state
