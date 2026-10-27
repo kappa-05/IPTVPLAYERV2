@@ -13,6 +13,7 @@ interface HeaderProps {
   onOpenLogin: () => void;
   onLogout: () => void;
   onRefresh: () => void;
+  onToggleMobileMode?: () => void;
   counts?: {
     live?: number;
     vod?: number;
@@ -30,6 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenLogin,
   onLogout,
   onRefresh,
+  onToggleMobileMode,
   counts
 }) => {
   const { width } = useWindowDimensions();
@@ -69,6 +71,16 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Action Buttons */}
         <View style={styles.actionsContainer}>
+          {onToggleMobileMode && (
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={onToggleMobileMode}
+              accessibilityLabel="Passa alla versione Mobile"
+            >
+              <Ionicons name="phone-portrait-outline" size={16} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
             style={styles.actionBtn}
             onPress={onRefresh}

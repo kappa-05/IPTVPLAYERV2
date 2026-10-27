@@ -2,9 +2,6 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   StyleSheet,
   View,
-  Text,
-  FlatList,
-  ActivityIndicator,
   useWindowDimensions,
   Platform,
   SafeAreaView
@@ -26,19 +23,58 @@ import {
 import { XtreamAPI } from './src/services/api';
 import { StorageService } from './src/services/storage';
 import { EPGService } from './src/services/epgService';
-import { Header } from './src/components/Header';
-import { CategorySelector } from './src/components/CategorySelector';
-import { StreamCard } from './src/components/StreamCard';
+
+// Dedicated Desktop and Mobile UI Shells
+import { DesktopApp } from './src/desktop/DesktopApp';
+import { MobileApp } from './src/mobile/MobileApp';
+
+// Global Shared Modals
 import { LoginModal } from './src/components/LoginModal';
 import { SeriesDetailsModal } from './src/components/SeriesDetailsModal';
 import { UniversalVideoPlayer } from './src/components/UniversalVideoPlayer';
 import { EpgModal } from './src/components/EpgModal';
-import { EpgGuideView } from './src/components/EpgGuideView';
-import { Ionicons } from '@expo/vector-icons';
 
 export default function App() {
   const { width } = useWindowDimensions();
-  const isDesktop = width >= 900;
+
+  // Device Mode: 'auto' | 'mobile' | 'desktop'
+  const [deviceMode, setDeviceMode] = useState<'auto' | 'mobile' | 'desktop'>('auto');
+
+  // Load saved preference
+  useEffect(() => {
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('iptv_device_mode');
+        if (saved === 'mobile' || saved === 'desktop') {
+          setDeviceMode(saved);
+        }
+      } catch {}
+    }
+  }, []);
+
+  const handleSetDeviceMode = (mode: 'auto' | 'mobile' | 'desktop') => {
+    setDeviceMode(mode);
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem('iptv_device_mode', mode);
+      } catch {}
+    }
+  };
+
+  // Detect whether device is phone/tablet or desktop
+  const isMobileDetected = useMemo(() => {
+    if (Platform.OS !== 'web') return true;
+    if (typeof navigator !== 'undefined') {
+      const ua = navigator.userAgent || '';
+      const isMobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|mobile|Tablet/i.test(ua);
+      if (isMobileUA) return true;
+    }
+    return width < 900;
+  }, [width]);
+
+  const activeMode: 'mobile' | 'desktop' = deviceMode === 'auto'
+    ? (isMobileDetected ? 'mobile' : 'desktop')
+    : deviceMode;
 
   // Authentication State
   const [account, setAccount] = useState<Account | null>(null);
@@ -81,7 +117,6 @@ export default function App() {
       const current = accounts.find(a => a.id === activeId) || accounts[0];
 
       if (current) {
-        // If current account points to localhost and device is remote (e.g. mobile or Render), auto-repair host
         if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location) {
           const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
           if (!isLocal && current.host && (current.host.includes('localhost') || current.host.includes('127.0.0.1'))) {
@@ -112,7 +147,7 @@ export default function App() {
   // Pre-load EPG for visible live channels
   useEffect(() => {
     if (activeTab === 'live' && account && streams.length > 0) {
-      loadLiveEPGs(streams.slice(0, 40));
+      loadLiveEPGs(streams.slice(0, 30));
     }
   }, [activeTab, streams, account]);
 
@@ -151,7 +186,7 @@ export default function App() {
         await XtreamAPI.loadM3U(targetAccount.m3uUrl || targetAccount.host, targetAccount.name, targetAccount.useProxy);
       }
 
-      // 1. Fetch Categories (with cache check)
+      // 1. Fetch Categories
       let cats: Category[] | null = null;
       if (!forceRefresh) {
         cats = await StorageService.getCachedCategories(targetAccount.id, tab);
@@ -163,7 +198,7 @@ export default function App() {
       }
       setCategories(cats);
 
-      // 2. Fetch Streams for Category (with cache check)
+      // 2. Fetch Streams for Category
       let streamList: any[] | null = null;
       if (!forceRefresh) {
         streamList = await StorageService.getCachedStreams(targetAccount.id, tab, catId);
@@ -260,6 +295,17 @@ export default function App() {
     setEpgModalVisible(true);
   };
 
+  const handleLoadEpg = async (channel: LiveStream): Promise<EPGChannelSchedule | null> => {
+    if (!account) return null;
+    const sid = String(channel.stream_id);
+    if (epgMap[sid]) return epgMap[sid];
+    const sched = await EPGService.getChannelEPG(account, channel);
+    if (sched) {
+      setEpgMap(prev => ({ ...prev, [sid]: sched }));
+    }
+    return sched;
+  };
+
   const handlePressItem = (item: any, typeOverride?: MediaType) => {
     if (!account) return;
     const currentTab = typeOverride || (activeTab === 'epg' ? 'live' : activeTab);
@@ -346,166 +392,66 @@ export default function App() {
     });
   };
 
-  // Filtered Items (by Search Query)
-  const displayedItems = useMemo(() => {
-    if (activeTab === 'favorites') {
-      if (!searchQuery) return favorites;
-      return favorites.filter(f => f.title.toLowerCase().includes(searchQuery.toLowerCase()));
-    }
-
-    if (!searchQuery) return streams;
-    const q = searchQuery.toLowerCase();
-    return streams.filter(s => {
-      const name = (s.name || s.title || '').toLowerCase();
-      const sid = String(s.stream_id || s.series_id || '');
-      return name.includes(q) || sid.includes(q);
-    });
-  }, [activeTab, streams, favorites, searchQuery]);
-
-  // Responsive Grid Columns
-  const numColumns = useMemo(() => {
-    if (activeTab === 'live') {
-      if (width >= 1400) return 4;
-      if (width >= 960) return 3;
-      if (width >= 640) return 2;
-      return 1;
-    }
-    // Posters (VOD & Series)
-    if (width >= 1400) return 6;
-    if (width >= 1100) return 5;
-    if (width >= 800) return 4;
-    if (width >= 540) return 3;
-    return 2;
-  }, [width, activeTab]);
-
-  const renderStreamItem = useCallback(({ item }: { item: any }) => {
-    const isFav = activeTab === 'favorites'
-      ? true
-      : favorites.some(f => String(f.streamId) === String(item.stream_id || item.series_id || item.id));
-
-    const cardType = activeTab === 'favorites' ? (item.type || 'live') : activeTab;
-    const cardItem = activeTab === 'favorites' ? (item.rawItem || item) : item;
-    const sid = String(cardItem.stream_id || cardItem.streamId || '');
-    const sched = cardType === 'live' ? epgMap[sid] : null;
-
-    return (
-      <View style={{ flex: 1 / numColumns, paddingHorizontal: 6 }}>
-        <StreamCard
-          item={cardItem}
-          type={cardType}
-          onPress={handlePressItem}
-          isFavorite={isFav}
-          onToggleFavorite={handleToggleFavorite}
-          onOpenEpg={cardType === 'live' ? handleOpenEpg : undefined}
-          epgSchedule={sched}
-        />
-      </View>
-    );
-  }, [activeTab, favorites, numColumns, account, epgMap]);
-
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
 
-      {/* Global Header */}
-      <Header
-        activeTab={activeTab}
-        onTabChange={handleTabChange}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        account={account}
-        onOpenLogin={() => setLoginModalVisible(true)}
-        onLogout={handleLogout}
-        onRefresh={handleRefresh}
-        counts={{
-          live: activeTab === 'live' ? displayedItems.length : undefined,
-          vod: activeTab === 'vod' ? displayedItems.length : undefined,
-          series: activeTab === 'series' ? displayedItems.length : undefined,
-          favorites: favorites.length
-        }}
-      />
+      {/* Render Dedicated UI: Mobile or Desktop */}
+      {activeMode === 'mobile' ? (
+        <MobileApp
+          account={account}
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          categories={categories}
+          selectedCategoryId={selectedCategoryId}
+          onSelectCategory={handleSelectCategory}
+          streams={streams}
+          liveChannels={liveChannels}
+          liveCategories={liveCategories}
+          favorites={favorites}
+          epgMap={epgMap}
+          loading={loading}
+          refreshing={refreshing}
+          onRefresh={handleRefresh}
+          onPressItem={handlePressItem}
+          onToggleFavorite={handleToggleFavorite}
+          onOpenEpgModal={handleOpenEpg}
+          onLoadEpg={handleLoadEpg}
+          onOpenLogin={() => setLoginModalVisible(true)}
+          onLogout={handleLogout}
+          onToggleDesktopMode={() => handleSetDeviceMode('desktop')}
+        />
+      ) : (
+        <DesktopApp
+          account={account}
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          categories={categories}
+          selectedCategoryId={selectedCategoryId}
+          onSelectCategory={handleSelectCategory}
+          categorySearchQuery={categorySearchQuery}
+          onCategorySearchChange={setCategorySearchQuery}
+          streams={streams}
+          liveChannels={liveChannels}
+          liveCategories={liveCategories}
+          favorites={favorites}
+          epgMap={epgMap}
+          loading={loading}
+          refreshing={refreshing}
+          onRefresh={handleRefresh}
+          onPressItem={handlePressItem}
+          onToggleFavorite={handleToggleFavorite}
+          onOpenEpgModal={handleOpenEpg}
+          onLoadEpg={handleLoadEpg}
+          onOpenLogin={() => setLoginModalVisible(true)}
+          onLogout={handleLogout}
+          onToggleMobileMode={() => handleSetDeviceMode('mobile')}
+        />
+      )}
 
-      {/* Main Content Area */}
-      <View style={[styles.mainContent, { flexDirection: isDesktop ? 'row' : 'column' }]}>
-        {activeTab === 'epg' && account ? (
-          <EpgGuideView
-            account={account}
-            channels={liveChannels.length > 0 ? liveChannels : (streams as LiveStream[])}
-            categories={liveCategories.length > 0 ? liveCategories : categories}
-            epgMap={epgMap}
-            onLoadEpg={async (channel) => {
-              const sid = String(channel.stream_id);
-              if (epgMap[sid]) return epgMap[sid];
-              const sched = await EPGService.getChannelEPG(account, channel);
-              setEpgMap(prev => ({ ...prev, [sid]: sched }));
-              return sched;
-            }}
-            onPlayChannel={(channel) => handlePressItem(channel, 'live')}
-          />
-        ) : (
-          <>
-            {/* Category Sidebar or Mobile Pills */}
-            {activeTab !== 'favorites' && categories.length > 0 && (
-              <CategorySelector
-                categories={categories}
-                selectedCategoryId={selectedCategoryId}
-                onSelectCategory={handleSelectCategory}
-                categorySearchQuery={categorySearchQuery}
-                onCategorySearchChange={setCategorySearchQuery}
-                totalCount={streams.length}
-              />
-            )}
-
-            {/* Stream List / Grid */}
-            <View style={styles.gridContainer}>
-              {loading ? (
-                <View style={styles.loadingContainer}>
-                  <ActivityIndicator size="large" color={colors.primary} />
-                  <Text style={styles.loadingText}>Caricamento contenuti in corso...</Text>
-                </View>
-              ) : displayedItems.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <Ionicons
-                    name={activeTab === 'favorites' ? 'star-outline' : 'search-outline'}
-                    size={28}
-                    color={colors.textMuted}
-                  />
-                  <Text style={styles.emptyTitle}>
-                    {activeTab === 'favorites'
-                      ? 'Nessun preferito'
-                      : searchQuery
-                      ? 'Nessun risultato'
-                      : 'Nessun contenuto'}
-                  </Text>
-                  <Text style={styles.emptySubtitle}>
-                    {activeTab === 'favorites'
-                      ? 'Aggiungi canali o film ai preferiti con la stella.'
-                      : 'Seleziona una categoria o modifica la ricerca.'}
-                  </Text>
-                </View>
-              ) : (
-                <FlatList
-                  key={`grid_${activeTab}_${numColumns}`}
-                  data={displayedItems}
-                  renderItem={renderStreamItem}
-                  keyExtractor={(item, index) => {
-                    const id = item.stream_id || item.series_id || item.favId || item.id;
-                    return `${id}_${index}`;
-                  }}
-                  numColumns={numColumns}
-                  style={styles.flatList}
-                  contentContainerStyle={styles.listContent}
-                  showsVerticalScrollIndicator={false}
-                  refreshing={refreshing}
-                  onRefresh={handleRefresh}
-                />
-              )}
-            </View>
-          </>
-        )}
-      </View>
-
-      {/* TV Guide (EPG) Schedule Modal */}
+      {/* Shared Modals */}
       <EpgModal
         visible={epgModalVisible}
         schedule={selectedEpgSchedule}
@@ -517,7 +463,6 @@ export default function App() {
         }}
       />
 
-      {/* Series Details Modal */}
       <SeriesDetailsModal
         visible={!!selectedSeries}
         seriesItem={selectedSeries}
@@ -526,7 +471,6 @@ export default function App() {
         onPlayEpisode={handlePlaySeriesEpisode}
       />
 
-      {/* Universal Video Player Modal */}
       <UniversalVideoPlayer
         visible={!!playingStream}
         stream={playingStream}
@@ -538,7 +482,6 @@ export default function App() {
         }}
       />
 
-      {/* Login Modal */}
       <LoginModal
         visible={loginModalVisible}
         onClose={() => setLoginModalVisible(false)}
@@ -554,57 +497,5 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     width: '100%',
     height: '100%'
-  },
-  mainContent: {
-    flex: 1,
-    width: '100%',
-    backgroundColor: colors.background,
-    overflow: 'hidden'
-  },
-  gridContainer: {
-    flex: 1,
-    width: '100%',
-    backgroundColor: colors.background
-  },
-  flatList: {
-    flex: 1,
-    width: '100%',
-    backgroundColor: colors.background
-  },
-  listContent: {
-    padding: 8,
-    paddingBottom: 40,
-    backgroundColor: colors.background,
-    minHeight: '100%'
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 32
-  },
-  loadingText: {
-    color: colors.textSecondary,
-    fontSize: 14,
-    marginTop: 12
-  },
-  emptyContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 32
-  },
-  emptyTitle: {
-    color: colors.textPrimary,
-    fontSize: 16,
-    fontWeight: '700',
-    marginTop: 12
-  },
-  emptySubtitle: {
-    color: colors.textMuted,
-    fontSize: 13,
-    textAlign: 'center',
-    marginTop: 6,
-    maxWidth: 360
   }
 });
