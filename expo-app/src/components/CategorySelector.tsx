@@ -239,28 +239,30 @@ const styles = StyleSheet.create({
     backgroundColor: colors.backgroundSecondary,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    paddingVertical: 8
+    paddingVertical: 6,
+    width: '100%'
   },
   mobilePillsScroll: {
-    paddingHorizontal: 12,
-    gap: 6
+    paddingHorizontal: 10,
+    gap: 6,
+    alignItems: 'center'
   },
   pill: {
     backgroundColor: colors.card,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 6,
     borderWidth: 1,
     borderColor: colors.border
   },
   pillActive: {
-    backgroundColor: colors.primaryMuted,
-    borderColor: 'rgba(59, 130, 246, 0.4)'
+    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+    borderColor: colors.primary
   },
   pillText: {
     color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '500'
+    fontSize: 11,
+    fontWeight: '600'
   },
   pillTextActive: {
     color: colors.primary,

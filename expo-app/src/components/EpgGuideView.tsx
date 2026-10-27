@@ -332,8 +332,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background
   },
   categoryBar: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
     backgroundColor: colors.backgroundSecondary
@@ -344,8 +344,8 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   catPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 6,
     backgroundColor: colors.surface,
     borderWidth: 1,
@@ -357,7 +357,7 @@ const styles = StyleSheet.create({
   },
   catPillText: {
     color: colors.textSecondary,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600'
   },
   catPillTextActive: {
@@ -381,7 +381,7 @@ const styles = StyleSheet.create({
   },
   channelColumnMobile: {
     width: '100%',
-    maxHeight: 220,
+    maxHeight: 170,
     borderRightWidth: 0,
     borderBottomWidth: 1,
     borderBottomColor: colors.border
@@ -472,7 +472,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
+    padding: 12,
     backgroundColor: colors.card,
     borderBottomWidth: 1,
     borderBottomColor: colors.border
@@ -502,7 +502,7 @@ const styles = StyleSheet.create({
   },
   headerChannelName: {
     color: colors.textPrimary,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700'
   },
   headerMetaRow: {

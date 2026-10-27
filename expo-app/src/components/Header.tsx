@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Platform, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Platform, useWindowDimensions, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { Account, MediaType, NavTab } from '../types';
@@ -121,7 +121,12 @@ export const Header: React.FC<HeaderProps> = ({
       )}
 
       {/* Navigation Tabs */}
-      <View style={styles.tabsContainer}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.tabsScrollView}
+        contentContainerStyle={styles.tabsContainer}
+      >
         <TouchableOpacity
           style={[styles.tab, activeTab === 'live' && styles.tabActive]}
           onPress={() => onTabChange('live')}
@@ -218,7 +223,7 @@ export const Header: React.FC<HeaderProps> = ({
             </View>
           )}
         </TouchableOpacity>
-      </View>
+      </ScrollView>
     </View>
   );
 };
@@ -363,9 +368,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700'
   },
+  tabsScrollView: {
+    width: '100%',
+    flexGrow: 0
+  },
   tabsContainer: {
     flexDirection: 'row',
-    gap: 6
+    gap: 6,
+    paddingVertical: 2
   },
   tab: {
     flexDirection: 'row',

@@ -38,6 +38,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 export default function App() {
   const { width } = useWindowDimensions();
+  const isDesktop = width >= 900;
 
   // Authentication State
   const [account, setAccount] = useState<Account | null>(null);
@@ -425,7 +426,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <View style={styles.mainContent}>
+      <View style={[styles.mainContent, { flexDirection: isDesktop ? 'row' : 'column' }]}>
         {activeTab === 'epg' && account ? (
           <EpgGuideView
             account={account}
@@ -492,6 +493,7 @@ export default function App() {
                     return `${id}_${index}`;
                   }}
                   numColumns={numColumns}
+                  style={styles.flatList}
                   contentContainerStyle={styles.listContent}
                   showsVerticalScrollIndicator={false}
                   refreshing={refreshing}
@@ -549,19 +551,31 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background
+    backgroundColor: colors.background,
+    width: '100%',
+    height: '100%'
   },
   mainContent: {
     flex: 1,
-    flexDirection: Platform.OS === 'web' ? 'row' : 'column'
+    width: '100%',
+    backgroundColor: colors.background,
+    overflow: 'hidden'
   },
   gridContainer: {
     flex: 1,
+    width: '100%',
+    backgroundColor: colors.background
+  },
+  flatList: {
+    flex: 1,
+    width: '100%',
     backgroundColor: colors.background
   },
   listContent: {
-    padding: 10,
-    paddingBottom: 24
+    padding: 8,
+    paddingBottom: 40,
+    backgroundColor: colors.background,
+    minHeight: '100%'
   },
   loadingContainer: {
     flex: 1,
