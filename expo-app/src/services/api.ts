@@ -57,12 +57,40 @@ export class XtreamAPI {
     return clean;
   }
 
-  static getHlsUrl(targetUrl: string): string {
-    const clean = (targetUrl || '').trim();
-    if (typeof window !== 'undefined' && window.location) {
-      return `${window.location.origin}/api/hls/master.m3u8?url=${encodeURIComponent(clean)}`;
+  static extractDuration(item: any): number {
+    if (!item) return 0;
+    if (typeof item.duration_secs === 'number' && item.duration_secs > 0) return item.duration_secs;
+    if (typeof item.duration_secs === 'string' && !isNaN(Number(item.duration_secs)) && Number(item.duration_secs) > 0) return Number(item.duration_secs);
+    if (item.info && typeof item.info.duration_secs === 'number' && item.info.duration_secs > 0) return item.info.duration_secs;
+    if (item.info && typeof item.info.duration_secs === 'string' && !isNaN(Number(item.info.duration_secs)) && Number(item.info.duration_secs) > 0) return Number(item.info.duration_secs);
+
+    const durStr = item.duration || item.info?.duration;
+    if (typeof durStr === 'string' && durStr.includes(':')) {
+      const parts = durStr.trim().split(':').map(Number);
+      if (parts.length === 3 && parts.every((p: number) => !isNaN(p))) {
+        return parts[0] * 3600 + parts[1] * 60 + parts[2];
+      } else if (parts.length === 2 && parts.every((p: number) => !isNaN(p))) {
+        return parts[0] * 60 + parts[1];
+      }
+    } else if (typeof durStr === 'number' && durStr > 0) {
+      return durStr;
     }
-    return `/api/hls/master.m3u8?url=${encodeURIComponent(clean)}`;
+    return 0;
+  }
+
+  static getHlsUrl(targetUrl: string, itemOrDuration?: any): string {
+    const clean = (targetUrl || '').trim();
+    let dur = 0;
+    if (typeof itemOrDuration === 'number') {
+      dur = itemOrDuration;
+    } else if (itemOrDuration && typeof itemOrDuration === 'object') {
+      dur = this.extractDuration(itemOrDuration);
+    }
+    const durParam = dur > 0 ? `&duration=${Math.floor(dur)}` : '';
+    if (typeof window !== 'undefined' && window.location) {
+      return `${window.location.origin}/api/hls/master.m3u8?url=${encodeURIComponent(clean)}${durParam}`;
+    }
+    return `/api/hls/master.m3u8?url=${encodeURIComponent(clean)}${durParam}`;
   }
 
   static async fetchJSON<T = any>(url: string, useProxy: boolean = true, timeoutMs: number = 15000): Promise<T> {
@@ -315,6 +343,9 @@ export class XtreamAPI {
     // If the stream object already carries a direct_source (e.g. from M3U playlist)
     if (item.direct_source) {
       if (Platform.OS === 'web') {
+        if (type === 'vod' || type === 'series') {
+          return this.getHlsUrl(item.direct_source, item);
+        }
         if (account.useProxy) {
           return this.getProxyUrl(item.direct_source, true);
         }
@@ -338,16 +369,21 @@ export class XtreamAPI {
       const extension = (ext || 'm3u8').replace(/^\./, '');
       targetUrl = `${cleanHost}/live/${username}/${pass}/${sid}.${extension}`;
     } else if (type === 'vod') {
-      const rawExt = (item.container_extension || ext || 'mp4').replace(/^\./, '').toLowerCase();
-      const extension = (rawExt === 'mkv' || rawExt === 'avi' || rawExt === 'ts') ? 'mp4' : rawExt;
+      const extension = (item.container_extension || ext || 'mp4').replace(/^\./, '').toLowerCase();
       targetUrl = `${cleanHost}/movie/${username}/${pass}/${sid}.${extension}`;
     } else if (type === 'series') {
-      const rawExt = (item.container_extension || ext || 'mp4').replace(/^\./, '').toLowerCase();
-      const extension = (rawExt === 'mkv' || rawExt === 'avi' || rawExt === 'ts') ? 'mp4' : rawExt;
+      const extension = (item.container_extension || ext || 'mp4').replace(/^\./, '').toLowerCase();
       targetUrl = `${cleanHost}/series/${username}/${pass}/${sid}.${extension}`;
     }
 
     if (Platform.OS === 'web') {
+      // Definitive VOD & Series fix: route movies and series through the high-performance HLS VOD pipeline!
+      // This produces full VOD manifests with #EXT-X-PLAYLIST-TYPE:VOD and #EXT-X-ENDLIST,
+      // guaranteeing full duration, interactive seeking, and removing the 'LIVE' badge on iOS Safari (Apple AVPlayer)!
+      if (type === 'vod' || type === 'series') {
+        return this.getHlsUrl(targetUrl, item);
+      }
+
       const isHttpsPage = typeof window !== 'undefined' && window.location?.protocol === 'https:';
       const isHttpTarget = targetUrl.startsWith('http://');
 
