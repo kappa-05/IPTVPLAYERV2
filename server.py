@@ -120,12 +120,11 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 PORT = int(os.environ.get('PORT', 8080))
-PUBLIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public')
-
-if '--expo' in sys.argv or os.environ.get('EXPO') == '1':
-    expo_dist = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'expo-app', 'dist')
-    if os.path.isdir(expo_dist):
-        PUBLIC_DIR = expo_dist
+PUBLIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'expo-app', 'dist')
+if not os.path.isdir(PUBLIC_DIR):
+    fallback_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public')
+    if os.path.isdir(fallback_dir):
+        PUBLIC_DIR = fallback_dir
 
 # Realistic Mock Xtream Dataset for Instant Demo Mode
 DEMO_USER_INFO = {
@@ -996,12 +995,9 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
 
         # Safely unwrap recursive/nested proxy URLs
         for _ in range(5):
-            if target_url.startswith('/api/proxy?url='):
-                target_url = urllib.parse.unquote(target_url[len('/api/proxy?url='):])
-            elif target_url.startswith('http://localhost:8080/api/proxy?url='):
-                target_url = urllib.parse.unquote(target_url[len('http://localhost:8080/api/proxy?url='):])
-            elif target_url.startswith('http://127.0.0.1:8080/api/proxy?url='):
-                target_url = urllib.parse.unquote(target_url[len('http://127.0.0.1:8080/api/proxy?url='):])
+            m = re.match(r'^(?:https?://[^/]+)?/api/proxy\?url=(.+)$', target_url)
+            if m:
+                target_url = urllib.parse.unquote(m.group(1))
             else:
                 break
 

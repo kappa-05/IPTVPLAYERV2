@@ -109,7 +109,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   };
 
   const handleDemoXtream = () => {
-    const demoHost = 'http://localhost:8080';
+    const origin = (typeof window !== 'undefined' && window.location?.origin)
+      ? window.location.origin
+      : 'http://localhost:8080';
+    const demoHost = origin;
     const demoUser = 'vip_user_2026';
     const demoPass = 'demo_pass';
     setHost(demoHost);
@@ -119,7 +122,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   };
 
   const handleDemoM3U = () => {
-    const demoUrl = 'http://localhost:8080/demo.m3u';
+    const origin = (typeof window !== 'undefined' && window.location?.origin)
+      ? window.location.origin
+      : 'http://localhost:8080';
+    const demoUrl = `${origin}/demo.m3u`;
     const demoName = 'Demo M3U Italia';
     setM3uUrl(demoUrl);
     setM3uName(demoName);

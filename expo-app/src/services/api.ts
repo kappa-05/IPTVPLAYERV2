@@ -28,18 +28,30 @@ export class XtreamAPI {
       clean = decodeURIComponent(clean.substring(idx + '/api/proxy?url='.length));
     }
 
+    // Auto-rewrite localhost/127.0.0.1 target if accessing from a non-localhost device (e.g. mobile phone or Render)
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location) {
+      const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (!isLocalHost) {
+        clean = clean.replace(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?/i, window.location.origin);
+      }
+    }
+
     if (!useProxy && Platform.OS !== 'web') {
       return clean;
     }
 
     if (Platform.OS === 'web') {
-      if (typeof window !== 'undefined') {
-        const origin = window.location.origin;
-        if (origin.includes(':8080')) {
-          return `/api/proxy?url=${encodeURIComponent(clean)}`;
+      const isHttpsPage = typeof window !== 'undefined' && window.location?.protocol === 'https:';
+      const isHttpTarget = clean.startsWith('http://');
+
+      // Always proxy if useProxy is requested OR if the page is on HTTPS and target is HTTP (prevents Safari Mixed Content "Load failed")
+      if (useProxy || (isHttpsPage && isHttpTarget)) {
+        if (typeof window !== 'undefined' && window.location) {
+          return `${window.location.origin}/api/proxy?url=${encodeURIComponent(clean)}`;
         }
+        return `/api/proxy?url=${encodeURIComponent(clean)}`;
       }
-      return `http://localhost:8080/api/proxy?url=${encodeURIComponent(clean)}`;
+      return clean;
     }
 
     return clean;
@@ -301,7 +313,13 @@ export class XtreamAPI {
     }
 
     const { host, username, password, useProxy } = account;
-    const cleanHost = this.normalizeHost(host);
+    let cleanHost = this.normalizeHost(host);
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location) {
+      const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (!isLocalHost) {
+        cleanHost = cleanHost.replace(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?/i, window.location.origin);
+      }
+    }
     const pass = password || '';
     const sid = item.stream_id || item.id;
 

@@ -80,6 +80,17 @@ export default function App() {
       const current = accounts.find(a => a.id === activeId) || accounts[0];
 
       if (current) {
+        // If current account points to localhost and device is remote (e.g. mobile or Render), auto-repair host
+        if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location) {
+          const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+          if (!isLocal && current.host && (current.host.includes('localhost') || current.host.includes('127.0.0.1'))) {
+            current.host = current.host.replace(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?/i, window.location.origin);
+            if (current.m3uUrl) {
+              current.m3uUrl = current.m3uUrl.replace(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?/i, window.location.origin);
+            }
+            StorageService.saveAccount(current).catch(() => {});
+          }
+        }
         setAccount(current);
         loadFavorites(current.id);
         loadCategoriesAndStreams(current, 'live', 'all');

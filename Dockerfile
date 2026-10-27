@@ -23,19 +23,17 @@ WORKDIR /app
 # Installa curl per gli health check di Render
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
-# Copia il server Python e la cartella fallback public
+# Copia il server Python
 COPY server.py ./
-COPY public/ ./public/
 
 # Copia la web app compilata con React Native / Expo
 COPY --from=builder /app/expo-app/dist ./expo-app/dist
 
 # Variabili di ambiente per Render
 ENV PYTHONUNBUFFERED=1
-ENV EXPO=1
 ENV PORT=8080
 
 EXPOSE 8080
 
-# Avvio del server Python in modalità Expo
-CMD ["python", "server.py", "--expo"]
+# Avvio del server Python
+CMD ["python", "server.py"]

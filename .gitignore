@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+expo-app/node_modules/
+
+# Expo & Builds
+.expo/
+expo-app/.expo/
+web-build/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+state/
+
+# Environment & OS
+.env*.local
+.DS_Store
+Thumbs.db
