@@ -57,6 +57,14 @@ export class XtreamAPI {
     return clean;
   }
 
+  static getHlsUrl(targetUrl: string): string {
+    const clean = (targetUrl || '').trim();
+    if (typeof window !== 'undefined' && window.location) {
+      return `${window.location.origin}/api/hls/master.m3u8?url=${encodeURIComponent(clean)}`;
+    }
+    return `/api/hls/master.m3u8?url=${encodeURIComponent(clean)}`;
+  }
+
   static async fetchJSON<T = any>(url: string, useProxy: boolean = true, timeoutMs: number = 15000): Promise<T> {
     const finalUrl = this.getProxyUrl(url, useProxy);
     const controller = new AbortController();
@@ -304,10 +312,15 @@ export class XtreamAPI {
   }
 
   static buildStreamUrl(account: Account, item: any, type: MediaType, ext: string = 'm3u8'): string {
-    // If the stream object already carries a direct_source (e.g. from M3U or demo server)
+    // If the stream object already carries a direct_source (e.g. from M3U playlist)
     if (item.direct_source) {
-      if (Platform.OS === 'web' && account.useProxy) {
-        return this.getProxyUrl(item.direct_source, true);
+      if (Platform.OS === 'web') {
+        if (type === 'vod' || type === 'series') {
+          return this.getHlsUrl(item.direct_source);
+        }
+        if (account.useProxy) {
+          return this.getProxyUrl(item.direct_source, true);
+        }
       }
       return item.direct_source;
     }
@@ -336,6 +349,13 @@ export class XtreamAPI {
     }
 
     if (Platform.OS === 'web') {
+      // Definitive VOD & Series fix: route movies and series through the real-time HLS remuxing pipeline!
+      // This transcodes AC3/DTS Dolby audio to standard AAC on the fly and packages into standard HLS (.m3u8)
+      // Guaranteed to play natively on Apple AVPlayer (iOS Safari) and via hls.js on Android/Chrome/Desktop!
+      if (type === 'vod' || type === 'series') {
+        return this.getHlsUrl(targetUrl);
+      }
+
       const isHttpsPage = typeof window !== 'undefined' && window.location?.protocol === 'https:';
       const isHttpTarget = targetUrl.startsWith('http://');
 

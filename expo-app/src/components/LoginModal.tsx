@@ -108,38 +108,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     }
   };
 
-  const handleDemoXtream = () => {
-    const origin = (typeof window !== 'undefined' && window.location?.origin)
-      ? window.location.origin
-      : 'http://localhost:8080';
-    const demoHost = origin;
-    const demoUser = 'vip_user_2026';
-    const demoPass = 'demo_pass';
-    setHost(demoHost);
-    setUsername(demoUser);
-    setPassword(demoPass);
-    handleXtreamLogin(demoHost, demoUser, demoPass, true);
-  };
-
-  const handleDemoM3U = () => {
-    const origin = (typeof window !== 'undefined' && window.location?.origin)
-      ? window.location.origin
-      : 'http://localhost:8080';
-    const demoUrl = `${origin}/demo.m3u`;
-    const demoName = 'Demo M3U Italia';
-    setM3uUrl(demoUrl);
-    setM3uName(demoName);
-    handleM3uLogin(demoUrl, demoName, true);
-  };
-
-  const handlePublicFreeM3U = () => {
-    const publicUrl = 'https://iptv-org.github.io/iptv/countries/it.m3u';
-    const publicName = 'IPTV Org Canali Italiani';
-    setM3uUrl(publicUrl);
-    setM3uName(publicName);
-    handleM3uLogin(publicUrl, publicName, true);
-  };
-
   const handleConnectSaved = (acc: Account) => {
     if (acc.accountType === 'm3u') {
       handleM3uLogin(acc.m3uUrl || acc.host, acc.name, acc.useProxy);
@@ -216,24 +184,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             {/* --- TAB 1: XTREAM CODES --- */}
             {loginMode === 'xtream' ? (
               <View>
-                <TouchableOpacity
-                  style={styles.demoButton}
-                  onPress={handleDemoXtream}
-                  disabled={loading}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="play-circle" size={18} color="#fff" />
-                  <View style={styles.demoBtnTextWrapper}>
-                    <Text style={styles.demoBtnTitle}>Accedi con Account Demo Xtream</Text>
-                    <Text style={styles.demoBtnSub}>Server mock locale con canali e film di test</Text>
-                  </View>
-                </TouchableOpacity>
-
-                <View style={styles.divider}>
-                  <View style={styles.dividerLine} />
-                  <Text style={styles.dividerText}>oppure credenziali manuali</Text>
-                  <View style={styles.dividerLine} />
-                </View>
 
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>Server URL / Host</Text>
@@ -311,37 +261,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             ) : (
               /* --- TAB 2: PLAYLIST M3U DIRETTA --- */
               <View>
-                <TouchableOpacity
-                  style={styles.demoButton}
-                  onPress={handleDemoM3U}
-                  disabled={loading}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="flash-outline" size={18} color="#fff" />
-                  <View style={styles.demoBtnTextWrapper}>
-                    <Text style={styles.demoBtnTitle}>Prova Playlist M3U Demo Locale</Text>
-                    <Text style={styles.demoBtnSub}>Carica istantaneamente il file demo.m3u locale</Text>
-                  </View>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.demoButton, { backgroundColor: colors.surfaceElevated, marginTop: -4 }]}
-                  onPress={handlePublicFreeM3U}
-                  disabled={loading}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="globe-outline" size={18} color={colors.textPrimary} />
-                  <View style={styles.demoBtnTextWrapper}>
-                    <Text style={styles.demoBtnTitle}>Testa con Canali Free Italia (IPTV-Org)</Text>
-                    <Text style={styles.demoBtnSub}>Playlist pubblica libera online</Text>
-                  </View>
-                </TouchableOpacity>
-
-                <View style={styles.divider}>
-                  <View style={styles.dividerLine} />
-                  <Text style={styles.dividerText}>oppure inserisci il tuo link M3U</Text>
-                  <View style={styles.dividerLine} />
-                </View>
 
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>Nome Playlist (Opzionale)</Text>
@@ -533,43 +452,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '700'
   },
-  demoButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1d4ed8',
-    padding: 10,
-    borderRadius: 6,
-    gap: 10,
-    marginBottom: 12
-  },
-  demoBtnTextWrapper: {
-    flex: 1
-  },
-  demoBtnTitle: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700'
-  },
-  demoBtnSub: {
-    color: 'rgba(255,255,255,0.75)',
-    fontSize: 11,
-    marginTop: 1
-  },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 10,
-    gap: 8
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.border
-  },
-  dividerText: {
-    color: colors.textMuted,
-    fontSize: 11
-  },
+
   errorBox: {
     flexDirection: 'row',
     alignItems: 'center',

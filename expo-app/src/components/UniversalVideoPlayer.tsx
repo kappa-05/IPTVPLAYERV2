@@ -158,18 +158,19 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       console.warn('HTML5 Video Error:', video.error);
       const code = video.error ? video.error.code : 'ignoto';
 
-      // Auto-fallback for VOD/Series: If video failed with Code 4 and wasn't transcoded yet, retry via /api/transcode!
-      if (stream.type !== 'live' && !stream.streamUrl.includes('/api/transcode') && stream.streamUrl.includes('/api/proxy')) {
-        console.log('VOD format error (Code 4). Retrying automatically with real-time remuxer (/api/transcode)...');
-        const transcodeUrl = stream.streamUrl.replace('/api/proxy?url=', '/api/transcode?url=');
-        stream.streamUrl = transcodeUrl;
-        video.src = transcodeUrl;
+      // Graceful fallback for VOD/Series: if HLS failed, retry via direct proxy
+      if (stream.streamUrl.includes('/api/hls/master.m3u8')) {
+        console.log('HLS pipeline error, falling back to direct proxy stream...');
+        const proxyUrl = stream.streamUrl.replace('/api/hls/master.m3u8', '/api/proxy');
+        stream.streamUrl = proxyUrl;
+        cleanupWebPlayer();
+        video.src = proxyUrl;
         video.load();
         video.play().catch(() => {});
         return;
       }
 
-      setErrorMsg(`Errore riproduzione stream (Codice ${code}). Il formato potrebbe non essere supportato dal browser.`);
+      setErrorMsg(`Errore riproduzione stream (Codice ${code}). Verifica la connessione o il formato del server.`);
       setLoading(false);
     };
 
@@ -191,7 +192,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     } else if (isM3U8 && HlsClass && HlsClass.isSupported()) {
       const hls = new HlsClass({
         enableWorker: true,
-        lowLatencyMode: true,
+        lowLatencyMode: stream.type === 'live',
         backBufferLength: 60
       });
       hlsRef.current = hls;
@@ -217,7 +218,17 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
               break;
             default:
               console.error('Fatal HLS error:', data);
-              setErrorMsg('Errore critico durante la riproduzione HLS.');
+              if (stream.streamUrl.includes('/api/hls/master.m3u8')) {
+                console.log('Falling back to proxy stream after fatal HLS error...');
+                const proxyUrl = stream.streamUrl.replace('/api/hls/master.m3u8', '/api/proxy');
+                stream.streamUrl = proxyUrl;
+                cleanupWebPlayer();
+                video.src = proxyUrl;
+                video.load();
+                video.play().catch(() => {});
+                return;
+              }
+              setErrorMsg('Errore critico durante la riproduzione stream.');
               cleanupWebPlayer();
               break;
           }

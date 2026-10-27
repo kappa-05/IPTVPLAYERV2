@@ -22,6 +22,10 @@ import subprocess
 import shutil
 import gzip
 import zlib
+import time
+import tempfile
+import atexit
+import hashlib
 
 # Unverified SSL context to prevent certificate validation errors on IPTV servers
 SSL_UNVERIFIED_CTX = ssl._create_unverified_context()
@@ -126,816 +130,154 @@ if not os.path.isdir(PUBLIC_DIR):
     if os.path.isdir(fallback_dir):
         PUBLIC_DIR = fallback_dir
 
-# Realistic Mock Xtream Dataset for Instant Demo Mode
-DEMO_USER_INFO = {
-    "user_info": {
-        "username": "vip_user_2026",
-        "password": "••••••••",
-        "message": "Benvenuto in IPTV Player V2 - Xtream Codes Edition",
-        "auth": 1,
-        "status": "Active",
-        "exp_date": "1800000000",  # Future timestamp
-        "is_trial": "0",
-        "active_cons": "1",
-        "created_at": "1704067200",
-        "max_connections": "3",
-        "allowed_output_formats": ["m3u8", "ts", "mp4", "mkv"]
-    },
-    "server_info": {
-        "url": "http://demo.iptvplayer.local",
-        "port": "8080",
-        "https_port": "443",
-        "server_protocol": "http",
-        "rtmp_port": "8880",
-        "timezone": "Europe/Rome",
-        "timestamp_now": 1776764100,
-        "time_now": "2026-10-21 11:35:00"
-    }
-}
 
-DEMO_LIVE_CATEGORIES = [
-    {"category_id": "1", "category_name": "Canali Nazionali", "parent_id": 0},
-    {"category_id": "2", "category_name": "Cinema", "parent_id": 0},
-    {"category_id": "3", "category_name": "Sport", "parent_id": 0},
-    {"category_id": "4", "category_name": "Documentari", "parent_id": 0},
-    {"category_id": "5", "category_name": "Bambini", "parent_id": 0},
-    {"category_id": "6", "category_name": "Musica", "parent_id": 0},
-    {"category_id": "7", "category_name": "Notizie", "parent_id": 0}
-]
+class HLSStreamManager:
+    """
+    On-the-fly HLS Segmenter and Remuxer for VOD and Series streams.
+    Transforms ANY external IPTV movie/series (MKV, AVI, MP4 with AC3/DTS audio) into
+    standard progressive HLS (.m3u8 + .ts).
+    - Plays NATIVELY in Apple AVPlayer on iPhone/iPad/Safari with hardware acceleration and fullscreen!
+    - Plays UNIVERSALLY on Chrome/Android/PC via hls.js without any format errors!
+    """
+    def __init__(self):
+        self.temp_root = os.path.join(tempfile.gettempdir(), 'iptv_hls_cache')
+        os.makedirs(self.temp_root, exist_ok=True)
+        self.sessions = {}
+        self.lock = threading.Lock()
+        self._cleaner = threading.Thread(target=self._cleanup_loop, daemon=True)
+        self._cleaner.start()
+        atexit.register(self.shutdown_all)
 
-DEMO_VOD_CATEGORIES = [
-    {"category_id": "101", "category_name": "Novita Cinema", "parent_id": 0},
-    {"category_id": "102", "category_name": "Azione", "parent_id": 0},
-    {"category_id": "103", "category_name": "Fantascienza", "parent_id": 0},
-    {"category_id": "104", "category_name": "Commedia", "parent_id": 0},
-    {"category_id": "105", "category_name": "Thriller", "parent_id": 0},
-    {"category_id": "106", "category_name": "Animazione", "parent_id": 0}
-]
+    def _cleanup_loop(self):
+        while True:
+            time.sleep(30)
+            now = time.time()
+            with self.lock:
+                to_delete = []
+                for sid, data in self.sessions.items():
+                    if now - data.get('last_seen', now) > 600:
+                        to_delete.append(sid)
+                for sid in to_delete:
+                    self._kill_session(sid)
 
-DEMO_SERIES_CATEGORIES = [
-    {"category_id": "201", "category_name": "Serie TV Piu Votate", "parent_id": 0},
-    {"category_id": "202", "category_name": "Crime", "parent_id": 0},
-    {"category_id": "203", "category_name": "Fantascienza", "parent_id": 0},
-    {"category_id": "204", "category_name": "Drammatiche e Storiche", "parent_id": 0}
-]
+    def _kill_session(self, sid):
+        data = self.sessions.pop(sid, None)
+        if data:
+            proc = data.get('proc')
+            if proc:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=1)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            sdir = data.get('dir')
+            if sdir and os.path.isdir(sdir):
+                shutil.rmtree(sdir, ignore_errors=True)
 
-DEMO_LIVE_STREAMS = [
-    {
-        "num": 1,
-        "name": "Rai 1 HD",
-        "stream_type": "live",
-        "stream_id": 1001,
-        "stream_icon": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Rai_1_-_Logo_2016.svg/300px-Rai_1_-_Logo_2016.svg.png",
-        "epg_channel_id": "rai1.it",
-        "category_id": "1",
-        "direct_source": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "custom_sid": "",
-        "tv_archive": 1
-    },
-    {
-        "num": 2,
-        "name": "Rai 2 HD",
-        "stream_type": "live",
-        "stream_id": 1002,
-        "stream_icon": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Rai_2_-_Logo_2016.svg/300px-Rai_2_-_Logo_2016.svg.png",
-        "epg_channel_id": "rai2.it",
-        "category_id": "1",
-        "direct_source": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "tv_archive": 1
-    },
-    {
-        "num": 3,
-        "name": "Canale 5 HD",
-        "stream_type": "live",
-        "stream_id": 1003,
-        "stream_icon": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Canale_5_logo_2018.svg/300px-Canale_5_logo_2018.svg.png",
-        "epg_channel_id": "canale5.it",
-        "category_id": "1",
-        "direct_source": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "tv_archive": 1
-    },
-    {
-        "num": 4,
-        "name": "Italia 1 HD",
-        "stream_type": "live",
-        "stream_id": 1004,
-        "stream_icon": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Italia_1_logo_2018.svg/300px-Italia_1_logo_2018.svg.png",
-        "epg_channel_id": "italia1.it",
-        "category_id": "1",
-        "direct_source": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "tv_archive": 1
-    },
-    {
-        "num": 5,
-        "name": "Sky Cinema Uno HD 4K",
-        "stream_type": "live",
-        "stream_id": 1005,
-        "stream_icon": "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=300&q=80",
-        "epg_channel_id": "skycinema1.it",
-        "category_id": "2",
-        "direct_source": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "tv_archive": 1
-    },
-    {
-        "num": 6,
-        "name": "Cinema Action HD",
-        "stream_type": "live",
-        "stream_id": 1006,
-        "stream_icon": "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=300&q=80",
-        "epg_channel_id": "cinemaaction.it",
-        "category_id": "2",
-        "direct_source": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "tv_archive": 1
-    },
-    {
-        "num": 7,
-        "name": "Sky Sport Calcio HD 50fps",
-        "stream_type": "live",
-        "stream_id": 1007,
-        "stream_icon": "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=300&q=80",
-        "epg_channel_id": "skysportcalcio.it",
-        "category_id": "3",
-        "direct_source": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "tv_archive": 1
-    },
-    {
-        "num": 8,
-        "name": "DAZN Serie A 1 HD",
-        "stream_type": "live",
-        "stream_id": 1008,
-        "stream_icon": "https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=300&q=80",
-        "epg_channel_id": "dazn1.it",
-        "category_id": "3",
-        "direct_source": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "tv_archive": 1
-    },
-    {
-        "num": 9,
-        "name": "Discovery Science HD",
-        "stream_type": "live",
-        "stream_id": 1009,
-        "stream_icon": "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=300&q=80",
-        "epg_channel_id": "discoveryscience.it",
-        "category_id": "4",
-        "direct_source": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "tv_archive": 1
-    },
-    {
-        "num": 10,
-        "name": "National Geographic Wild HD",
-        "stream_type": "live",
-        "stream_id": 1010,
-        "stream_icon": "https://images.unsplash.com/photo-1534177616072-ef7dc120449d?w=300&q=80",
-        "epg_channel_id": "natgeowild.it",
-        "category_id": "4",
-        "direct_source": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "tv_archive": 1
-    },
-    {
-        "num": 11,
-        "name": "Cartoon Network HD",
-        "stream_type": "live",
-        "stream_id": 1011,
-        "stream_icon": "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=300&q=80",
-        "epg_channel_id": "cartoonnet.it",
-        "category_id": "5",
-        "direct_source": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "tv_archive": 1
-    },
-    {
-        "num": 12,
-        "name": "Sky TG24 HD",
-        "stream_type": "live",
-        "stream_id": 1012,
-        "stream_icon": "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=300&q=80",
-        "epg_channel_id": "skytg24.it",
-        "category_id": "7",
-        "direct_source": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-        "tv_archive": 1
-    }
-]
+    def shutdown_all(self):
+        with self.lock:
+            for sid in list(self.sessions.keys()):
+                self._kill_session(sid)
 
-DEMO_VOD_STREAMS = [
-    {
-        "num": 1,
-        "name": "Dune - Parte Due (2024) [4K HDR]",
-        "stream_type": "movie",
-        "stream_id": 2001,
-        "stream_icon": "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=600&q=80",
-        "rating": "8.6",
-        "rating_5based": 4.3,
-        "added": "1710000000",
-        "category_id": "101",
-        "container_extension": "mp4",
-        "custom_sid": "",
-        "direct_source": "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4"
-    },
-    {
-        "num": 2,
-        "name": "Oppenheimer (2023) [Dolby Vision]",
-        "stream_type": "movie",
-        "stream_id": 2002,
-        "stream_icon": "https://images.unsplash.com/photo-1440404653325-ab127d49abc1?w=600&q=80",
-        "rating": "8.9",
-        "rating_5based": 4.5,
-        "added": "1705000000",
-        "category_id": "101",
-        "container_extension": "mp4",
-        "direct_source": "https://raw.githubusercontent.com/mediaelement/mediaelement-files/master/big_buck_bunny.mp4"
-    },
-    {
-        "num": 3,
-        "name": "John Wick 4 (2023) [Action HD]",
-        "stream_type": "movie",
-        "stream_id": 2003,
-        "stream_icon": "https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=600&q=80",
-        "rating": "8.2",
-        "rating_5based": 4.1,
-        "added": "1702000000",
-        "category_id": "102",
-        "container_extension": "mp4",
-        "direct_source": "http://vjs.zencdn.net/v/oceans.mp4"
-    },
-    {
-        "num": 4,
-        "name": "Top Gun: Maverick (2022)",
-        "stream_type": "movie",
-        "stream_id": 2004,
-        "stream_icon": "https://images.unsplash.com/photo-1517976487502-5c8e3100ca2c?w=600&q=80",
-        "rating": "8.3",
-        "rating_5based": 4.2,
-        "added": "1698000000",
-        "category_id": "102",
-        "container_extension": "mp4",
-        "direct_source": "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-576p.mp4"
-    },
-    {
-        "num": 5,
-        "name": "Blade Runner 2049 [Cyberpunk Masterpiece]",
-        "stream_type": "movie",
-        "stream_id": 2005,
-        "stream_icon": "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&q=80",
-        "rating": "8.0",
-        "rating_5based": 4.0,
-        "added": "1695000000",
-        "category_id": "103",
-        "container_extension": "mp4",
-        "direct_source": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4"
-    },
-    {
-        "num": 6,
-        "name": "Interstellar (2014) [Sci-Fi Legend]",
-        "stream_type": "movie",
-        "stream_id": 2006,
-        "stream_icon": "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=600&q=80",
-        "rating": "8.7",
-        "rating_5based": 4.4,
-        "added": "1690000000",
-        "category_id": "103",
-        "container_extension": "mp4",
-        "direct_source": "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-1080p.mp4"
-    },
-    {
-        "num": 7,
-        "name": "Spider-Man: Across the Spider-Verse",
-        "stream_type": "movie",
-        "stream_id": 2007,
-        "stream_icon": "https://images.unsplash.com/photo-1635805737707-575885ab0820?w=600&q=80",
-        "rating": "8.7",
-        "rating_5based": 4.4,
-        "added": "1701000000",
-        "category_id": "106",
-        "container_extension": "mp4",
-        "direct_source": "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4"
-    }
-]
+    def get_session_dir(self, sid):
+        with self.lock:
+            data = self.sessions.get(sid)
+            if data:
+                data['last_seen'] = time.time()
+                return data.get('dir')
+            sdir = os.path.join(self.temp_root, sid)
+            if os.path.isdir(sdir):
+                return sdir
+            return None
 
-DEMO_SERIES_LIST = [
-    {
-        "num": 1,
-        "name": "Stranger Things",
-        "series_id": 3001,
-        "cover": "https://images.unsplash.com/photo-1618336753974-aae8e04506aa?w=600&q=80",
-        "plot": "Quando un ragazzino svanisce nel nulla, una piccola città svela un mistero che coinvolge esperimenti segreti, terrificanti forze soprannaturali e una strana bambina.",
-        "cast": "Millie Bobby Brown, David Harbour, Winona Ryder",
-        "director": "The Duffer Brothers",
-        "genre": "Sci-Fi, Mistero, Dramma",
-        "releaseDate": "2016-07-15",
-        "rating": "8.7",
-        "rating_5based": 4.4,
-        "category_id": "201",
-        "seasons_count": 4
-    },
-    {
-        "num": 2,
-        "name": "Breaking Bad",
-        "series_id": 3002,
-        "cover": "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&q=80",
-        "plot": "Un insegnante di chimica del liceo a cui è stato diagnosticato un cancro ai polmoni inoperabile decide di produrre e vendere metanfetamina per garantire il futuro della sua famiglia.",
-        "cast": "Bryan Cranston, Aaron Paul, Anna Gunn",
-        "director": "Vince Gilligan",
-        "genre": "Crime, Dramma, Thriller",
-        "releaseDate": "2008-01-20",
-        "rating": "9.5",
-        "rating_5based": 4.8,
-        "category_id": "202",
-        "seasons_count": 5
-    },
-    {
-        "num": 3,
-        "name": "The Last of Us",
-        "series_id": 3003,
-        "cover": "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=600&q=80",
-        "plot": "Vent'anni dopo che un'infezione fungina ha decimato il pianeta, Joel deve scortare la giovane Ellie attraverso un'America post-apocalittica desolata e pericolosa.",
-        "cast": "Pedro Pascal, Bella Ramsey, Gabriel Luna",
-        "director": "Craig Mazin, Neil Druckmann",
-        "genre": "Azione, Avventura, Dramma",
-        "releaseDate": "2023-01-15",
-        "rating": "8.8",
-        "rating_5based": 4.4,
-        "category_id": "203",
-        "seasons_count": 2
-    },
-    {
-        "num": 4,
-        "name": "Peaky Blinders",
-        "series_id": 3004,
-        "cover": "https://images.unsplash.com/photo-1485846234645-a62644f84728?w=600&q=80",
-        "plot": "Birmingham, Inghilterra, 1919. Una famigerata gang guidata dall'ambizioso Thomas Shelby cattura l'attenzione dell'ispettore Chester Campbell.",
-        "cast": "Cillian Murphy, Paul Anderson, Helen McCrory",
-        "director": "Steven Knight",
-        "genre": "Crime, Dramma, Storico",
-        "releaseDate": "2013-09-12",
-        "rating": "8.8",
-        "rating_5based": 4.4,
-        "category_id": "204",
-        "seasons_count": 6
-    }
-]
+    def start_hls(self, target_url, start_seconds=0):
+        raw_key = f"{target_url}_{int(start_seconds)}"
+        sid = hashlib.md5(raw_key.encode('utf-8')).hexdigest()[:12]
+        sdir = os.path.join(self.temp_root, sid)
+        m3u8_path = os.path.join(sdir, 'master.m3u8')
 
-def get_demo_series_info(series_id):
-    """Returns mock seasons and episodes for a series, with rich multi-season coverage"""
-    sample_videos = [
-        "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4",
-        "https://raw.githubusercontent.com/mediaelement/mediaelement-files/master/big_buck_bunny.mp4",
-        "http://vjs.zencdn.net/v/oceans.mp4",
-        "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-576p.mp4",
-        "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
-        "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-1080p.mp4",
-        "https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4"
-    ]
+        with self.lock:
+            if sid in self.sessions:
+                proc = self.sessions[sid]['proc']
+                if proc.poll() is None or (proc.returncode == 0 and os.path.exists(m3u8_path)):
+                    self.sessions[sid]['last_seen'] = time.time()
+                    return sid, m3u8_path
 
-    series_map = {
-        "3001": {
-            "seasons": [
-                {"air_date": "2016-07-15", "episode_count": 3, "id": 1, "name": "Stagione 1", "overview": "La scomparsa di Will Byers", "season_number": 1},
-                {"air_date": "2017-10-27", "episode_count": 2, "id": 2, "name": "Stagione 2", "overview": "Il Mind Flayer attacca Hawkins", "season_number": 2},
-                {"air_date": "2019-07-04", "episode_count": 2, "id": 3, "name": "Stagione 3", "overview": "La battaglia dello Starcourt Mall", "season_number": 3},
-                {"air_date": "2022-05-27", "episode_count": 2, "id": 4, "name": "Stagione 4", "overview": "L'incubo di Vecna", "season_number": 4}
-            ],
-            "info": {
-                "name": "Stranger Things",
-                "cover": "https://images.unsplash.com/photo-1618336753974-aae8e04506aa?w=600&q=80",
-                "plot": "Quando un ragazzino svanisce nel nulla, una piccola città svela un mistero che coinvolge esperimenti segreti, terrificanti forze soprannaturali e una strana bambina.",
-                "genre": "Sci-Fi, Mistero, Dramma",
-                "rating": "8.7",
-                "cast": "Millie Bobby Brown, David Harbour, Winona Ryder"
-            },
-            "episodes": {
-                "1": [
-                    {
-                        "id": "e3001_s1_e1",
-                        "episode_num": 1,
-                        "title": "Capitolo Primo: La scomparsa di Will Byers",
-                        "container_extension": "mp4",
-                        "info": {"duration": "48m", "plot": "Sulla via di casa dopo una partita di D&D, Will vede qualcosa di spaventoso."},
-                        "direct_source": sample_videos[0]
-                    },
-                    {
-                        "id": "e3001_s1_e2",
-                        "episode_num": 2,
-                        "title": "Capitolo Secondo: La stramba di Maple Street",
-                        "container_extension": "mp4",
-                        "info": {"duration": "55m", "plot": "I ragazzi nascondono la ragazza nel seminterrato mentre lo sceriffo Hopper indaga."},
-                        "direct_source": sample_videos[1]
-                    },
-                    {
-                        "id": "e3001_s1_e3",
-                        "episode_num": 3,
-                        "title": "Capitolo Terzo: Luci natalizie",
-                        "container_extension": "mp4",
-                        "info": {"duration": "51m", "plot": "Joyce cerca di comunicare con Will attraverso luci colorate sul muro."},
-                        "direct_source": sample_videos[2]
-                    }
-                ],
-                "2": [
-                    {
-                        "id": "e3001_s2_e1",
-                        "episode_num": 1,
-                        "title": "Capitolo Primo: MADMAX",
-                        "container_extension": "mp4",
-                        "info": {"duration": "48m", "plot": "Un anno dopo, una nuova ragazza arriva a scuola e Will continua ad avere visioni."},
-                        "direct_source": sample_videos[3]
-                    },
-                    {
-                        "id": "e3001_s2_e2",
-                        "episode_num": 2,
-                        "title": "Capitolo Secondo: Dolcetto o scherzetto, mattoide",
-                        "container_extension": "mp4",
-                        "info": {"duration": "56m", "plot": "I ragazzi festeggiano Halloween mentre una presenza oscura cresce sotto la città."},
-                        "direct_source": sample_videos[4]
-                    }
-                ],
-                "3": [
-                    {
-                        "id": "e3001_s3_e1",
-                        "episode_num": 1,
-                        "title": "Capitolo Primo: Suzy, mi ricevi?",
-                        "container_extension": "mp4",
-                        "info": {"duration": "50m", "plot": "L'estate del 1985 porta amore, un nuovo centro commerciale e topi molto strani."},
-                        "direct_source": sample_videos[5]
-                    },
-                    {
-                        "id": "e3001_s3_e2",
-                        "episode_num": 2,
-                        "title": "Capitolo Secondo: Incubi da centro commerciale",
-                        "container_extension": "mp4",
-                        "info": {"duration": "50m", "plot": "Dustin e Steve intercettano una trasmissione radiofonica russa in codice."},
-                        "direct_source": sample_videos[6]
-                    }
-                ],
-                "4": [
-                    {
-                        "id": "e3001_s4_e1",
-                        "episode_num": 1,
-                        "title": "Capitolo Primo: L'Hellfire Club",
-                        "container_extension": "mp4",
-                        "info": {"duration": "76m", "plot": "Separati tra Hawkins e la California, i ragazzi affrontano nuove sfide al liceo."},
-                        "direct_source": sample_videos[0]
-                    },
-                    {
-                        "id": "e3001_s4_e2",
-                        "episode_num": 2,
-                        "title": "Capitolo Secondo: La maledizione di Vecna",
-                        "container_extension": "mp4",
-                        "info": {"duration": "77m", "plot": "Una serie di omicidi inspiegabili sconvolge Hawkins mentre una nuova forza incombe."},
-                        "direct_source": sample_videos[1]
-                    }
+            shutil.rmtree(sdir, ignore_errors=True)
+            os.makedirs(sdir, exist_ok=True)
+
+            ffmpeg_path = find_ffmpeg()
+            if not ffmpeg_path:
+                return None, None
+
+            clean_env = os.environ.copy()
+            clean_env.pop('http_proxy', None)
+            clean_env.pop('https_proxy', None)
+
+            def _build_cmd(ua):
+                c = [
+                    ffmpeg_path,
+                    "-hide_banner",
+                    "-loglevel", "error",
                 ]
+                if target_url.startswith(('http://', 'https://')):
+                    c.extend([
+                        "-reconnect", "1",
+                        "-reconnect_at_eof", "1",
+                        "-reconnect_streamed", "1",
+                        "-reconnect_delay_max", "5",
+                        "-user_agent", ua,
+                        "-headers", "Accept: */*\r\n",
+                    ])
+                if start_seconds > 0:
+                    c.extend(["-ss", str(start_seconds)])
+                c.extend([
+                    "-i", target_url,
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-ac", "2",
+                    "-avoid_negative_ts", "make_zero",
+                    "-f", "hls",
+                    "-hls_time", "3",
+                    "-hls_list_size", "0",
+                    "-hls_flags", "independent_segments",
+                    "-hls_segment_filename", os.path.join(sdir, "seg_%04d.ts"),
+                    m3u8_path
+                ])
+                return c
+
+            proc = subprocess.Popen(_build_cmd("IPTVSmartersPlayer"), env=clean_env)
+            time.sleep(0.4)
+            if proc.poll() is not None and proc.returncode != 0:
+                # If upstream IPTV server blocks IPTVSmartersPlayer, retry with VLC User-Agent
+                proc = subprocess.Popen(_build_cmd("VLC/3.0.20 LibVLC/3.0.20"), env=clean_env)
+
+            self.sessions[sid] = {
+                'proc': proc,
+                'dir': sdir,
+                'last_seen': time.time(),
+                'm3u8': m3u8_path
             }
-        },
-        "3002": {
-            "seasons": [
-                {"air_date": "2008-01-20", "episode_count": 3, "id": 1, "name": "Stagione 1", "season_number": 1},
-                {"air_date": "2009-03-08", "episode_count": 2, "id": 2, "name": "Stagione 2", "season_number": 2},
-                {"air_date": "2010-03-21", "episode_count": 2, "id": 3, "name": "Stagione 3", "season_number": 3},
-                {"air_date": "2011-07-17", "episode_count": 2, "id": 4, "name": "Stagione 4", "season_number": 4},
-                {"air_date": "2012-07-15", "episode_count": 2, "id": 5, "name": "Stagione 5", "season_number": 5}
-            ],
-            "info": {
-                "name": "Breaking Bad",
-                "cover": "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=600&q=80",
-                "plot": "Un insegnante di chimica del liceo a cui è stato diagnosticato un cancro ai polmoni inoperabile decide di produrre metanfetamina per il futuro della famiglia.",
-                "genre": "Crime, Dramma, Thriller",
-                "rating": "9.5",
-                "cast": "Bryan Cranston, Aaron Paul, Anna Gunn"
-            },
-            "episodes": {
-                "1": [
-                    {
-                        "id": "e3002_s1_e1",
-                        "episode_num": 1,
-                        "title": "Questione di chimica (Pilot)",
-                        "container_extension": "mp4",
-                        "info": {"duration": "58m", "plot": "Walter White scopre di avere un tumore e si allea con l'ex studente Jesse Pinkman."},
-                        "direct_source": sample_videos[2]
-                    },
-                    {
-                        "id": "e3002_s1_e2",
-                        "episode_num": 2,
-                        "title": "Senza ritorno",
-                        "container_extension": "mp4",
-                        "info": {"duration": "48m", "plot": "Walt e Jesse devono sbarazzarsi di due spacciatori rimasti coinvolti."},
-                        "direct_source": sample_videos[3]
-                    },
-                    {
-                        "id": "e3002_s1_e3",
-                        "episode_num": 3,
-                        "title": "Conseguenze radicali",
-                        "container_extension": "mp4",
-                        "info": {"duration": "48m", "plot": "Walt affronta un dilemma morale decisivo sul destino di Krazy-8."},
-                        "direct_source": sample_videos[4]
-                    }
-                ],
-                "2": [
-                    {
-                        "id": "e3002_s2_e1",
-                        "episode_num": 1,
-                        "title": "Tutto torna",
-                        "container_extension": "mp4",
-                        "info": {"duration": "47m", "plot": "Walt e Jesse affrontano le minacce dello psicotico Tuco Salamanca."},
-                        "direct_source": sample_videos[0]
-                    },
-                    {
-                        "id": "e3002_s2_e2",
-                        "episode_num": 2,
-                        "title": "Grigliata",
-                        "container_extension": "mp4",
-                        "info": {"duration": "48m", "plot": "Rapiti da Tuco, Walt e Jesse tentano una fuga disperata nel deserto."},
-                        "direct_source": sample_videos[1]
-                    }
-                ],
-                "3": [
-                    {
-                        "id": "e3002_s3_e1",
-                        "episode_num": 1,
-                        "title": "Mai più",
-                        "container_extension": "mp4",
-                        "info": {"duration": "47m", "plot": "Walt cerca di ritirarsi dagli affari mentre Skyler scopre la verità."},
-                        "direct_source": sample_videos[5]
-                    },
-                    {
-                        "id": "e3002_s3_e2",
-                        "episode_num": 2,
-                        "title": "Cavallo senza nome",
-                        "container_extension": "mp4",
-                        "info": {"duration": "47m", "plot": "Due cugini del cartello messicano oltrepassano il confine in cerca di vendetta."},
-                        "direct_source": sample_videos[6]
-                    }
-                ],
-                "4": [
-                    {
-                        "id": "e3002_s4_e1",
-                        "episode_num": 1,
-                        "title": "Taglierino",
-                        "container_extension": "mp4",
-                        "info": {"duration": "47m", "plot": "Walt e Jesse attendono il verdetto di Gus Fring dopo gli eventi del laboratorio."},
-                        "direct_source": sample_videos[2]
-                    },
-                    {
-                        "id": "e3002_s4_e2",
-                        "episode_num": 2,
-                        "title": "Calibro 38",
-                        "container_extension": "mp4",
-                        "info": {"duration": "47m", "plot": "Sentendosi in trappola, Walt compra una pistola per difendersi da Gus."},
-                        "direct_source": sample_videos[3]
-                    }
-                ],
-                "5": [
-                    {
-                        "id": "e3002_s5_e1",
-                        "episode_num": 1,
-                        "title": "Vivi libero o muori",
-                        "container_extension": "mp4",
-                        "info": {"duration": "43m", "plot": "Dopo la caduta di Gus, Walt assume il pieno controllo dell'impero."},
-                        "direct_source": sample_videos[4]
-                    },
-                    {
-                        "id": "e3002_s5_e2",
-                        "episode_num": 2,
-                        "title": "Felina (Finale)",
-                        "container_extension": "mp4",
-                        "info": {"duration": "55m", "plot": "Walter White torna per chiudere ogni conto rimasto in sospeso."},
-                        "direct_source": sample_videos[0]
-                    }
-                ]
-            }
-        },
-        "3003": {
-            "seasons": [
-                {"air_date": "2023-01-15", "episode_count": 3, "id": 1, "name": "Stagione 1", "season_number": 1},
-                {"air_date": "2025-02-01", "episode_count": 2, "id": 2, "name": "Stagione 2", "season_number": 2}
-            ],
-            "info": {
-                "name": "The Last of Us",
-                "cover": "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=600&q=80",
-                "plot": "Vent'anni dopo che un'infezione fungina ha decimato il pianeta, Joel deve scortare la giovane Ellie attraverso un'America desolata.",
-                "genre": "Azione, Avventura, Dramma",
-                "rating": "8.8",
-                "cast": "Pedro Pascal, Bella Ramsey, Gabriel Luna"
-            },
-            "episodes": {
-                "1": [
-                    {
-                        "id": "e3003_s1_e1",
-                        "episode_num": 1,
-                        "title": "Quando sei perso nell'oscurità",
-                        "container_extension": "mp4",
-                        "info": {"duration": "81m", "plot": "L'inizio dell'epidemia sconvolge la vita di Joel."},
-                        "direct_source": sample_videos[1]
-                    },
-                    {
-                        "id": "e3003_s1_e2",
-                        "episode_num": 2,
-                        "title": "Gli infetti",
-                        "container_extension": "mp4",
-                        "info": {"duration": "53m", "plot": "Joel, Tess ed Ellie attraversano una Boston allagata e invasa dai Clicker."},
-                        "direct_source": sample_videos[2]
-                    },
-                    {
-                        "id": "e3003_s1_e3",
-                        "episode_num": 3,
-                        "title": "Molto, molto tempo",
-                        "container_extension": "mp4",
-                        "info": {"duration": "75m", "plot": "La storia toccante di Bill e Frank in un mondo in rovina."},
-                        "direct_source": sample_videos[3]
-                    }
-                ],
-                "2": [
-                    {
-                        "id": "e3003_s2_e1",
-                        "episode_num": 1,
-                        "title": "Ritorno a Jackson",
-                        "container_extension": "mp4",
-                        "info": {"duration": "60m", "plot": "Anni dopo, la quiete di Jackson viene turbata da una nuova minaccia."},
-                        "direct_source": sample_videos[4]
-                    },
-                    {
-                        "id": "e3003_s2_e2",
-                        "episode_num": 2,
-                        "title": "La spirale di Seattle",
-                        "container_extension": "mp4",
-                        "info": {"duration": "58m", "plot": "Ellie parte per Seattle determinata a compiere la sua vendetta."},
-                        "direct_source": sample_videos[5]
-                    }
-                ]
-            }
-        },
-        "3004": {
-            "seasons": [
-                {"air_date": "2013-09-12", "episode_count": 3, "id": 1, "name": "Stagione 1", "season_number": 1},
-                {"air_date": "2014-10-02", "episode_count": 2, "id": 2, "name": "Stagione 2", "season_number": 2},
-                {"air_date": "2016-05-05", "episode_count": 2, "id": 3, "name": "Stagione 3", "season_number": 3}
-            ],
-            "info": {
-                "name": "Peaky Blinders",
-                "cover": "https://images.unsplash.com/photo-1485846234645-a62644f84728?w=600&q=80",
-                "plot": "Birmingham, Inghilterra, 1919. Una famigerata gang guidata dall'ambizioso Thomas Shelby cattura l'attenzione dell'ispettore Campbell.",
-                "genre": "Crime, Dramma, Storico",
-                "rating": "8.8",
-                "cast": "Cillian Murphy, Paul Anderson, Helen McCrory"
-            },
-            "episodes": {
-                "1": [
-                    {
-                        "id": "e3004_s1_e1",
-                        "episode_num": 1,
-                        "title": "Episodio 1",
-                        "container_extension": "mp4",
-                        "info": {"duration": "57m", "plot": "Thomas Shelby entra in possesso per errore di una cassa di armi militari."},
-                        "direct_source": sample_videos[0]
-                    },
-                    {
-                        "id": "e3004_s1_e2",
-                        "episode_num": 2,
-                        "title": "Episodio 2",
-                        "container_extension": "mp4",
-                        "info": {"duration": "58m", "plot": "L'ispettore Campbell comincia a stringere il cerchio attorno agli Shelby."},
-                        "direct_source": sample_videos[1]
-                    },
-                    {
-                        "id": "e3004_s1_e3",
-                        "episode_num": 3,
-                        "title": "Episodio 3",
-                        "container_extension": "mp4",
-                        "info": {"duration": "56m", "plot": "Alle corse di Cheltenham, Tommy affronta il boss Billy Kimber."},
-                        "direct_source": sample_videos[2]
-                    }
-                ],
-                "2": [
-                    {
-                        "id": "e3004_s2_e1",
-                        "episode_num": 1,
-                        "title": "Episodio 1",
-                        "container_extension": "mp4",
-                        "info": {"duration": "59m", "plot": "La famiglia Shelby espande il proprio impero criminale verso Londra."},
-                        "direct_source": sample_videos[3]
-                    },
-                    {
-                        "id": "e3004_s2_e2",
-                        "episode_num": 2,
-                        "title": "Episodio 2",
-                        "container_extension": "mp4",
-                        "info": {"duration": "58m", "plot": "Tommy incontra il leader ebreo Alfie Solomons a Camden Town."},
-                        "direct_source": sample_videos[4]
-                    }
-                ],
-                "3": [
-                    {
-                        "id": "e3004_s3_e1",
-                        "episode_num": 1,
-                        "title": "Episodio 1",
-                        "container_extension": "mp4",
-                        "info": {"duration": "55m", "plot": "Il giorno del matrimonio di Tommy coincide con l'arrivo di misteriosi esiliati russi."},
-                        "direct_source": sample_videos[5]
-                    },
-                    {
-                        "id": "e3004_s3_e2",
-                        "episode_num": 2,
-                        "title": "Episodio 2",
-                        "container_extension": "mp4",
-                        "info": {"duration": "58m", "plot": "Tommy viene coinvolto in una cospirazione internazionale ad alto rischio."},
-                        "direct_source": sample_videos[6]
-                    }
-                ]
-            }
-        }
-    }
 
-    sid = str(series_id)
-    if sid in series_map:
-        return series_map[sid]
+        # Wait up to 5 seconds for the first segment to be generated in master.m3u8
+        for _ in range(50):
+            time.sleep(0.1)
+            if os.path.exists(m3u8_path):
+                try:
+                    with open(m3u8_path, 'r', encoding='utf-8') as f:
+                        text = f.read()
+                    if '#EXTINF:' in text:
+                        break
+                except Exception:
+                    pass
 
-    # Dynamic fallback for any other series ID: find in DEMO_SERIES_LIST or generate 3 seasons
-    series_meta = next((s for s in DEMO_SERIES_LIST if str(s.get("series_id")) == sid), None)
-    name = series_meta.get("name", "Serie TV") if series_meta else f"Serie {sid}"
-    cover = series_meta.get("cover", "") if series_meta else ""
-    plot = series_meta.get("plot", "Descrizione serie...") if series_meta else ""
-    genre = series_meta.get("genre", "Dramma") if series_meta else ""
-    rating = str(series_meta.get("rating", "8.0")) if series_meta else "8.0"
-    num_seasons = int(series_meta.get("seasons_count", 3)) if series_meta else 3
+        return sid, m3u8_path
 
-    generated_seasons = []
-    generated_episodes = {}
-    for s_idx in range(1, num_seasons + 1):
-        s_str = str(s_idx)
-        generated_seasons.append({
-            "air_date": f"202{s_idx}-01-01",
-            "episode_count": 2,
-            "id": s_idx,
-            "name": f"Stagione {s_idx}",
-            "season_number": s_idx
-        })
-        generated_episodes[s_str] = [
-            {
-                "id": f"e{sid}_s{s_idx}_e1",
-                "episode_num": 1,
-                "title": f"Episodio 1",
-                "container_extension": "mp4",
-                "info": {"duration": "45m", "plot": f"Primo episodio della Stagione {s_idx}."},
-                "direct_source": sample_videos[0]
-            },
-            {
-                "id": f"e{sid}_s{s_idx}_e2",
-                "episode_num": 2,
-                "title": f"Episodio 2",
-                "container_extension": "mp4",
-                "info": {"duration": "50m", "plot": f"Secondo episodio della Stagione {s_idx}."},
-                "direct_source": sample_videos[1]
-            }
-        ]
-
-    return {
-        "info": {
-            "name": name,
-            "cover": cover,
-            "plot": plot,
-            "genre": genre,
-            "rating": rating
-        },
-        "seasons": generated_seasons,
-        "episodes": generated_episodes
-    }
-
-
-def get_demo_channel_epg(stream_id):
-    import time
-    now = int(time.time())
-    channel = next((s for s in DEMO_LIVE_STREAMS if str(s.get("stream_id")) == str(stream_id)), None)
-    cname = channel.get("name", "Canale TV") if channel else "Canale TV"
-
-    listings = [
-        {"title": "Rassegna Stampa & Notizie", "desc": f"Le prime pagine dei quotidiani e le notizie del mattino su {cname}.", "offset": -7200, "dur": 3600},
-        {"title": "Mattina Live - Approfondimenti", "desc": "Storie di cronaca, costume e attualità con ospiti in studio.", "offset": -3600, "dur": 3600},
-        {"title": f"Edizione Straordinaria Telegiornale", "desc": "Notiziario completo in diretta con i servizi degli inviati.", "offset": 0, "dur": 2700},
-        {"title": "Mezzogiorno in Diretta", "desc": "Cucina, consigli per la salute e territorio italiano.", "offset": 2700, "dur": 4500},
-        {"title": "TG Pomeriggio & Meteo", "desc": "Aggiornamento meteo e previsioni regionali per le prossime 24 ore.", "offset": 7200, "dur": 1800},
-        {"title": "Film del Pomeriggio", "desc": "Grande cinema per tutta la famiglia con audio restaurato.", "offset": 9000, "dur": 6000},
-        {"title": "Game Show Serale", "desc": "Quiz a premi e giochi per i concorrenti in studio.", "offset": 15000, "dur": 3600},
-        {"title": "Telegiornale Prima Serata", "desc": "Il notiziario principale della giornata con collegamenti dal mondo.", "offset": 18600, "dur": 2400},
-        {"title": "Prima Serata Evento", "desc": "Il grande show televisivo con musica, ospiti e intrattenimento.", "offset": 21000, "dur": 7200},
-    ]
-
-    epg_list = []
-    for idx, item in enumerate(listings):
-        start_ts = now + item["offset"]
-        stop_ts = start_ts + item["dur"]
-        start_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_ts))
-        stop_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stop_ts))
-        epg_list.append({
-            "id": str(idx + 1),
-            "epg_id": str(stream_id),
-            "title": item["title"],
-            "lang": "it",
-            "start": start_str,
-            "end": stop_str,
-            "description": item["desc"],
-            "start_timestamp": str(start_ts),
-            "stop_timestamp": str(stop_ts),
-            "now_playing": 1 if (start_ts <= now < stop_ts) else 0
-        })
-
-    return {"epg_listings": epg_list}
+HLS_STREAM_MGR = HLSStreamManager()
 
 
 class IPTVRequestHandler(SimpleHTTPRequestHandler):
@@ -945,9 +287,9 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=PUBLIC_DIR, **kwargs)
 
     def end_headers(self):
-        # Do NOT send no-store on media streams or proxy/transcode responses (breaks iOS AVPlayer byte-range playback)
+        # Do NOT send no-store on media streams or proxy/transcode/hls responses (breaks iOS AVPlayer playback)
         path_lower = getattr(self, 'path', '').lower()
-        is_media = any(ext in path_lower for ext in ('/api/proxy', '/api/transcode', '.ts', '.m3u8', '.mp4', '.mkv', '.avi', '.mov', '.mp3'))
+        is_media = any(ext in path_lower for ext in ('/api/proxy', '/api/transcode', '/api/hls', '.ts', '.m3u8', '.mp4', '.mkv', '.avi', '.mov', '.mp3'))
         if not is_media:
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
@@ -1024,9 +366,7 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             return self.handle_transcode(is_head=is_head, override_url=target_url)
 
         req_headers = {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-            ),
+            'User-Agent': 'IPTVSmartersPlayer' if not is_api_request else 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': '*/*',
             'Connection': 'keep-alive',
         }
@@ -1050,6 +390,17 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 verify=False,
                 allow_redirects=True
             )
+            # If IPTV server blocks the initial User-Agent with 403, retry with VLC User-Agent
+            if resp.status_code == 403:
+                req_headers['User-Agent'] = 'VLC/3.0.20 LibVLC/3.0.20'
+                resp = requests.get(
+                    target_url,
+                    headers=req_headers,
+                    stream=True,
+                    timeout=25,
+                    verify=False,
+                    allow_redirects=True
+                )
             actual_url = resp.url or target_url
             status_code = resp.status_code
             content_type = resp.headers.get('Content-Type', 'application/octet-stream')
@@ -1498,6 +849,13 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
     def do_HEAD(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        if path == '/api/hls/master.m3u8' or path.startswith('/api/hls/'):
+            self.send_response(200)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+            self.send_header('Content-Type', 'application/vnd.apple.mpegurl' if path.endswith('.m3u8') else 'video/mp2t')
+            self.end_headers()
+            return
         if path == '/api/proxy':
             self.handle_proxy(is_head=True)
             return
@@ -1510,6 +868,88 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
+
+        # 0. Real-time HLS Remuxer for VOD & Series: /api/hls/master.m3u8?url=<TARGET_URL>
+        if path == '/api/hls/master.m3u8':
+            target_url = query.get('url', [None])[0]
+            if not target_url:
+                prefix = '/api/hls/master.m3u8?url='
+                if self.path.startswith(prefix):
+                    target_url = self.path[len(prefix):]
+            if target_url:
+                if target_url.startswith(('http%3A', 'https%3A')) or '%2F' in target_url:
+                    target_url = urllib.parse.unquote(target_url)
+                sid, m3u8_path = HLS_STREAM_MGR.start_hls(target_url)
+                if sid and m3u8_path and os.path.exists(m3u8_path):
+                    try:
+                        with open(m3u8_path, 'r', encoding='utf-8') as f:
+                            raw_m3u8 = f.read()
+                        rewritten_lines = []
+                        for line in raw_m3u8.splitlines():
+                            s = line.strip()
+                            if s and not s.startswith('#'):
+                                rewritten_lines.append(f"/api/hls/{sid}/{s}")
+                            else:
+                                rewritten_lines.append(line)
+                        m3u8_bytes = "\n".join(rewritten_lines).encode('utf-8')
+                        self.send_response(200)
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+                        self.send_header('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8')
+                        self.send_header('Content-Length', str(len(m3u8_bytes)))
+                        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                        self.end_headers()
+                        self.wfile.write(m3u8_bytes)
+                        return
+                    except Exception as e:
+                        print(f"[HLS Error] Reading m3u8: {e}")
+
+            if target_url:
+                self.send_response(302)
+                self.send_header('Location', f'/api/proxy?url={urllib.parse.quote(target_url, safe="")}')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                return
+
+        # Serve HLS Segment chunks: /api/hls/{sid}/{segment.ts}
+        if path.startswith('/api/hls/'):
+            parts = [p for p in path.split('/') if p]
+            if len(parts) >= 4:
+                sid = parts[2]
+                seg_name = parts[3]
+                sdir = HLS_STREAM_MGR.get_session_dir(sid)
+                if sdir:
+                    seg_path = os.path.join(sdir, seg_name)
+                    for _ in range(50):
+                        if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
+                            break
+                        time.sleep(0.1)
+                    if os.path.exists(seg_path):
+                        try:
+                            file_size = os.path.getsize(seg_path)
+                            self.send_response(200)
+                            self.send_header('Access-Control-Allow-Origin', '*')
+                            self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+                            self.send_header('Content-Type', 'video/mp2t')
+                            self.send_header('Content-Length', str(file_size))
+                            self.send_header('Cache-Control', 'public, max-age=3600')
+                            self.end_headers()
+                            with open(seg_path, 'rb') as sf:
+                                while True:
+                                    chunk = sf.read(65536)
+                                    if not chunk:
+                                        break
+                                    self.wfile.write(chunk)
+                            return
+                        except (BrokenPipeError, ConnectionResetError):
+                            return
+                        except Exception as e:
+                            print(f"[HLS Segment Error]: {e}")
+
+            self.send_response(404)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            return
 
         # 1. CORS Proxy Endpoint (for API calls and Streams): /api/proxy?url=<TARGET_URL>
         if path == '/api/proxy':
@@ -1543,82 +983,12 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             version_info = {
                 "app": "IPTV Player V2",
-                "version": "2.5.0",
+                "version": "2.6.1",
                 "branch": "main",
-                "latest_update": "Definitive VOD streaming fix: HTTP/1.1 RFC 7233 range-slicing, AVPlayer byte-range caching, real-time FFmpeg remuxing, zero VLC button, first category default",
-                "features": ["mobile_ui", "desktop_ui", "device_native_player", "vod_definitive_fix", "first_category_default", "apple_avplayer_ios", "epg_guide", "m3u_support", "xtream_support"]
+                "latest_update": "Definitive VOD fix: on-the-fly HLS remuxing pipeline for movies/series, IPTVSmarters/VLC anti-403 User-Agent, zero demo sections, removed VLC button",
+                "features": ["mobile_ui", "desktop_ui", "device_native_player", "vod_hls_pipeline", "first_category_default", "apple_avplayer_ios", "epg_guide", "m3u_support", "xtream_support"]
             }
             self.wfile.write(json.dumps(version_info, ensure_ascii=False, indent=2).encode('utf-8'))
-            return
-
-        # 5b. Demo M3U Playlist: /demo.m3u or /playlist.m3u
-        if path in ('/demo.m3u', '/playlist.m3u', '/api/demo/playlist.m3u'):
-            self.send_response(200)
-            self.end_cors_headers(content_type="audio/x-mpegurl; charset=utf-8")
-            self.end_headers()
-            cat_map = {c['category_id']: c['category_name'] for c in DEMO_LIVE_CATEGORIES + DEMO_VOD_CATEGORIES}
-            m3u_lines = ["#EXTM3U"]
-            for s in DEMO_LIVE_STREAMS:
-                cat_name = cat_map.get(str(s.get('category_id')), 'Canali Nazionali')
-                logo = s.get('stream_icon', '')
-                tvg_id = s.get('epg_channel_id', '')
-                name = s.get('name', 'Canale Live')
-                url = s.get('direct_source', 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8')
-                m3u_lines.append(f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}" tvg-logo="{logo}" group-title="{cat_name}",{name}')
-                m3u_lines.append(url)
-            for v in DEMO_VOD_STREAMS:
-                cat_name = cat_map.get(str(v.get('category_id')), 'Cinema')
-                logo = v.get('stream_icon', '')
-                name = v.get('name', 'Film VOD')
-                url = v.get('direct_source', 'https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4')
-                m3u_lines.append(f'#EXTINF:-1 tvg-name="{name}" tvg-logo="{logo}" group-title="{cat_name}",{name}')
-                m3u_lines.append(url)
-            self.wfile.write("\n".join(m3u_lines).encode('utf-8'))
-            return
-
-        # 6. Built-in Demo Xtream API: /api/demo/player_api.php or /player_api.php
-        if path.startswith('/api/demo') or path == '/player_api.php' or path.startswith('/player_api.php'):
-            action = query.get('action', [None])[0]
-            cat_id = query.get('category_id', [None])[0]
-            series_id = query.get('series_id', [None])[0]
-            stream_id = query.get('stream_id', [None])[0]
-
-            self.send_response(200)
-            self.end_cors_headers()
-            self.end_headers()
-
-            if not action:
-                # Root action = Authentication & Server Info
-                response_data = DEMO_USER_INFO
-            elif action == 'get_live_categories':
-                response_data = DEMO_LIVE_CATEGORIES
-            elif action == 'get_vod_categories':
-                response_data = DEMO_VOD_CATEGORIES
-            elif action == 'get_series_categories':
-                response_data = DEMO_SERIES_CATEGORIES
-            elif action == 'get_live_streams':
-                if cat_id:
-                    response_data = [s for s in DEMO_LIVE_STREAMS if s.get('category_id') == str(cat_id)]
-                else:
-                    response_data = DEMO_LIVE_STREAMS
-            elif action == 'get_vod_streams':
-                if cat_id:
-                    response_data = [s for s in DEMO_VOD_STREAMS if s.get('category_id') == str(cat_id)]
-                else:
-                    response_data = DEMO_VOD_STREAMS
-            elif action == 'get_series':
-                if cat_id:
-                    response_data = [s for s in DEMO_SERIES_LIST if s.get('category_id') == str(cat_id)]
-                else:
-                    response_data = DEMO_SERIES_LIST
-            elif action == 'get_series_info':
-                response_data = get_demo_series_info(series_id or "3001")
-            elif action in ('get_short_epg', 'get_simple_data_table'):
-                response_data = get_demo_channel_epg(stream_id or "1001")
-            else:
-                response_data = {"error": f"Action non riconosciuta: {action}"}
-
-            self.wfile.write(json.dumps(response_data, ensure_ascii=False).encode('utf-8'))
             return
 
         # Default: Serve static files from /public
@@ -1642,7 +1012,6 @@ def run_server():
         print(f">> Directory servita: {PUBLIC_DIR}")
         print(f">> Browser: http://localhost:{PORT}")
         print(f">> Proxy CORS: http://localhost:{PORT}/api/proxy?url=...")
-        print(f">> Demo Xtream API: http://localhost:{PORT}/api/demo/player_api.php")
         print("=" * 60)
         httpd.serve_forever()
     except OSError as e:
