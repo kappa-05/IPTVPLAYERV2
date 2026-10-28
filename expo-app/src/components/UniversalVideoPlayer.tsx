@@ -106,7 +106,6 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
   const animFade = useRef(new Animated.Value(0)).current;
   const animScale = useRef(new Animated.Value(0.95)).current;
   const controlsAnim = useRef(new Animated.Value(1)).current;
-  const splashFade = useRef(new Animated.Value(1)).current;
 
   // ── 100% Robust Content Type Detection (Guaranteed NO Movie marked as LIVE) ──
   const isMovieOrSeries = Boolean(
@@ -242,7 +241,6 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       // 3. Play Cinematic Open Animation
       animFade.setValue(0);
       animScale.setValue(0.95);
-      splashFade.setValue(1);
 
       Animated.parallel([
         Animated.timing(animFade, {
@@ -361,6 +359,12 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     const isM3U8 = targetUrl.toLowerCase().includes('.m3u8') || targetUrl.includes('/api/hls/') || (isLive && !targetUrl.includes('/movie/') && !targetUrl.includes('/series/'));
     const canNativeHls = typeof video.canPlayType === 'function' && Boolean(video.canPlayType('application/vnd.apple.mpegurl'));
 
+    if (isIOS) {
+      video.removeAttribute('playsinline');
+      video.removeAttribute('webkit-playsinline');
+      video.controls = true;
+    }
+
     video.onwaiting = () => {
       setLoading(true);
       setLoadingStatus('Buffering...');
@@ -369,15 +373,16 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     video.onplaying = () => {
       setLoading(false);
       setIsPlaying(true);
-      Animated.timing(splashFade, {
-        toValue: 0,
-        duration: 350,
-        useNativeDriver: true
-      }).start();
+      openDevicePlayer(video);
+    };
 
-      if (isIOS) {
-        tryEnterAppleFullscreen(video);
-      }
+    video.onplay = () => {
+      setIsPlaying(true);
+      openDevicePlayer(video);
+    };
+
+    video.onloadeddata = () => {
+      openDevicePlayer(video);
     };
 
     video.onpause = () => setIsPlaying(false);
@@ -456,7 +461,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       video.src = targetUrl;
       video.load();
       video.play().then(() => {
-        tryEnterAppleFullscreen(video);
+        openDevicePlayer(video);
       }).catch((e) => {
         console.log('Autoplay waiting for user touch:', e);
       });
@@ -479,7 +484,9 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
         if (data?.levels?.[0]?.details?.totalduration) {
           setDuration(data.levels[0].details.totalduration);
         }
-        video.play().catch(() => {});
+        video.play().then(() => {
+          openDevicePlayer(video);
+        }).catch(() => {});
       });
 
       hls.on(HlsClass.Events.LEVEL_LOADED, (_event: any, data: any) => {
@@ -517,31 +524,47 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       // Direct MP4 / MKV stream
       video.src = targetUrl;
       video.load();
-      video.play().catch(() => {});
+      video.play().then(() => {
+        openDevicePlayer(video);
+      }).catch(() => {});
     }
   };
 
-  const tryEnterAppleFullscreen = (video: HTMLVideoElement) => {
-    if (isIOS && typeof (video as any).webkitEnterFullscreen === 'function') {
-      try {
-        (video as any).webkitEnterFullscreen();
-        setIsFullscreen(true);
-      } catch (err) {
-        console.log('Apple fullscreen deferred until user touch:', err);
+  const openDevicePlayer = useCallback((targetVid?: HTMLVideoElement) => {
+    if (Platform.OS === 'web') {
+      const vid = targetVid || webVideoRef.current;
+      if (vid) {
+        if (isIOS && typeof (vid as any).webkitEnterFullscreen === 'function') {
+          try {
+            (vid as any).webkitEnterFullscreen();
+            setIsFullscreen(true);
+            return true;
+          } catch (err) {
+            console.log('Apple fullscreen deferred until user touch:', err);
+          }
+        } else if (typeof (vid as any).requestFullscreen === 'function') {
+          try {
+            (vid as any).requestFullscreen();
+            setIsFullscreen(true);
+            return true;
+          } catch (e) {}
+        }
       }
+    } else if (nativeVideoRef.current) {
+      try {
+        nativeVideoRef.current.presentFullscreenPlayer();
+        setIsFullscreen(true);
+        return true;
+      } catch (e) {}
     }
-  };
+    return false;
+  }, [isIOS]);
 
   // ── Play / Pause ──
   const togglePlayPause = useCallback(() => {
     resetControlsTimer();
+    openDevicePlayer();
     if (Platform.OS === 'web' && webVideoRef.current) {
-      if (isIOS && typeof (webVideoRef.current as any).webkitEnterFullscreen === 'function') {
-        try {
-          (webVideoRef.current as any).webkitEnterFullscreen();
-          setIsFullscreen(true);
-        } catch (e) {}
-      }
       if (webVideoRef.current.paused) {
         webVideoRef.current.play().catch(() => {});
         setIsPlaying(true);
@@ -558,7 +581,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
         setIsPlaying(true);
       }
     }
-  }, [isPlaying, isIOS, resetControlsTimer]);
+  }, [isPlaying, openDevicePlayer, resetControlsTimer]);
 
   // ── Mute / Unmute ──
   const toggleMute = useCallback(() => {
@@ -634,14 +657,9 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     resetControlsTimer();
     if (Platform.OS === 'web') {
       const video = webVideoRef.current;
-      if (isIOS && video && typeof (video as any).webkitEnterFullscreen === 'function') {
-        try {
-          (video as any).webkitEnterFullscreen();
-          setIsFullscreen(true);
-          return;
-        } catch {}
+      if (openDevicePlayer(video || undefined)) {
+        return;
       }
-
       if (!document.fullscreenElement) {
         const root = document.getElementById('root') || document.documentElement;
         root.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {
@@ -653,7 +671,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     } else if (nativeVideoRef.current) {
       nativeVideoRef.current.presentFullscreenPlayer();
     }
-  }, [isIOS, resetControlsTimer]);
+  }, [openDevicePlayer, resetControlsTimer]);
 
   // ── Open in VLC (Desktop) ──
   const handleOpenInVlc = () => {
@@ -760,13 +778,8 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
         seekRelative(10);
       }
     } else {
-      // Single tap: toggle controls, and on iOS launch native player if not active
-      if (isIOS && webVideoRef.current && typeof (webVideoRef.current as any).webkitEnterFullscreen === 'function') {
-        try {
-          (webVideoRef.current as any).webkitEnterFullscreen();
-          setIsFullscreen(true);
-        } catch (err) {}
-      }
+      // Single tap: toggle controls, and launch device player on touch
+      openDevicePlayer();
       if (showControls) {
         Animated.timing(controlsAnim, {
           toValue: 0,
@@ -851,42 +864,12 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
           ) : null
         )}
 
-        {/* ── Cinematic Loading Splash Overlay ── */}
+        {/* ── Center Loading Spinner (Rotellina di Buffering Pulita) ── */}
         {loading && (
-          <Animated.View style={[styles.splashOverlay, { opacity: splashFade }]} pointerEvents="none">
-            <View style={styles.splashCard}>
-              {stream.poster ? (
-                <View style={styles.splashPosterWrapper}>
-                  <Image source={{ uri: stream.poster }} style={styles.splashPoster} resizeMode="cover" />
-                </View>
-              ) : (
-                <View style={[styles.splashPosterWrapper, styles.splashPosterFallback]}>
-                  <Ionicons name={isLive ? 'tv-outline' : 'film-outline'} size={42} color={colors.primary} />
-                </View>
-              )}
-
-              <View style={styles.splashInfo}>
-                <View style={[styles.typeBadge, isLive ? styles.typeBadgeLive : styles.typeBadgeVod]}>
-                  <Text style={styles.typeBadgeText}>
-                    {isLive ? 'LIVE' : stream.type === 'series' ? 'SERIE' : 'VOD'}
-                  </Text>
-                </View>
-                <Text style={styles.splashTitle} numberOfLines={2}>
-                  {stream.title}
-                </Text>
-                {stream.subTitle ? (
-                  <Text style={styles.splashSubtitle} numberOfLines={1}>
-                    {stream.subTitle}
-                  </Text>
-                ) : null}
-
-                <View style={styles.splashLoaderRow}>
-                  <ActivityIndicator size="small" color={colors.primary} />
-                  <Text style={styles.splashLoadingStatus}>{loadingStatus}</Text>
-                </View>
-              </View>
-            </View>
-          </Animated.View>
+          <View style={styles.centerLoadingOverlay} pointerEvents="none">
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={styles.centerLoadingText}>{loadingStatus || 'Caricamento...'}</Text>
+          </View>
         )}
 
         {/* ── Visual Seek Ripple Indicator (-10s / +10s) ── */}
@@ -1006,29 +989,6 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
               </View>
 
               <View style={styles.topRight}>
-                {Platform.OS === 'web' && (
-                  <TouchableOpacity
-                    style={styles.glassBtn}
-                    onPress={() => {
-                      if (webVideoRef.current) {
-                        const v = webVideoRef.current as any;
-                        if (typeof v.webkitEnterFullscreen === 'function') {
-                          try {
-                            v.webkitEnterFullscreen();
-                            setIsFullscreen(true);
-                          } catch (e) {}
-                        } else if (typeof v.requestFullscreen === 'function') {
-                          v.requestFullscreen();
-                          setIsFullscreen(true);
-                        }
-                      }
-                    }}
-                  >
-                    <Ionicons name="phone-portrait-outline" size={16} color="#fff" />
-                    <Text style={styles.glassBtnText}>Player Dispositivo</Text>
-                  </TouchableOpacity>
-                )}
-
                 {isLive && onOpenEpg && (
                   <TouchableOpacity style={styles.glassBtn} onPress={onOpenEpg}>
                     <Ionicons name="calendar-outline" size={16} color="#fff" />
@@ -1196,80 +1156,26 @@ const styles = StyleSheet.create({
     filter: Platform.OS === 'web' ? 'blur(60px)' : undefined
   },
 
-  // ── Cinematic Splash Overlay ──
-  splashOverlay: {
+  // ── Center Loading Spinner (Rotellina di Buffering Pulita) ──
+  centerLoadingOverlay: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(3, 5, 8, 0.88)',
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 10,
-    padding: 20
+    zIndex: 10
   },
-  splashCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(20, 24, 34, 0.92)',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    padding: 20,
-    maxWidth: 520,
-    width: '100%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.5,
-    shadowRadius: 24,
-    // @ts-ignore
-    backdropFilter: Platform.OS === 'web' ? 'blur(20px)' : undefined
-  },
-  splashPosterWrapper: {
-    width: 90,
-    height: 130,
-    borderRadius: 10,
-    overflow: 'hidden',
-    backgroundColor: '#10131a',
-    marginRight: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)'
-  },
-  splashPoster: {
-    width: '100%',
-    height: '100%'
-  },
-  splashPosterFallback: {
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  splashInfo: {
-    flex: 1,
-    justifyContent: 'center'
-  },
-  splashTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#fff',
-    marginTop: 6,
-    marginBottom: 4
-  },
-  splashSubtitle: {
-    fontSize: 13,
-    color: colors.textSecondary,
-    marginBottom: 12
-  },
-  splashLoaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 8
-  },
-  splashLoadingStatus: {
-    fontSize: 13,
-    color: '#3b82f6',
-    fontWeight: '500'
+  centerLoadingText: {
+    marginTop: 14,
+    color: 'rgba(255, 255, 255, 0.75)',
+    fontSize: 14,
+    fontWeight: '500',
+    letterSpacing: 0.3,
+    textShadowColor: 'rgba(0, 0, 0, 0.8)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4
   },
 
   // ── Seek Ripple Burst Feedback ──
