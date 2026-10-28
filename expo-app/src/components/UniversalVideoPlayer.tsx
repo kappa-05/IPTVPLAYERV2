@@ -444,11 +444,12 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       setLoading(false);
     };
 
-    // Exit fullscreen listener for Apple devices
+    // Exit fullscreen listener for Apple devices (when user taps 'Done' in native AVPlayer)
     const handleWebkitEnd = () => {
       setIsFullscreen(false);
+      handleClose();
     };
-    video.addEventListener('webkitendfullscreen', handleWebkitEnd, { once: true });
+    video.addEventListener('webkitendfullscreen', handleWebkitEnd);
 
     // Apple AVPlayer HLS Engine (iPhone / iPad / Safari)
     if (isM3U8 && canNativeHls) {
@@ -535,6 +536,12 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
   const togglePlayPause = useCallback(() => {
     resetControlsTimer();
     if (Platform.OS === 'web' && webVideoRef.current) {
+      if (isIOS && typeof (webVideoRef.current as any).webkitEnterFullscreen === 'function') {
+        try {
+          (webVideoRef.current as any).webkitEnterFullscreen();
+          setIsFullscreen(true);
+        } catch (e) {}
+      }
       if (webVideoRef.current.paused) {
         webVideoRef.current.play().catch(() => {});
         setIsPlaying(true);
@@ -551,7 +558,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
         setIsPlaying(true);
       }
     }
-  }, [isPlaying, resetControlsTimer]);
+  }, [isPlaying, isIOS, resetControlsTimer]);
 
   // ── Mute / Unmute ──
   const toggleMute = useCallback(() => {
@@ -753,7 +760,13 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
         seekRelative(10);
       }
     } else {
-      // Single tap: toggle controls
+      // Single tap: toggle controls, and on iOS launch native player if not active
+      if (isIOS && webVideoRef.current && typeof (webVideoRef.current as any).webkitEnterFullscreen === 'function') {
+        try {
+          (webVideoRef.current as any).webkitEnterFullscreen();
+          setIsFullscreen(true);
+        } catch (err) {}
+      }
       if (showControls) {
         Animated.timing(controlsAnim, {
           toValue: 0,
@@ -795,7 +808,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
           />
         ) : null}
 
-        {/* Web HTML5 Video Engine */}
+        {/* Web HTML5 Video Engine (Plays native device AVPlayer on iOS when playsInline=false) */}
         {Platform.OS === 'web' ? (
           <video
             // @ts-ignore
@@ -806,8 +819,8 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
               backgroundColor: '#000',
               objectFit: 'contain'
             }}
-            playsInline={true}
-            controls={false}
+            playsInline={!isIOS}
+            controls={isIOS}
             autoPlay
           />
         ) : (
@@ -993,6 +1006,29 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
               </View>
 
               <View style={styles.topRight}>
+                {Platform.OS === 'web' && (
+                  <TouchableOpacity
+                    style={styles.glassBtn}
+                    onPress={() => {
+                      if (webVideoRef.current) {
+                        const v = webVideoRef.current as any;
+                        if (typeof v.webkitEnterFullscreen === 'function') {
+                          try {
+                            v.webkitEnterFullscreen();
+                            setIsFullscreen(true);
+                          } catch (e) {}
+                        } else if (typeof v.requestFullscreen === 'function') {
+                          v.requestFullscreen();
+                          setIsFullscreen(true);
+                        }
+                      }
+                    }}
+                  >
+                    <Ionicons name="phone-portrait-outline" size={16} color="#fff" />
+                    <Text style={styles.glassBtnText}>Player Dispositivo</Text>
+                  </TouchableOpacity>
+                )}
+
                 {isLive && onOpenEpg && (
                   <TouchableOpacity style={styles.glassBtn} onPress={onOpenEpg}>
                     <Ionicons name="calendar-outline" size={16} color="#fff" />

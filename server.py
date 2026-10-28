@@ -147,6 +147,7 @@ class HLSStreamManager:
         self.temp_root = os.path.join(tempfile.gettempdir(), 'iptv_hls_cache')
         os.makedirs(self.temp_root, exist_ok=True)
         self.sessions = {}
+        self.stream_info_cache = {}
         self.duration_cache = {}
         self.seg_locks = {}
         self.lock = threading.Lock()
@@ -188,13 +189,21 @@ class HLSStreamManager:
             for sid in list(self.sessions.keys()):
                 self._kill_session(sid)
 
-    def get_duration(self, target_url, hint_duration=0):
-        if hint_duration and hint_duration > 0:
-            self.duration_cache[target_url] = float(hint_duration)
-            return float(hint_duration)
+    def probe_stream(self, target_url, hint_duration=0):
+        """
+        Detects duration and whether video stream is HEVC/H.265.
+        Returns (duration, is_hevc).
+        """
+        cached = self.stream_info_cache.get(target_url)
+        if cached:
+            return cached
 
-        if target_url in self.duration_cache:
-            return self.duration_cache[target_url]
+        # Fast detection from URL keywords (common in IPTV 4K / UHD streams)
+        url_lower = target_url.lower()
+        is_hevc_url = any(k in url_lower for k in ('hevc', 'h265', '4k', 'uhd', '2160p', 'hdr'))
+
+        duration = float(hint_duration) if hint_duration and hint_duration > 0 else 7200.0
+        is_hevc = is_hevc_url
 
         ffprobe_path = find_ffprobe()
         if ffprobe_path:
@@ -207,7 +216,7 @@ class HLSStreamManager:
                         "-headers", "Accept: */*\r\n",
                         "-probesize", "2097152",
                         "-analyzeduration", "3000000",
-                        "-show_entries", "format=duration",
+                        "-show_entries", "format=duration:stream=codec_name,codec_type",
                         "-of", "json",
                         target_url
                     ]
@@ -219,31 +228,45 @@ class HLSStreamManager:
                         info = json.loads(res.stdout)
                         dur_str = info.get('format', {}).get('duration')
                         if dur_str:
-                            dur = float(dur_str)
-                            if dur > 0:
-                                self.duration_cache[target_url] = dur
-                                return dur
+                            d = float(dur_str)
+                            if d > 0:
+                                duration = d
+                        for s in info.get('streams', []):
+                            if s.get('codec_type') == 'video':
+                                codec = s.get('codec_name', '').lower()
+                                if codec in ('hevc', 'h265'):
+                                    is_hevc = True
+                                elif codec in ('h264', 'avc'):
+                                    is_hevc = False
+                                break
+                        break
                 except Exception:
                     pass
 
-        # Fallback default: 7200 seconds (2 hours)
-        default_dur = 7200.0
-        self.duration_cache[target_url] = default_dur
-        return default_dur
+        self.stream_info_cache[target_url] = (duration, is_hevc)
+        self.duration_cache[target_url] = duration
+        return duration, is_hevc
 
-    def get_vod_master_m3u8(self, target_url, duration, seg_duration=5.0):
+    def get_duration(self, target_url, hint_duration=0):
+        dur, _ = self.probe_stream(target_url, hint_duration)
+        return dur
+
+    def get_vod_master_m3u8(self, target_url, duration, seg_duration=6.0, is_hevc=False):
         sid = hashlib.md5(target_url.encode('utf-8')).hexdigest()[:12]
         sdir = os.path.join(self.temp_root, sid)
         os.makedirs(sdir, exist_ok=True)
 
         num_segments = max(1, int(math.ceil(duration / seg_duration)))
 
+        # HLS Version 7 with Fragmented MP4 (fMP4) and init.mp4
+        # Fully compliant with Apple HLS authoring specs and supports 4K HEVC hardware playback
         lines = [
             "#EXTM3U",
-            "#EXT-X-VERSION:3",
+            "#EXT-X-VERSION:7",
             f"#EXT-X-TARGETDURATION:{int(seg_duration) + 1}",
             "#EXT-X-MEDIA-SEQUENCE:0",
-            "#EXT-X-PLAYLIST-TYPE:VOD"
+            "#EXT-X-PLAYLIST-TYPE:VOD",
+            f'#EXT-X-MAP:URI="/api/hls/{sid}/init.mp4"'
         ]
 
         for i in range(num_segments):
@@ -254,7 +277,7 @@ class HLSStreamManager:
                 lines.append(f"#EXTINF:{last_dur:.6f},")
             else:
                 lines.append(f"#EXTINF:{seg_duration:.6f},")
-            lines.append(f"/api/hls/{sid}/seg_{i:04d}.ts")
+            lines.append(f"/api/hls/{sid}/seg_{i:04d}.m4s")
 
         lines.append("#EXT-X-ENDLIST")
         m3u8_bytes = ("\n".join(lines) + "\n").encode('utf-8')
@@ -268,11 +291,14 @@ class HLSStreamManager:
                     'num_segments': num_segments,
                     'dir': sdir,
                     'last_seen': time.time(),
-                    'proc': None
+                    'proc': None,
+                    'current_start_seg': 0,
+                    'is_hevc': is_hevc
                 }
             else:
                 self.sessions[sid]['last_seen'] = time.time()
                 self.sessions[sid]['duration'] = duration
+                self.sessions[sid]['is_hevc'] = is_hevc
 
         # Start continuous sequential background worker from segment 0
         self._ensure_background_worker(sid, target_url, sdir, start_seg=0)
@@ -309,7 +335,9 @@ class HLSStreamManager:
             clean_env.pop('http_proxy', None)
             clean_env.pop('https_proxy', None)
 
-            seg_duration = sess.get('seg_duration', 5.0)
+            seg_duration = sess.get('seg_duration', 6.0)
+            is_hevc = sess.get('is_hevc', False)
+
             cmd = [
                 ffmpeg_path,
                 "-y",
@@ -336,6 +364,12 @@ class HLSStreamManager:
             cmd.extend([
                 "-i", target_url,
                 "-c:v", "copy",
+            ])
+            # For HEVC/H.265, Apple AVPlayer and Safari strictly require the hvc1 tag
+            if is_hevc:
+                cmd.extend(["-tag:v", "hvc1"])
+
+            cmd.extend([
                 "-c:a", "aac",
                 "-b:a", "192k",
                 "-ac", "2",
@@ -343,9 +377,11 @@ class HLSStreamManager:
                 "-f", "hls",
                 "-hls_time", str(int(seg_duration)),
                 "-hls_list_size", "0",
+                "-hls_segment_type", "fmp4",
+                "-hls_fmp4_init_filename", "init.mp4",
                 "-hls_flags", "independent_segments",
                 "-start_number", str(start_seg),
-                "-hls_segment_filename", os.path.join(sdir, "seg_%04d.ts"),
+                "-hls_segment_filename", os.path.join(sdir, "seg_%04d.m4s"),
                 os.path.join(sdir, f"internal_{start_seg}.m3u8")
             ])
             try:
@@ -366,15 +402,16 @@ class HLSStreamManager:
                     'last_seen': time.time(),
                     'target_url': None,
                     'duration': 7200.0,
-                    'seg_duration': 5.0,
+                    'seg_duration': 6.0,
                     'proc': None,
-                    'current_start_seg': 0
+                    'current_start_seg': 0,
+                    'is_hevc': False
                 }
                 self.sessions[sid] = sess
             sess['last_seen'] = time.time()
             sdir = sess['dir']
             target_url = sess.get('target_url')
-            seg_duration = sess.get('seg_duration', 5.0)
+            seg_duration = sess.get('seg_duration', 6.0)
 
         seg_path = os.path.join(sdir, seg_name)
 
@@ -385,7 +422,24 @@ class HLSStreamManager:
         if not target_url:
             return None
 
-        m = re.match(r'seg_(\d+)\.ts', seg_name)
+        # Handle initialization fragment init.mp4
+        if seg_name == "init.mp4":
+            proc = sess.get('proc')
+            if not proc or proc.poll() is not None:
+                self._ensure_background_worker(sid, target_url, sdir, start_seg=0)
+            start_wait = time.time()
+            while time.time() - start_wait < 25.0:
+                if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
+                    return seg_path
+                time.sleep(0.1)
+                proc = sess.get('proc')
+                if proc and proc.poll() is not None and (not os.path.exists(seg_path) or os.path.getsize(seg_path) == 0):
+                    self._ensure_background_worker(sid, target_url, sdir, start_seg=0)
+            if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
+                return seg_path
+            return None
+
+        m = re.match(r'seg_(\d+)\.(?:m4s|ts)', seg_name)
         if not m:
             return None
         seg_idx = int(m.group(1))
@@ -405,7 +459,7 @@ class HLSStreamManager:
         while time.time() - start_wait < 35.0:
             if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
                 return seg_path
-            time.sleep(0.2)
+            time.sleep(0.15)
             # If worker terminated unexpectedly, try to restart it once
             proc = sess.get('proc')
             if proc and proc.poll() is not None:
@@ -898,9 +952,16 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         if start_seconds > 0:
             cmd.extend(["-ss", str(start_seconds)])
 
+        is_hevc = any(k in target_url.lower() for k in ('hevc', 'h265', '4k', 'uhd', '2160p', 'hdr'))
+
         cmd.extend([
             "-i", target_url,
             "-c:v", "copy",
+        ])
+        if is_hevc:
+            cmd.extend(["-tag:v", "hvc1"])
+
+        cmd.extend([
             "-c:a", "aac",
             "-b:a", "192k",
             "-ac", "2",
@@ -959,11 +1020,11 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         if target_url.startswith(('http%3A', 'https%3A')) or '%2F' in target_url:
             target_url = urllib.parse.unquote(target_url)
 
-        dur = HLS_STREAM_MGR.get_duration(target_url)
+        dur, is_hevc = HLS_STREAM_MGR.probe_stream(target_url)
         self.send_response(200)
         self.end_cors_headers()
         self.end_headers()
-        self.wfile.write(json.dumps({"duration": dur}).encode('utf-8'))
+        self.wfile.write(json.dumps({"duration": dur, "is_hevc": is_hevc}).encode('utf-8'))
 
     def do_HEAD(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -972,7 +1033,13 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
-            self.send_header('Content-Type', 'application/vnd.apple.mpegurl' if path.endswith('.m3u8') else 'video/mp2t')
+            if path.endswith('.m3u8'):
+                ct = 'application/vnd.apple.mpegurl'
+            elif path.endswith('.ts'):
+                ct = 'video/mp2t'
+            else:
+                ct = 'video/mp4'
+            self.send_header('Content-Type', ct)
             self.send_header('Accept-Ranges', 'bytes')
             self.end_headers()
             return
@@ -1022,8 +1089,8 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                     except Exception:
                         hint_dur = 0.0
 
-                duration = HLS_STREAM_MGR.get_duration(target_url, hint_dur)
-                sid, m3u8_bytes = HLS_STREAM_MGR.get_vod_master_m3u8(target_url, duration, seg_duration=6.0)
+                duration, is_hevc = HLS_STREAM_MGR.probe_stream(target_url, hint_dur)
+                sid, m3u8_bytes = HLS_STREAM_MGR.get_vod_master_m3u8(target_url, duration, seg_duration=6.0, is_hevc=is_hevc)
 
                 self.send_response(200)
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -1035,7 +1102,7 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 self.wfile.write(m3u8_bytes)
                 return
 
-        # Serve HLS Segment chunks: /api/hls/{sid}/{segment.ts}
+        # Serve HLS Segment chunks: /api/hls/{sid}/{segment.m4s or init.mp4 or .ts}
         if path.startswith('/api/hls/'):
             parts = [p for p in path.split('/') if p]
             if len(parts) >= 4:
@@ -1048,7 +1115,8 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                         self.send_response(200)
                         self.send_header('Access-Control-Allow-Origin', '*')
                         self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
-                        self.send_header('Content-Type', 'video/mp2t')
+                        ct = 'video/mp2t' if seg_name.endswith('.ts') else 'video/mp4'
+                        self.send_header('Content-Type', ct)
                         self.send_header('Content-Length', str(file_size))
                         self.send_header('Accept-Ranges', 'bytes')
                         self.send_header('Cache-Control', 'public, max-age=3600')
