@@ -5,7 +5,8 @@ import {
   StyleSheet,
   FlatList,
   ActivityIndicator,
-  useWindowDimensions
+  useWindowDimensions,
+  Platform
 } from 'react-native';
 import { colors } from '../theme/colors';
 import {
@@ -54,6 +55,7 @@ interface DesktopAppProps {
   onPressHistoryItem?: (item: WatchHistoryItem) => void;
   onRemoveHistoryItem?: (id: string) => void;
   onToggleMobileMode?: () => void;
+  onOpenInstallPwa?: () => void;
 }
 
 export const DesktopApp: React.FC<DesktopAppProps> = ({
@@ -84,7 +86,8 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
   history = [],
   onPressHistoryItem,
   onRemoveHistoryItem,
-  onToggleMobileMode
+  onToggleMobileMode,
+  onOpenInstallPwa
 }) => {
   const { width } = useWindowDimensions();
 
@@ -164,6 +167,7 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
         onLogout={onLogout}
         onRefresh={onRefresh}
         onToggleMobileMode={onToggleMobileMode}
+        onOpenInstallPwa={onOpenInstallPwa}
         counts={{
           live: activeTab === 'live' ? displayedItems.length : undefined,
           vod: activeTab === 'vod' ? displayedItems.length : undefined,
@@ -239,6 +243,11 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
                   showsVerticalScrollIndicator={false}
                   refreshing={refreshing}
                   onRefresh={onRefresh}
+                  windowSize={5}
+                  initialNumToRender={18}
+                  maxToRenderPerBatch={18}
+                  removeClippedSubviews={Platform.OS !== 'web'}
+                  updateCellsBatchingPeriod={50}
                   ListHeaderComponent={
                     (activeTab === 'vod' || activeTab === 'series') && relevantHistory.length > 0 && onPressHistoryItem && onRemoveHistoryItem ? (
                       <ContinueWatchingRow

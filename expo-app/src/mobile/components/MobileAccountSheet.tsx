@@ -19,6 +19,7 @@ interface MobileAccountSheetProps {
   onRefresh: () => void;
   onToggleDesktopMode: () => void;
   onLogout: () => void;
+  onOpenInstallPwa?: () => void;
 }
 
 export const MobileAccountSheet: React.FC<MobileAccountSheetProps> = ({
@@ -28,7 +29,8 @@ export const MobileAccountSheet: React.FC<MobileAccountSheetProps> = ({
   onOpenLogin,
   onRefresh,
   onToggleDesktopMode,
-  onLogout
+  onLogout,
+  onOpenInstallPwa
 }) => {
   if (!visible) return null;
 
@@ -117,6 +119,23 @@ export const MobileAccountSheet: React.FC<MobileAccountSheetProps> = ({
               <View style={styles.actionTextWrapper}>
                 <Text style={styles.actionTitle}>Passa alla Versione PC</Text>
                 <Text style={styles.actionSub}>Visualizza l'interfaccia classica desktop</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.actionRow}
+              onPress={() => {
+                onClose();
+                onOpenInstallPwa?.();
+              }}
+            >
+              <View style={[styles.actionIconWrapper, { backgroundColor: 'rgba(234, 179, 8, 0.12)' }]}>
+                <Ionicons name="phone-portrait-outline" size={18} color="#eab308" />
+              </View>
+              <View style={styles.actionTextWrapper}>
+                <Text style={styles.actionTitle}>Aggiungi a Schermata Home</Text>
+                <Text style={styles.actionSub}>Installa come app a tutto schermo senza barre</Text>
               </View>
               <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
             </TouchableOpacity>

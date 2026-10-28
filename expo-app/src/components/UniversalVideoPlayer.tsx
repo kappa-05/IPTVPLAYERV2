@@ -355,16 +355,54 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
           const parts = rawUrl.split('/api/hls/master.m3u8?url=')[1];
           rawUrl = decodeURIComponent(parts.split('&')[0]);
         }
-        if (rawUrl.startsWith('http')) {
           fetch(`/api/media_info?url=${encodeURIComponent(rawUrl)}`)
             .then(res => res.json())
             .then(data => {
-              if (data && data.duration && data.duration > 0 && isFinite(data.duration)) {
-                setDuration(data.duration);
+              if (data) {
+                if (data.duration && data.duration > 0 && isFinite(data.duration)) {
+                  setDuration(data.duration);
+                }
+                // Discovered Audio Tracks from source file
+                if (data.audio_tracks && Array.isArray(data.audio_tracks) && data.audio_tracks.length > 0) {
+                  const aList: MediaTrack[] = data.audio_tracks.map((t: any, idx: number) => ({
+                    id: idx,
+                    label: t.title || t.language || `Traccia ${idx + 1}`,
+                    language: t.language || '',
+                    active: idx === 0
+                  }));
+                  setAudioTracks(aList);
+                  setActiveAudioTrack(0);
+                }
+                // Discovered Subtitle Tracks from source file & dynamic injection for device player
+                if (data.subtitle_tracks && Array.isArray(data.subtitle_tracks) && data.subtitle_tracks.length > 0) {
+                  const sList: MediaTrack[] = data.subtitle_tracks.map((t: any, idx: number) => ({
+                    id: idx,
+                    label: t.title || t.language || `Sottotitolo ${idx + 1}`,
+                    language: t.language || '',
+                    active: false
+                  }));
+                  setSubtitleTracks(sList);
+
+                  // Inject <track> DOM elements into HTML5 <video> so native device players (AVPlayer / Android) show subtitles!
+                  if (webVideoRef.current) {
+                    const vid = webVideoRef.current;
+                    const existingTracks = vid.querySelectorAll('track');
+                    existingTracks.forEach(tr => tr.remove());
+
+                    data.subtitle_tracks.forEach((sub: any, idx: number) => {
+                      const trackEl = document.createElement('track');
+                      trackEl.kind = 'subtitles';
+                      trackEl.label = sub.title || sub.language || `Sottotitolo ${idx + 1}`;
+                      trackEl.srclang = sub.language || 'it';
+                      trackEl.src = `/api/subtitles?url=${encodeURIComponent(rawUrl)}&track_index=${sub.stream_index !== undefined ? sub.stream_index : idx}`;
+                      trackEl.default = false;
+                      vid.appendChild(trackEl);
+                    });
+                  }
+                }
               }
             })
             .catch(() => {});
-        }
       }
 
       // 3. Play Cinematic Open Animation
@@ -688,9 +726,19 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     // Exit fullscreen listener for Apple devices (when user taps 'Done' in native AVPlayer)
     const handleWebkitEnd = () => {
       setIsFullscreen(false);
+      video.controls = false;
       handleClose();
     };
     video.addEventListener('webkitendfullscreen', handleWebkitEnd);
+
+    const handleFullscreenChange = () => {
+      const isFs = Boolean(document.fullscreenElement);
+      setIsFullscreen(isFs);
+      if (!isFs) {
+        video.controls = false;
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
 
     // Apple AVPlayer HLS Engine (iPhone / iPad / Safari)
     if (isM3U8 && canNativeHls) {
@@ -821,6 +869,8 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     if (Platform.OS === 'web') {
       const vid = targetVid || webVideoRef.current;
       if (vid) {
+        // Enable native controls when entering device player so audio & subtitle pickers are visible
+        vid.controls = true;
         if (isIOS && typeof (vid as any).webkitEnterFullscreen === 'function') {
           try {
             (vid as any).webkitEnterFullscreen();

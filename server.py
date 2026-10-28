@@ -38,6 +38,24 @@ NO_PROXY_OPENER = urllib.request.build_opener(
     urllib.request.HTTPSHandler(context=SSL_UNVERIFIED_CTX)
 )
 
+# Persistent connection pool for high-speed API & proxy requests
+try:
+    import requests
+    import requests.adapters
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    GLOBAL_SESSION = requests.Session()
+    _adapter = requests.adapters.HTTPAdapter(pool_connections=60, pool_maxsize=60, max_retries=1)
+    GLOBAL_SESSION.mount("http://", _adapter)
+    GLOBAL_SESSION.mount("https://", _adapter)
+except Exception:
+    GLOBAL_SESSION = None
+
+# High-speed in-memory API cache (3 minutes TTL) to make category and stream switching instant
+API_CACHE = {}
+API_CACHE_LOCK = threading.Lock()
+API_CACHE_TTL = 180
+
 def find_ffmpeg():
     """Detect FFmpeg executable in PATH or WinGet installation directory."""
     p = shutil.which("ffmpeg")
@@ -191,8 +209,8 @@ class HLSStreamManager:
 
     def probe_stream(self, target_url, hint_duration=0):
         """
-        Detects duration and whether video stream is HEVC/H.265.
-        Returns (duration, is_hevc).
+        Detects duration, HEVC/H.264 codec, all audio tracks, and all subtitle tracks.
+        Returns (duration, is_hevc, audio_tracks, subtitle_tracks).
         """
         cached = self.stream_info_cache.get(target_url)
         if cached:
@@ -204,6 +222,8 @@ class HLSStreamManager:
 
         duration = float(hint_duration) if hint_duration and hint_duration > 0 else 7200.0
         is_hevc = is_hevc_url
+        audio_tracks = []
+        subtitle_tracks = []
 
         ffprobe_path = find_ffprobe()
         if ffprobe_path:
@@ -216,7 +236,7 @@ class HLSStreamManager:
                         "-headers", "Accept: */*\r\n",
                         "-probesize", "2097152",
                         "-analyzeduration", "3000000",
-                        "-show_entries", "format=duration:stream=codec_name,codec_type",
+                        "-show_entries", "format=duration:stream=index,codec_name,codec_type:stream_tags=language,title,handler_name",
                         "-of", "json",
                         target_url
                     ]
@@ -232,23 +252,43 @@ class HLSStreamManager:
                             if d > 0:
                                 duration = d
                         for s in info.get('streams', []):
-                            if s.get('codec_type') == 'video':
+                            ctype = s.get('codec_type')
+                            tags = s.get('tags') or {}
+                            lang = tags.get('language', '')
+                            title = tags.get('title') or tags.get('handler_name')
+                            if ctype == 'video':
                                 codec = s.get('codec_name', '').lower()
                                 if codec in ('hevc', 'h265'):
                                     is_hevc = True
                                 elif codec in ('h264', 'avc'):
                                     is_hevc = False
-                                break
+                            elif ctype == 'audio':
+                                audio_tracks.append({
+                                    'index': s.get('index'),
+                                    'stream_index': len(audio_tracks),
+                                    'codec': s.get('codec_name', ''),
+                                    'language': lang,
+                                    'title': title or (f"Audio {lang.upper()}" if lang else f"Traccia {len(audio_tracks) + 1}")
+                                })
+                            elif ctype == 'subtitle':
+                                subtitle_tracks.append({
+                                    'index': s.get('index'),
+                                    'stream_index': len(subtitle_tracks),
+                                    'codec': s.get('codec_name', ''),
+                                    'language': lang,
+                                    'title': title or (f"Sottotitolo {lang.upper()}" if lang else f"Sottotitolo {len(subtitle_tracks) + 1}")
+                                })
                         break
                 except Exception:
                     pass
 
-        self.stream_info_cache[target_url] = (duration, is_hevc)
+        res_tuple = (duration, is_hevc, audio_tracks, subtitle_tracks)
+        self.stream_info_cache[target_url] = res_tuple
         self.duration_cache[target_url] = duration
-        return duration, is_hevc
+        return res_tuple
 
     def get_duration(self, target_url, hint_duration=0):
-        dur, _ = self.probe_stream(target_url, hint_duration)
+        dur = self.probe_stream(target_url, hint_duration)[0]
         return dur
 
     def get_vod_master_m3u8(self, target_url, duration, seg_duration=6.0, is_hevc=False):
@@ -363,6 +403,8 @@ class HLSStreamManager:
 
             cmd.extend([
                 "-i", target_url,
+                "-map", "0:v:0",
+                "-map", "0:a?",
                 "-c:v", "copy",
             ])
             # For HEVC/H.265, Apple AVPlayer and Safari strictly require the hvc1 tag
@@ -554,6 +596,34 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             ('action=' in lower_url and not is_media_stream)
         )
 
+        # High-speed API Cache lookup for instant category & stream list retrieval
+        if is_api_request:
+            with API_CACHE_LOCK:
+                cached_entry = API_CACHE.get(target_url)
+                if cached_entry:
+                    c_time, c_status, c_type, c_body = cached_entry
+                    if time.time() - c_time < API_CACHE_TTL:
+                        self.send_response(c_status)
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
+                        self.send_header('Access-Control-Allow-Headers', '*')
+                        self.send_header('Access-Control-Expose-Headers', '*')
+                        self.send_header('Content-Type', c_type)
+                        accept_enc = self.headers.get('Accept-Encoding', '').lower()
+                        if 'gzip' in accept_enc and len(c_body) > 1024:
+                            gz_data = gzip.compress(c_body)
+                            self.send_header('Content-Encoding', 'gzip')
+                            self.send_header('Content-Length', str(len(gz_data)))
+                            self.end_headers()
+                            if not is_head:
+                                self.wfile.write(gz_data)
+                        else:
+                            self.send_header('Content-Length', str(len(c_body)))
+                            self.end_headers()
+                            if not is_head:
+                                self.wfile.write(c_body)
+                        return
+
         # HTML5 browsers (especially Safari on iOS) cannot demux or play MKV/AVI containers natively.
         # If ffmpeg is available, transparently delegate to ffmpeg real-time remuxer to output progressive MP4!
         if is_mkv and find_ffmpeg():
@@ -570,28 +640,26 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         if 'Range' in self.headers:
             req_headers['Range'] = self.headers['Range']
 
-        # 1. Primary engine: requests (supports automatic gzip decompression, SSL bypass, redirects)
+        # 1. Primary engine: connection-pooled session (supports automatic gzip decompression, SSL bypass, redirects)
         try:
-            import requests
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            http_client = GLOBAL_SESSION if GLOBAL_SESSION else requests
 
-            resp = requests.get(
+            resp = http_client.get(
                 target_url,
                 headers=req_headers,
                 stream=True,
-                timeout=25,
+                timeout=20,
                 verify=False,
                 allow_redirects=True
             )
             # If IPTV server blocks the initial User-Agent with 403, retry with VLC User-Agent
             if resp.status_code == 403:
                 req_headers['User-Agent'] = 'VLC/3.0.20 LibVLC/3.0.20'
-                resp = requests.get(
+                resp = http_client.get(
                     target_url,
                     headers=req_headers,
                     stream=True,
-                    timeout=25,
+                    timeout=20,
                     verify=False,
                     allow_redirects=True
                 )
@@ -628,19 +696,33 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                     except Exception:
                         pass
 
-            # For JSON API requests, deliver decompressed content cleanly
+            # For JSON API requests, deliver decompressed content cleanly and cache in memory
             if is_api_request or 'application/json' in content_type.lower():
                 body_bytes = resp.content  # requests handles gzip/deflate automatically
+                if status_code == 200:
+                    with API_CACHE_LOCK:
+                        API_CACHE[target_url] = (time.time(), status_code, content_type, body_bytes)
+
                 self.send_response(status_code)
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
                 self.send_header('Access-Control-Allow-Headers', '*')
                 self.send_header('Access-Control-Expose-Headers', '*')
                 self.send_header('Content-Type', content_type)
-                self.send_header('Content-Length', str(len(body_bytes)))
-                self.end_headers()
-                if not is_head:
-                    self.wfile.write(body_bytes)
+
+                accept_enc = self.headers.get('Accept-Encoding', '').lower()
+                if 'gzip' in accept_enc and len(body_bytes) > 1024:
+                    gz_data = gzip.compress(body_bytes)
+                    self.send_header('Content-Encoding', 'gzip')
+                    self.send_header('Content-Length', str(len(gz_data)))
+                    self.end_headers()
+                    if not is_head:
+                        self.wfile.write(gz_data)
+                else:
+                    self.send_header('Content-Length', str(len(body_bytes)))
+                    self.end_headers()
+                    if not is_head:
+                        self.wfile.write(body_bytes)
                 return
 
             # For regular streams (TS, MP4, MKV)
@@ -1020,11 +1102,75 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         if target_url.startswith(('http%3A', 'https%3A')) or '%2F' in target_url:
             target_url = urllib.parse.unquote(target_url)
 
-        dur, is_hevc = HLS_STREAM_MGR.probe_stream(target_url)
+        dur, is_hevc, audio_tracks, subtitle_tracks = HLS_STREAM_MGR.probe_stream(target_url)
         self.send_response(200)
         self.end_cors_headers()
         self.end_headers()
-        self.wfile.write(json.dumps({"duration": dur, "is_hevc": is_hevc}).encode('utf-8'))
+        self.wfile.write(json.dumps({
+            "duration": dur,
+            "is_hevc": is_hevc,
+            "audio_tracks": audio_tracks,
+            "subtitle_tracks": subtitle_tracks
+        }).encode('utf-8'))
+
+    def handle_subtitles(self):
+        parsed = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
+        target_url = qs.get('url', [None])[0]
+        track_idx = qs.get('track_index', ['0'])[0]
+        if not target_url:
+            self.send_response(400)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Content-Type', 'text/vtt; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(b'WEBVTT\n\n')
+            return
+
+        if target_url.startswith(('http%3A', 'https%3A')) or '%2F' in target_url:
+            target_url = urllib.parse.unquote(target_url)
+
+        ffmpeg_path = find_ffmpeg()
+        if not ffmpeg_path:
+            self.send_response(200)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Content-Type', 'text/vtt; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(b'WEBVTT\n\n')
+            return
+
+        clean_env = os.environ.copy()
+        clean_env.pop('http_proxy', None)
+        clean_env.pop('https_proxy', None)
+
+        cmd = [
+            ffmpeg_path,
+            "-y",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-user_agent", "IPTVSmartersPlayer",
+            "-headers", "Accept: */*\r\n",
+            "-i", target_url,
+            "-map", f"0:s:{track_idx}",
+            "-f", "webvtt",
+            "-"
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, timeout=12.0, env=clean_env)
+            vtt_data = res.stdout if (res.stdout and res.stdout.startswith(b'WEBVTT')) else b'WEBVTT\n\n'
+            self.send_response(200)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+            self.send_header('Content-Type', 'text/vtt; charset=utf-8')
+            self.send_header('Content-Length', str(len(vtt_data)))
+            self.send_header('Cache-Control', 'public, max-age=7200')
+            self.end_headers()
+            self.wfile.write(vtt_data)
+        except Exception:
+            self.send_response(200)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Content-Type', 'text/vtt; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(b'WEBVTT\n\n')
 
     def do_HEAD(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -1089,7 +1235,7 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                     except Exception:
                         hint_dur = 0.0
 
-                duration, is_hevc = HLS_STREAM_MGR.probe_stream(target_url, hint_dur)
+                duration, is_hevc, audio_tracks, subtitle_tracks = HLS_STREAM_MGR.probe_stream(target_url, hint_dur)
                 sid, m3u8_bytes = HLS_STREAM_MGR.get_vod_master_m3u8(target_url, duration, seg_duration=6.0, is_hevc=is_hevc)
 
                 self.send_response(200)
@@ -1152,6 +1298,11 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         # 3. Media Metadata Probe: /api/media_info?url=<TARGET_URL>
         if path == '/api/media_info':
             self.handle_media_info()
+            return
+
+        # 3b. Real-time Subtitle WebVTT Extractor: /api/subtitles?url=<TARGET_URL>&track_index=<IDX>
+        if path == '/api/subtitles':
+            self.handle_subtitles()
             return
 
         # 4. Direct Launch in VLC Media Player: /api/open_vlc?url=<TARGET_URL>

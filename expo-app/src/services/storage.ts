@@ -11,6 +11,9 @@ const KEYS = {
   HISTORY: (accId: string) => `${PREFIX}history_${accId}`
 };
 
+// High-speed in-memory cache for instant O(1) tab and category switching without JSON re-parsing
+const memoryCache = new Map<string, { data: any; timestamp: number }>();
+
 export class StorageService {
   // --- ACCOUNTS ---
   static async getAccounts(): Promise<Account[]> {
@@ -70,12 +73,18 @@ export class StorageService {
 
   // --- CATEGORIES CACHE ---
   static async getCachedCategories(accId: string, type: MediaType): Promise<Category[] | null> {
+    const key = KEYS.CATEGORIES_CACHE(accId, type);
+    const inMem = memoryCache.get(key);
+    if (inMem && Date.now() - inMem.timestamp < 24 * 60 * 60 * 1000) {
+      return inMem.data;
+    }
+
     try {
-      const raw = await AsyncStorage.getItem(KEYS.CATEGORIES_CACHE(accId, type));
+      const raw = await AsyncStorage.getItem(key);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      // Valid for 24h
       if (Date.now() - parsed.timestamp < 24 * 60 * 60 * 1000) {
+        memoryCache.set(key, parsed);
         return parsed.data;
       }
       return null;
@@ -85,24 +94,33 @@ export class StorageService {
   }
 
   static async cacheCategories(accId: string, type: MediaType, data: Category[]): Promise<void> {
+    const key = KEYS.CATEGORIES_CACHE(accId, type);
+    memoryCache.set(key, { data, timestamp: Date.now() });
+
     try {
-      await AsyncStorage.setItem(KEYS.CATEGORIES_CACHE(accId, type), JSON.stringify({
+      await AsyncStorage.setItem(key, JSON.stringify({
         data,
         timestamp: Date.now()
       }));
     } catch (e) {
-      console.error('Failed to cache categories:', e);
+      // Ignore quota errors gracefully
     }
   }
 
   // --- STREAMS CACHE ---
   static async getCachedStreams(accId: string, type: MediaType, catId: string): Promise<any[] | null> {
+    const key = KEYS.STREAMS_CACHE(accId, type, catId);
+    const inMem = memoryCache.get(key);
+    if (inMem && Date.now() - inMem.timestamp < 6 * 60 * 60 * 1000) {
+      return inMem.data;
+    }
+
     try {
-      const raw = await AsyncStorage.getItem(KEYS.STREAMS_CACHE(accId, type, catId));
+      const raw = await AsyncStorage.getItem(key);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      // Valid for 6h
       if (Date.now() - parsed.timestamp < 6 * 60 * 60 * 1000) {
+        memoryCache.set(key, parsed);
         return parsed.data;
       }
       return null;
@@ -112,17 +130,21 @@ export class StorageService {
   }
 
   static async cacheStreams(accId: string, type: MediaType, catId: string, data: any[]): Promise<void> {
+    const key = KEYS.STREAMS_CACHE(accId, type, catId);
+    memoryCache.set(key, { data, timestamp: Date.now() });
+
     try {
-      await AsyncStorage.setItem(KEYS.STREAMS_CACHE(accId, type, catId), JSON.stringify({
+      await AsyncStorage.setItem(key, JSON.stringify({
         data,
         timestamp: Date.now()
       }));
     } catch (e) {
-      console.error('Failed to cache streams:', e);
+      // Ignore quota errors gracefully
     }
   }
 
   static async clearCache(accId: string): Promise<void> {
+    memoryCache.clear();
     try {
       const allKeys = await AsyncStorage.getAllKeys();
       const keysToDelete = allKeys.filter(k => 

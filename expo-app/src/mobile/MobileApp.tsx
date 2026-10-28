@@ -54,6 +54,7 @@ interface MobileAppProps {
   onPressHistoryItem?: (item: WatchHistoryItem) => void;
   onRemoveHistoryItem?: (id: string) => void;
   onToggleDesktopMode: () => void;
+  onOpenInstallPwa?: () => void;
 }
 
 export const MobileApp: React.FC<MobileAppProps> = ({
@@ -80,7 +81,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   history = [],
   onPressHistoryItem,
   onRemoveHistoryItem,
-  onToggleDesktopMode
+  onToggleDesktopMode,
+  onOpenInstallPwa
 }) => {
   const { width } = useWindowDimensions();
   const isTablet = width >= 600;
@@ -312,6 +314,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         onRefresh={onRefresh}
         onToggleDesktopMode={onToggleDesktopMode}
         onLogout={onLogout}
+        onOpenInstallPwa={onOpenInstallPwa}
       />
     </View>
   );

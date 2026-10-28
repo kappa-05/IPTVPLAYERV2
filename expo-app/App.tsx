@@ -34,12 +34,15 @@ import { LoginModal } from './src/components/LoginModal';
 import { SeriesDetailsModal } from './src/components/SeriesDetailsModal';
 import { UniversalVideoPlayer } from './src/components/UniversalVideoPlayer';
 import { EpgModal } from './src/components/EpgModal';
+import { PwaInstallModal } from './src/components/PwaInstallModal';
+import { PwaInstallService } from './src/services/pwa';
 
 export default function App() {
   const { width } = useWindowDimensions();
 
   // Device Mode: 'auto' | 'mobile' | 'desktop'
   const [deviceMode, setDeviceMode] = useState<'auto' | 'mobile' | 'desktop'>('auto');
+  const [pwaModalVisible, setPwaModalVisible] = useState(false);
 
   // Load saved preference
   useEffect(() => {
@@ -155,30 +158,6 @@ export default function App() {
   const loadFavorites = async (accountId: string) => {
     const favs = await StorageService.getFavorites(accountId);
     setFavorites(favs);
-  };
-
-  // Pre-load EPG for visible live channels
-  useEffect(() => {
-    if (activeTab === 'live' && account && streams.length > 0) {
-      loadLiveEPGs(streams.slice(0, 30));
-    }
-  }, [activeTab, streams, account]);
-
-  const loadLiveEPGs = async (liveList: LiveStream[]) => {
-    if (!account) return;
-    const updates: Record<string, EPGChannelSchedule> = {};
-    for (const st of liveList) {
-      const sid = String(st.stream_id);
-      if (!epgMap[sid]) {
-        try {
-          const sched = await EPGService.getChannelEPG(account, st);
-          updates[sid] = sched;
-        } catch {}
-      }
-    }
-    if (Object.keys(updates).length > 0) {
-      setEpgMap(prev => ({ ...prev, ...updates }));
-    }
   };
 
   // Load Categories & Streams when tab or account changes
@@ -457,6 +436,13 @@ export default function App() {
     loadHistory(account.id);
   }, [account, loadHistory]);
 
+  const handleOpenInstallPwa = useCallback(async () => {
+    const res = await PwaInstallService.promptInstall();
+    if (res === 'ios_guide' || !PwaInstallService.canInstall()) {
+      setPwaModalVisible(true);
+    }
+  }, []);
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
@@ -488,6 +474,7 @@ export default function App() {
           onOpenLogin={() => setLoginModalVisible(true)}
           onLogout={handleLogout}
           onToggleDesktopMode={() => handleSetDeviceMode('desktop')}
+          onOpenInstallPwa={handleOpenInstallPwa}
         />
       ) : (
         <DesktopApp
@@ -519,6 +506,7 @@ export default function App() {
           onOpenLogin={() => setLoginModalVisible(true)}
           onLogout={handleLogout}
           onToggleMobileMode={() => handleSetDeviceMode('mobile')}
+          onOpenInstallPwa={handleOpenInstallPwa}
         />
       )}
 
@@ -571,6 +559,13 @@ export default function App() {
         visible={loginModalVisible}
         onClose={() => setLoginModalVisible(false)}
         onLoginSuccess={handleLoginSuccess}
+      />
+
+      <PwaInstallModal
+        visible={pwaModalVisible}
+        onClose={() => setPwaModalVisible(false)}
+        isIOS={PwaInstallService.isIOS()}
+        onInstallNative={() => PwaInstallService.promptInstall()}
       />
     </SafeAreaView>
   );

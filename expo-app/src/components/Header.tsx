@@ -14,6 +14,7 @@ interface HeaderProps {
   onLogout: () => void;
   onRefresh: () => void;
   onToggleMobileMode?: () => void;
+  onOpenInstallPwa?: () => void;
   counts?: {
     live?: number;
     vod?: number;
@@ -32,6 +33,7 @@ export const Header: React.FC<HeaderProps> = ({
   onLogout,
   onRefresh,
   onToggleMobileMode,
+  onOpenInstallPwa,
   counts
 }) => {
   const { width } = useWindowDimensions();
@@ -71,6 +73,16 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Action Buttons */}
         <View style={styles.actionsContainer}>
+          {onOpenInstallPwa && (
+            <TouchableOpacity
+              style={[styles.actionBtn, { borderColor: 'rgba(234, 179, 8, 0.4)' }]}
+              onPress={onOpenInstallPwa}
+              accessibilityLabel="Aggiungi alla schermata Home / Installa App"
+            >
+              <Ionicons name="download-outline" size={16} color="#eab308" />
+            </TouchableOpacity>
+          )}
+
           {onToggleMobileMode && (
             <TouchableOpacity
               style={styles.actionBtn}
