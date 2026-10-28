@@ -205,6 +205,8 @@ class HLSStreamManager:
                         "-v", "error",
                         "-user_agent", ua,
                         "-headers", "Accept: */*\r\n",
+                        "-probesize", "2097152",
+                        "-analyzeduration", "3000000",
                         "-show_entries", "format=duration",
                         "-of", "json",
                         target_url
@@ -212,7 +214,7 @@ class HLSStreamManager:
                     clean_env = os.environ.copy()
                     clean_env.pop('http_proxy', None)
                     clean_env.pop('https_proxy', None)
-                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=3.5, env=clean_env)
+                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=5.0, env=clean_env)
                     if res.stdout:
                         info = json.loads(res.stdout)
                         dur_str = info.get('format', {}).get('duration')
@@ -229,7 +231,7 @@ class HLSStreamManager:
         self.duration_cache[target_url] = default_dur
         return default_dur
 
-    def get_vod_master_m3u8(self, target_url, duration, seg_duration=6.0):
+    def get_vod_master_m3u8(self, target_url, duration, seg_duration=5.0):
         sid = hashlib.md5(target_url.encode('utf-8')).hexdigest()[:12]
         sdir = os.path.join(self.temp_root, sid)
         os.makedirs(sdir, exist_ok=True)
@@ -273,18 +275,31 @@ class HLSStreamManager:
                 self.sessions[sid]['duration'] = duration
 
         # Start continuous sequential background worker from segment 0
-        self._ensure_background_worker(sid, target_url, sdir)
+        self._ensure_background_worker(sid, target_url, sdir, start_seg=0)
 
         return sid, m3u8_bytes
 
-    def _ensure_background_worker(self, sid, target_url, sdir):
+    def _ensure_background_worker(self, sid, target_url, sdir, start_seg=0):
         with self.lock:
             sess = self.sessions.get(sid)
             if not sess:
                 return
             proc = sess.get('proc')
+            cur_start = sess.get('current_start_seg', 0)
+            # If a worker is already running from or near this position, let it continue
             if proc and proc.poll() is None:
-                return
+                if 0 <= (start_seg - cur_start) <= 5:
+                    return
+                # Otherwise terminate old worker before seeking to new position to avoid duplicate connections!
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=1)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                sess['proc'] = None
 
             ffmpeg_path = find_ffmpeg()
             if not ffmpeg_path:
@@ -294,10 +309,12 @@ class HLSStreamManager:
             clean_env.pop('http_proxy', None)
             clean_env.pop('https_proxy', None)
 
+            seg_duration = sess.get('seg_duration', 5.0)
             cmd = [
                 ffmpeg_path,
+                "-y",
                 "-hide_banner",
-                "-loglevel", "error",
+                "-loglevel", "warning",
             ]
             if target_url.startswith(('http://', 'https://')):
                 cmd.extend([
@@ -305,9 +322,17 @@ class HLSStreamManager:
                     "-reconnect_at_eof", "1",
                     "-reconnect_streamed", "1",
                     "-reconnect_delay_max", "5",
+                    "-probesize", "2097152",
+                    "-analyzeduration", "3000000",
+                    "-fflags", "+nobuffer+fastseek+discardcorrupt",
                     "-user_agent", "IPTVSmartersPlayer",
                     "-headers", "Accept: */*\r\n",
                 ])
+
+            if start_seg > 0:
+                seek_secs = start_seg * seg_duration
+                cmd.extend(["-ss", f"{seek_secs:.2f}"])
+
             cmd.extend([
                 "-i", target_url,
                 "-c:v", "copy",
@@ -316,14 +341,16 @@ class HLSStreamManager:
                 "-ac", "2",
                 "-avoid_negative_ts", "make_zero",
                 "-f", "hls",
-                "-hls_time", "6",
+                "-hls_time", str(int(seg_duration)),
                 "-hls_list_size", "0",
                 "-hls_flags", "independent_segments",
+                "-start_number", str(start_seg),
                 "-hls_segment_filename", os.path.join(sdir, "seg_%04d.ts"),
-                os.path.join(sdir, "internal_work.m3u8")
+                os.path.join(sdir, f"internal_{start_seg}.m3u8")
             ])
             try:
                 sess['proc'] = subprocess.Popen(cmd, env=clean_env)
+                sess['current_start_seg'] = start_seg
             except Exception as e:
                 print(f"[Worker Error] {e}")
 
@@ -339,25 +366,21 @@ class HLSStreamManager:
                     'last_seen': time.time(),
                     'target_url': None,
                     'duration': 7200.0,
-                    'seg_duration': 6.0
+                    'seg_duration': 5.0,
+                    'proc': None,
+                    'current_start_seg': 0
                 }
                 self.sessions[sid] = sess
             sess['last_seen'] = time.time()
             sdir = sess['dir']
             target_url = sess.get('target_url')
-            seg_duration = sess.get('seg_duration', 6.0)
+            seg_duration = sess.get('seg_duration', 5.0)
 
         seg_path = os.path.join(sdir, seg_name)
 
         # 1. Fast path: Segment already generated on disk
         if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
             return seg_path
-
-        # 2. Wait briefly (up to 0.4s) in case background worker is finalizing it
-        for _ in range(4):
-            time.sleep(0.1)
-            if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
-                return seg_path
 
         if not target_url:
             return None
@@ -366,120 +389,33 @@ class HLSStreamManager:
         if not m:
             return None
         seg_idx = int(m.group(1))
-        start_secs = seg_idx * seg_duration
 
-        seg_key = f"{sid}_{seg_name}"
-        with self.lock:
-            if seg_key not in self.seg_locks:
-                self.seg_locks[seg_key] = threading.Lock()
-            seg_lock = self.seg_locks[seg_key]
+        # Check worker status
+        proc = sess.get('proc')
+        worker_alive = proc is not None and proc.poll() is None
+        cur_start = sess.get('current_start_seg', 0)
 
-        with seg_lock:
+        # If worker is not running, or if requested segment is far away from worker position (seek ahead > 8 segments), restart worker!
+        if not worker_alive or (seg_idx < cur_start) or (seg_idx > cur_start + 12):
+            self._ensure_background_worker(sid, target_url, sdir, start_seg=seg_idx)
+
+        # 2. Smart Wait: wait up to 35 seconds for the single background worker to produce this segment!
+        # This completely avoids running multiple simultaneous FFmpeg instances that choke the IPTV server and trigger stream timeouts!
+        start_wait = time.time()
+        while time.time() - start_wait < 35.0:
             if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
                 return seg_path
+            time.sleep(0.2)
+            # If worker terminated unexpectedly, try to restart it once
+            proc = sess.get('proc')
+            if proc and proc.poll() is not None:
+                if not os.path.exists(seg_path) or os.path.getsize(seg_path) == 0:
+                    self._ensure_background_worker(sid, target_url, sdir, start_seg=seg_idx)
 
-            ffmpeg_path = find_ffmpeg()
-            if not ffmpeg_path:
-                return None
+        if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
+            return seg_path
 
-            clean_env = os.environ.copy()
-            clean_env.pop('http_proxy', None)
-            clean_env.pop('https_proxy', None)
-
-            temp_out = os.path.join(sdir, f"tmp_{seg_name}")
-            cmd = [
-                ffmpeg_path,
-                "-y",
-                "-hide_banner",
-                "-loglevel", "error",
-            ]
-            if target_url.startswith(('http://', 'https://')):
-                cmd.extend([
-                    "-reconnect", "1",
-                    "-reconnect_at_eof", "1",
-                    "-reconnect_streamed", "1",
-                    "-reconnect_delay_max", "5",
-                    "-user_agent", "IPTVSmartersPlayer",
-                    "-headers", "Accept: */*\r\n",
-                ])
-            cmd.extend([
-                "-ss", str(start_secs),
-                "-i", target_url,
-                "-t", str(seg_duration),
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-ac", "2",
-                "-avoid_negative_ts", "make_zero",
-                "-f", "mpegts",
-                temp_out
-            ])
-            try:
-                res = subprocess.run(cmd, env=clean_env, timeout=10)
-                if res.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 0:
-                    shutil.move(temp_out, seg_path)
-                    # Trigger background prefetch for next 3 segments
-                    self._prefetch_ahead(sid, seg_idx, target_url, sdir, seg_duration)
-                    return seg_path
-            except Exception as e:
-                print(f"[OnDemand Error] {seg_name}: {e}")
-                if os.path.exists(temp_out):
-                    try:
-                        os.remove(temp_out)
-                    except:
-                        pass
-
-        return seg_path if (os.path.exists(seg_path) and os.path.getsize(seg_path) > 0) else None
-
-    def _prefetch_ahead(self, sid, current_idx, target_url, sdir, seg_duration):
-        def _bg():
-            ffmpeg_path = find_ffmpeg()
-            if not ffmpeg_path:
-                return
-            clean_env = os.environ.copy()
-            clean_env.pop('http_proxy', None)
-            clean_env.pop('https_proxy', None)
-            for offset in (1, 2, 3):
-                nxt_idx = current_idx + offset
-                nxt_name = f"seg_{nxt_idx:04d}.ts"
-                nxt_path = os.path.join(sdir, nxt_name)
-                if os.path.exists(nxt_path) and os.path.getsize(nxt_path) > 0:
-                    continue
-                nxt_tmp = os.path.join(sdir, f"tmp_{nxt_name}")
-                nxt_start = nxt_idx * seg_duration
-                cmd = [
-                    ffmpeg_path,
-                    "-y",
-                    "-hide_banner",
-                    "-loglevel", "error",
-                    "-reconnect", "1",
-                    "-reconnect_at_eof", "1",
-                    "-reconnect_streamed", "1",
-                    "-reconnect_delay_max", "5",
-                    "-user_agent", "IPTVSmartersPlayer",
-                    "-headers", "Accept: */*\r\n",
-                    "-ss", str(nxt_start),
-                    "-i", target_url,
-                    "-t", str(seg_duration),
-                    "-c:v", "copy",
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-ac", "2",
-                    "-avoid_negative_ts", "make_zero",
-                    "-f", "mpegts",
-                    nxt_tmp
-                ]
-                try:
-                    res = subprocess.run(cmd, env=clean_env, timeout=10)
-                    if res.returncode == 0 and os.path.exists(nxt_tmp) and os.path.getsize(nxt_tmp) > 0:
-                        shutil.move(nxt_tmp, nxt_path)
-                except Exception:
-                    if os.path.exists(nxt_tmp):
-                        try:
-                            os.remove(nxt_tmp)
-                        except:
-                            pass
-        threading.Thread(target=_bg, daemon=True).start()
+        return None
 
 HLS_STREAM_MGR = HLSStreamManager()
 
@@ -948,7 +884,14 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         ]
         if target_url.startswith(('http://', 'https://')):
             cmd.extend([
-                "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "-reconnect", "1",
+                "-reconnect_at_eof", "1",
+                "-reconnect_streamed", "1",
+                "-reconnect_delay_max", "5",
+                "-probesize", "2097152",
+                "-analyzeduration", "3000000",
+                "-fflags", "+nobuffer+fastseek+discardcorrupt",
+                "-user_agent", "IPTVSmartersPlayer",
                 "-headers", "Accept: */*\r\n",
             ])
 
