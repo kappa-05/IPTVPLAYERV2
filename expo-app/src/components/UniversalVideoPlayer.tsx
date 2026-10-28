@@ -358,11 +358,12 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const isM3U8 = targetUrl.toLowerCase().includes('.m3u8') || targetUrl.includes('/api/hls/') || (isLive && !targetUrl.includes('/movie/') && !targetUrl.includes('/series/'));
     const canNativeHls = typeof video.canPlayType === 'function' && Boolean(video.canPlayType('application/vnd.apple.mpegurl'));
-
+    video.controls = false;
     if (isIOS) {
       video.removeAttribute('playsinline');
       video.removeAttribute('webkit-playsinline');
-      video.controls = true;
+      (video as any).playsInline = false;
+      (video as any).webkitPlaysInline = false;
     }
 
     video.onwaiting = () => {
@@ -416,6 +417,9 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       }
       if (video.duration && isFinite(video.duration) && video.duration > 0 && duration <= 0) {
         setDuration(video.duration);
+      }
+      if (isIOS && !isFullscreen && video.currentTime > 0.1) {
+        openDevicePlayer(video);
       }
     };
 
@@ -832,8 +836,8 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
               backgroundColor: '#000',
               objectFit: 'contain'
             }}
-            playsInline={!isIOS}
-            controls={isIOS}
+            {...(!isIOS ? { playsInline: true } : {})}
+            controls={false}
             autoPlay
           />
         ) : (
@@ -1003,16 +1007,18 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
             </View>
 
             {/* Center Big Play/Pause Trigger */}
-            <View style={styles.centerControlArea} pointerEvents="box-none">
-              <TouchableOpacity
-                style={styles.bigPlayButton}
-                activeOpacity={0.8}
-                onPress={togglePlayPause}
-                accessibilityLabel={isPlaying ? 'Pausa' : 'Riproduci'}
-              >
-                <Ionicons name={isPlaying ? 'pause' : 'play'} size={38} color="#fff" />
-              </TouchableOpacity>
-            </View>
+            {!loading && (
+              <View style={styles.centerControlArea} pointerEvents="box-none">
+                <TouchableOpacity
+                  style={styles.bigPlayButton}
+                  activeOpacity={0.8}
+                  onPress={togglePlayPause}
+                  accessibilityLabel={isPlaying ? 'Pausa' : 'Riproduci'}
+                >
+                  <Ionicons name={isPlaying ? 'pause' : 'play'} size={38} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            )}
 
             {/* Bottom Controls Bar */}
             <View style={styles.bottomBar} pointerEvents="auto">
