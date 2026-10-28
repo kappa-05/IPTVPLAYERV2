@@ -14,8 +14,9 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
-import { PlayingStream } from '../types';
+import { PlayingStream, Account } from '../types';
 import { XtreamAPI } from '../services/api';
+import { StorageService } from '../services/storage';
 
 let HlsClass: any = null;
 if (Platform.OS === 'web') {
@@ -41,18 +42,33 @@ if (Platform.OS !== 'web') {
   }
 }
 
+export interface MediaTrack {
+  id: number;
+  label: string;
+  language: string;
+  active: boolean;
+}
+
 interface VideoPlayerProps {
   visible: boolean;
   stream: PlayingStream | null;
+  account?: Account | null;
+  isMinimized?: boolean;
   onClose: () => void;
   onOpenEpg?: () => void;
+  onToggleMinimize?: () => void;
+  onWatchProgressUpdated?: () => void;
 }
 
 export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
   visible,
   stream,
+  account,
+  isMinimized = false,
   onClose,
-  onOpenEpg
+  onOpenEpg,
+  onToggleMinimize,
+  onWatchProgressUpdated
 }) => {
   const { width, height } = useWindowDimensions();
 
@@ -102,6 +118,23 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
   const retryCountRef = useRef(0);
   const isClosingRef = useRef(false);
 
+  // ── Multi-Audio & Subtitles States ──
+  const [audioTracks, setAudioTracks] = useState<MediaTrack[]>([]);
+  const [subtitleTracks, setSubtitleTracks] = useState<MediaTrack[]>([]);
+  const [activeAudioTrack, setActiveAudioTrack] = useState<number>(-1);
+  const [activeSubtitleTrack, setActiveSubtitleTrack] = useState<number>(-1);
+  const [trackModalVisible, setTrackModalVisible] = useState(false);
+  const [trackModalTab, setTrackModalTab] = useState<'audio' | 'subtitles'>('audio');
+
+  // ── "Continua a guardare" (Resume Playback) States ──
+  const [resumePrompt, setResumePrompt] = useState<{ visible: boolean; time: number } | null>(null);
+  const hasResumedRef = useRef(false);
+  const lastSaveTimeRef = useRef(0);
+  const resumeTimerRef = useRef<any>(null);
+
+  // ── Mini-Player State ──
+  const [isHoveredMini, setIsHoveredMini] = useState(false);
+
   // ── Cinematic Opening & Closing Animations ──
   const animFade = useRef(new Animated.Value(0)).current;
   const animScale = useRef(new Animated.Value(0.95)).current;
@@ -146,6 +179,30 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       } catch {}
     }
 
+    // Save watch progress immediately upon closing
+    if (isMovieOrSeries && account?.id && webVideoRef.current && webVideoRef.current.currentTime > 10) {
+      const vid = webVideoRef.current;
+      const dur = (vid.duration && isFinite(vid.duration) && vid.duration > 0) ? vid.duration : duration;
+      const pct = dur > 0 ? Math.min(100, Math.floor((vid.currentTime / dur) * 100)) : 0;
+      if (pct >= 96) {
+        StorageService.removeHistoryItem(account.id, String(stream?.streamId)).catch(() => {});
+      } else {
+        StorageService.saveWatchProgress(account.id, {
+          id: String(stream?.streamId),
+          accountId: account.id,
+          type: stream?.type === 'series' ? 'series' : 'vod',
+          title: stream?.title || '',
+          subTitle: stream?.subTitle,
+          poster: stream?.poster,
+          currentTime: Math.floor(vid.currentTime),
+          duration: Math.floor(dur),
+          percent: pct,
+          rawItem: stream?.rawItem
+        }).catch(() => {});
+      }
+      onWatchProgressUpdated?.();
+    }
+
     // Play smooth cinematic exit animation
     Animated.parallel([
       Animated.timing(animFade, {
@@ -164,7 +221,79 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       cleanupWebPlayer();
       onClose();
     });
-  }, [animFade, animScale, onClose]);
+  }, [animFade, animScale, onClose, isMovieOrSeries, account, stream, duration, onWatchProgressUpdated]);
+
+  // ── Multi-Audio & Subtitles Track Switch Handlers ──
+  const handleSelectAudioTrack = (idx: number) => {
+    setActiveAudioTrack(idx);
+    if (hlsRef.current) {
+      try {
+        hlsRef.current.audioTrack = idx;
+      } catch {}
+    } else if (webVideoRef.current) {
+      const aTracks = (webVideoRef.current as any).audioTracks;
+      if (aTracks && aTracks.length > 0) {
+        for (let i = 0; i < aTracks.length; i++) {
+          aTracks[i].enabled = (i === idx);
+        }
+      }
+    }
+    setAudioTracks(prev => prev.map(t => ({ ...t, active: t.id === idx })));
+  };
+
+  const handleSelectSubtitleTrack = (idx: number) => {
+    setActiveSubtitleTrack(idx);
+    if (hlsRef.current) {
+      try {
+        hlsRef.current.subtitleTrack = idx;
+      } catch {}
+    } else if (webVideoRef.current) {
+      const tTracks = webVideoRef.current.textTracks;
+      if (tTracks && tTracks.length > 0) {
+        for (let i = 0; i < tTracks.length; i++) {
+          tTracks[i].mode = (i === idx ? 'showing' : 'disabled');
+        }
+      }
+    }
+    setSubtitleTracks(prev => prev.map(t => ({ ...t, active: t.id === idx })));
+  };
+
+  // ── Native Picture-in-Picture Toggle ──
+  const togglePictureInPicture = async () => {
+    if (Platform.OS !== 'web' || !webVideoRef.current) return;
+    const vid = webVideoRef.current as any;
+    try {
+      if (document.pictureInPictureElement) {
+        await (document as any).exitPictureInPicture();
+      } else if (typeof vid.requestPictureInPicture === 'function') {
+        await vid.requestPictureInPicture();
+      } else if (typeof vid.webkitSetPresentationMode === 'function') {
+        const mode = vid.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture';
+        vid.webkitSetPresentationMode(mode);
+      }
+    } catch (err) {
+      console.warn('PiP error:', err);
+    }
+  };
+
+  // ── Resume Playback Prompt Handlers ──
+  const handleConfirmResume = () => {
+    if (resumePrompt && webVideoRef.current) {
+      webVideoRef.current.currentTime = resumePrompt.time;
+      setCurrentTime(resumePrompt.time);
+    }
+    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+    setResumePrompt(null);
+  };
+
+  const handleRestartFromBeginning = () => {
+    if (webVideoRef.current) {
+      webVideoRef.current.currentTime = 0;
+      setCurrentTime(0);
+    }
+    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+    setResumePrompt(null);
+  };
 
   // ── Reset Controls Auto-Hide Timer ──
   const clearControlsTimer = useCallback(() => {
@@ -366,6 +495,71 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       (video as any).webkitPlaysInline = false;
     }
 
+    const updateNativeTracks = () => {
+      try {
+        const aTracks = (video as any).audioTracks;
+        if (aTracks && aTracks.length > 0) {
+          const list: MediaTrack[] = [];
+          let activeIdx = 0;
+          for (let i = 0; i < aTracks.length; i++) {
+            if (aTracks[i].enabled) activeIdx = i;
+            list.push({
+              id: i,
+              label: aTracks[i].label || aTracks[i].language || `Traccia ${i + 1}`,
+              language: aTracks[i].language || '',
+              active: aTracks[i].enabled
+            });
+          }
+          setAudioTracks(list);
+          setActiveAudioTrack(activeIdx);
+        }
+
+        const tTracks = video.textTracks;
+        if (tTracks && tTracks.length > 0) {
+          const list: MediaTrack[] = [];
+          let activeIdx = -1;
+          for (let i = 0; i < tTracks.length; i++) {
+            if (tTracks[i].mode === 'showing') activeIdx = i;
+            list.push({
+              id: i,
+              label: tTracks[i].label || tTracks[i].language || `Sottotitolo ${i + 1}`,
+              language: tTracks[i].language || '',
+              active: tTracks[i].mode === 'showing'
+            });
+          }
+          setSubtitleTracks(list);
+          setActiveSubtitleTrack(activeIdx);
+        }
+      } catch {}
+    };
+
+    const checkResumeProgress = (vid: HTMLVideoElement) => {
+      if (hasResumedRef.current) return;
+      hasResumedRef.current = true;
+
+      // 1. If explicit initialSeekTime was requested
+      if (stream.initialSeekTime && stream.initialSeekTime > 0) {
+        vid.currentTime = stream.initialSeekTime;
+        setCurrentTime(stream.initialSeekTime);
+        return;
+      }
+
+      // 2. Otherwise check storage history for saved time
+      if (isMovieOrSeries && account?.id) {
+        StorageService.getHistory(account.id).then(hist => {
+          const match = hist.find(h => String(h.id) === String(stream.streamId));
+          const maxDur = (vid.duration && isFinite(vid.duration) && vid.duration > 0) ? vid.duration : duration;
+          if (match && match.currentTime > 15 && match.currentTime < (maxDur > 0 ? maxDur - 40 : 36000)) {
+            setResumePrompt({ visible: true, time: match.currentTime });
+            if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+            resumeTimerRef.current = setTimeout(() => {
+              setResumePrompt(null);
+            }, 8500);
+          }
+        }).catch(() => {});
+      }
+    };
+
     video.onwaiting = () => {
       setLoading(true);
       setLoadingStatus('Buffering...');
@@ -374,16 +568,26 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     video.onplaying = () => {
       setLoading(false);
       setIsPlaying(true);
-      openDevicePlayer(video);
+      if (!isMinimized) {
+        openDevicePlayer(video);
+      }
+      updateNativeTracks();
+      checkResumeProgress(video);
     };
 
     video.onplay = () => {
       setIsPlaying(true);
-      openDevicePlayer(video);
+      if (!isMinimized) {
+        openDevicePlayer(video);
+      }
+      updateNativeTracks();
     };
 
     video.onloadeddata = () => {
-      openDevicePlayer(video);
+      if (!isMinimized) {
+        openDevicePlayer(video);
+      }
+      updateNativeTracks();
     };
 
     video.onpause = () => setIsPlaying(false);
@@ -403,6 +607,8 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       if (video.duration && isFinite(video.duration) && video.duration > 0) {
         setDuration(video.duration);
       }
+      updateNativeTracks();
+      checkResumeProgress(video);
     };
 
     video.ondurationchange = () => {
@@ -418,8 +624,34 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       if (video.duration && isFinite(video.duration) && video.duration > 0 && duration <= 0) {
         setDuration(video.duration);
       }
-      if (isIOS && !isFullscreen && video.currentTime > 0.1) {
+      if (isIOS && !isFullscreen && !isMinimized && video.currentTime > 0.1) {
         openDevicePlayer(video);
+      }
+
+      // Throttle save watch progress every 5s for movies & series
+      if (isMovieOrSeries && account?.id && video.currentTime > 10) {
+        const now = Date.now();
+        if (now - lastSaveTimeRef.current >= 4500) {
+          lastSaveTimeRef.current = now;
+          const dur = (video.duration && isFinite(video.duration) && video.duration > 0) ? video.duration : duration;
+          const pct = dur > 0 ? Math.min(100, Math.floor((video.currentTime / dur) * 100)) : 0;
+          if (pct >= 96) {
+            StorageService.removeHistoryItem(account.id, String(stream.streamId)).catch(() => {});
+          } else {
+            StorageService.saveWatchProgress(account.id, {
+              id: String(stream.streamId),
+              accountId: account.id,
+              type: stream.type === 'series' ? 'series' : 'vod',
+              title: stream.title || '',
+              subTitle: stream.subTitle,
+              poster: stream.poster,
+              currentTime: Math.floor(video.currentTime),
+              duration: Math.floor(dur),
+              percent: pct,
+              rawItem: stream.rawItem
+            }).catch(() => {});
+          }
+        }
       }
     };
 
@@ -483,13 +715,63 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       hls.loadSource(targetUrl);
       hls.attachMedia(video);
 
+      hls.on(HlsClass.Events.AUDIO_TRACKS_UPDATED, (_event: any, data: any) => {
+        const rawTracks = data?.audioTracks || hls.audioTracks || [];
+        const tracks: MediaTrack[] = rawTracks.map((t: any, idx: number) => ({
+          id: idx,
+          label: t.name || t.lang || `Traccia ${idx + 1}`,
+          language: t.lang || '',
+          active: idx === hls.audioTrack
+        }));
+        if (tracks.length > 0) {
+          setAudioTracks(tracks);
+          setActiveAudioTrack(hls.audioTrack);
+        }
+      });
+
+      hls.on(HlsClass.Events.SUBTITLE_TRACKS_UPDATED, (_event: any, data: any) => {
+        const rawSubs = data?.subtitleTracks || hls.subtitleTracks || [];
+        const tracks: MediaTrack[] = rawSubs.map((t: any, idx: number) => ({
+          id: idx,
+          label: t.name || t.lang || `Sottotitolo ${idx + 1}`,
+          language: t.lang || '',
+          active: idx === hls.subtitleTrack
+        }));
+        if (tracks.length > 0) {
+          setSubtitleTracks(tracks);
+          setActiveSubtitleTrack(hls.subtitleTrack);
+        }
+      });
+
       hls.on(HlsClass.Events.MANIFEST_PARSED, (_event: any, data: any) => {
         setLoading(false);
         if (data?.levels?.[0]?.details?.totalduration) {
           setDuration(data.levels[0].details.totalduration);
         }
+        if (hls.audioTracks && hls.audioTracks.length > 0) {
+          const tracks: MediaTrack[] = hls.audioTracks.map((t: any, idx: number) => ({
+            id: idx,
+            label: t.name || t.lang || `Traccia ${idx + 1}`,
+            language: t.lang || '',
+            active: idx === hls.audioTrack
+          }));
+          setAudioTracks(tracks);
+          setActiveAudioTrack(hls.audioTrack);
+        }
+        if (hls.subtitleTracks && hls.subtitleTracks.length > 0) {
+          const subTracks: MediaTrack[] = hls.subtitleTracks.map((t: any, idx: number) => ({
+            id: idx,
+            label: t.name || t.lang || `Sottotitolo ${idx + 1}`,
+            language: t.lang || '',
+            active: idx === hls.subtitleTrack
+          }));
+          setSubtitleTracks(subTracks);
+          setActiveSubtitleTrack(hls.subtitleTrack);
+        }
         video.play().then(() => {
-          openDevicePlayer(video);
+          if (!isMinimized) {
+            openDevicePlayer(video);
+          }
         }).catch(() => {});
       });
 
@@ -535,6 +817,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const openDevicePlayer = useCallback((targetVid?: HTMLVideoElement) => {
+    if (isMinimized) return false;
     if (Platform.OS === 'web') {
       const vid = targetVid || webVideoRef.current;
       if (vid) {
@@ -562,7 +845,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       } catch (e) {}
     }
     return false;
-  }, [isIOS]);
+  }, [isIOS, isMinimized]);
 
   // ── Play / Pause ──
   const togglePlayPause = useCallback(() => {
@@ -803,24 +1086,23 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     ? Math.min(100, Math.max(0, (displayTime / duration) * 100))
     : 0;
 
-  return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={handleClose}>
-      <Animated.View
-        style={[
-          styles.container,
-          {
-            opacity: animFade,
-            transform: [{ scale: animScale }]
-          }
-        ]}
-        // @ts-ignore
-        onMouseMove={resetControlsTimer}
-      >
+  const playerContent = (
+    <Animated.View
+      style={[
+        isMinimized ? styles.miniContainer : styles.container,
+        {
+          opacity: animFade,
+          transform: [{ scale: animScale }]
+        }
+      ]}
+      // @ts-ignore
+      onMouseMove={!isMinimized ? resetControlsTimer : undefined}
+    >
         {/* Ambient Glow Backdrop from content poster */}
         {stream.poster ? (
           <Image
             source={{ uri: stream.poster }}
-            style={styles.ambientBackdrop}
+            style={styles.ambientBackdrop as any}
             blurRadius={ Platform.OS === 'web' ? 40 : 25 }
           />
         ) : null}
@@ -993,6 +1275,16 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
               </View>
 
               <View style={styles.topRight}>
+                {onToggleMinimize && (
+                  <TouchableOpacity
+                    style={styles.roundIconBtn}
+                    onPress={onToggleMinimize}
+                    accessibilityLabel="Riduci a Mini-Player"
+                  >
+                    <Ionicons name="contract-outline" size={18} color="#fff" />
+                  </TouchableOpacity>
+                )}
+
                 {isLive && onOpenEpg && (
                   <TouchableOpacity style={styles.glassBtn} onPress={onOpenEpg}>
                     <Ionicons name="calendar-outline" size={16} color="#fff" />
@@ -1102,8 +1394,32 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
                   )}
                 </View>
 
-                {/* Right Controls: Volume, Fullscreen */}
+                {/* Right Controls: Audio/Subs, PiP, Volume, Fullscreen */}
                 <View style={styles.rightControlsGroup}>
+                  {/* Audio & Subtitles Selector Button */}
+                  <TouchableOpacity
+                    style={styles.ctrlIconBtn}
+                    onPress={() => setTrackModalVisible(true)}
+                    accessibilityLabel="Audio e Sottotitoli"
+                  >
+                    <Ionicons
+                      name="chatbubble-ellipses-outline"
+                      size={20}
+                      color={activeSubtitleTrack !== -1 ? colors.primary : '#fff'}
+                    />
+                  </TouchableOpacity>
+
+                  {/* Native Picture-in-Picture Button */}
+                  {Platform.OS === 'web' && (
+                    <TouchableOpacity
+                      style={styles.ctrlIconBtn}
+                      onPress={togglePictureInPicture}
+                      accessibilityLabel="Picture-in-Picture"
+                    >
+                      <Ionicons name="albums-outline" size={20} color="#fff" />
+                    </TouchableOpacity>
+                  )}
+
                   {/* Volume Button */}
                   <TouchableOpacity style={styles.ctrlIconBtn} onPress={toggleMute}>
                     <Ionicons
@@ -1130,19 +1446,290 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
             </View>
           </Animated.View>
         )}
+
+        {/* ── Resume Playback Glass Prompt ── */}
+        {resumePrompt && !isMinimized && (
+          <View style={styles.resumePromptContainer} pointerEvents="box-none">
+            <View style={styles.resumePromptCard}>
+              <View style={styles.resumeIconWrap}>
+                <Ionicons name="time" size={20} color={colors.primary} />
+              </View>
+              <View style={styles.resumeTextWrap}>
+                <Text style={styles.resumePromptTitle}>Riprendere la visione?</Text>
+                <Text style={styles.resumePromptSub}>
+                  Eri arrivato a {formatTime(resumePrompt.time)}
+                </Text>
+              </View>
+              <View style={styles.resumeBtnGroup}>
+                <TouchableOpacity
+                  style={styles.resumeBtnPrimary}
+                  onPress={handleConfirmResume}
+                >
+                  <Ionicons name="play" size={14} color="#fff" style={{ marginRight: 4 }} />
+                  <Text style={styles.resumeBtnText}>Riprendi</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.resumeBtnSecondary}
+                  onPress={handleRestartFromBeginning}
+                >
+                  <Text style={styles.resumeBtnTextSecondary}>Dall'inizio</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.resumeBtnClose}
+                  onPress={() => setResumePrompt(null)}
+                >
+                  <Ionicons name="close" size={16} color="rgba(255,255,255,0.7)" />
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* ── Audio & Subtitles Glass Modal ── */}
+        {trackModalVisible && !isMinimized && (
+          <View style={styles.trackModalOverlay}>
+            <View style={styles.trackModalCard}>
+              <View style={styles.trackModalHeader}>
+                <Text style={styles.trackModalTitle}>Audio & Sottotitoli</Text>
+                <TouchableOpacity
+                  style={styles.trackModalCloseBtn}
+                  onPress={() => setTrackModalVisible(false)}
+                >
+                  <Ionicons name="close" size={20} color="#fff" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Tabs */}
+              <View style={styles.trackModalTabs}>
+                <TouchableOpacity
+                  style={[
+                    styles.trackTabBtn,
+                    trackModalTab === 'audio' && styles.trackTabBtnActive
+                  ]}
+                  onPress={() => setTrackModalTab('audio')}
+                >
+                  <Ionicons
+                    name="volume-medium-outline"
+                    size={16}
+                    color={trackModalTab === 'audio' ? '#fff' : colors.textMuted}
+                  />
+                  <Text
+                    style={[
+                      styles.trackTabText,
+                      trackModalTab === 'audio' && styles.trackTabTextActive
+                    ]}
+                  >
+                    Audio {audioTracks.length > 0 ? `(${audioTracks.length})` : ''}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.trackTabBtn,
+                    trackModalTab === 'subtitles' && styles.trackTabBtnActive
+                  ]}
+                  onPress={() => setTrackModalTab('subtitles')}
+                >
+                  <Ionicons
+                    name="chatbox-outline"
+                    size={16}
+                    color={trackModalTab === 'subtitles' ? '#fff' : colors.textMuted}
+                  />
+                  <Text
+                    style={[
+                      styles.trackTabText,
+                      trackModalTab === 'subtitles' && styles.trackTabTextActive
+                    ]}
+                  >
+                    Sottotitoli {subtitleTracks.length > 0 ? `(${subtitleTracks.length})` : ''}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Tab Content */}
+              <View style={styles.trackListContainer}>
+                {trackModalTab === 'audio' ? (
+                  audioTracks.length === 0 ? (
+                    <View style={styles.trackEmptyRow}>
+                      <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
+                      <Text style={styles.trackLabelActive}>Traccia audio predefinita (Stereo/Originale)</Text>
+                    </View>
+                  ) : (
+                    audioTracks.map((tr) => (
+                      <TouchableOpacity
+                        key={`audio_tr_${tr.id}`}
+                        style={[
+                          styles.trackRow,
+                          tr.active && styles.trackRowActive
+                        ]}
+                        onPress={() => handleSelectAudioTrack(tr.id)}
+                      >
+                        <Ionicons
+                          name={tr.active ? 'radio-button-on' : 'radio-button-off'}
+                          size={18}
+                          color={tr.active ? colors.primary : colors.textMuted}
+                        />
+                        <Text style={[styles.trackLabel, tr.active && styles.trackLabelActive]}>
+                          {tr.label} {tr.language ? `(${tr.language.toUpperCase()})` : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    ))
+                  )
+                ) : (
+                  <>
+                    <TouchableOpacity
+                      style={[
+                        styles.trackRow,
+                        activeSubtitleTrack === -1 && styles.trackRowActive
+                      ]}
+                      onPress={() => handleSelectSubtitleTrack(-1)}
+                    >
+                      <Ionicons
+                        name={activeSubtitleTrack === -1 ? 'radio-button-on' : 'radio-button-off'}
+                        size={18}
+                        color={activeSubtitleTrack === -1 ? colors.primary : colors.textMuted}
+                      />
+                      <Text
+                        style={[
+                          styles.trackLabel,
+                          activeSubtitleTrack === -1 && styles.trackLabelActive
+                        ]}
+                      >
+                        Disattivati (Nessuno)
+                      </Text>
+                    </TouchableOpacity>
+
+                    {subtitleTracks.map((sub) => (
+                      <TouchableOpacity
+                        key={`sub_tr_${sub.id}`}
+                        style={[
+                          styles.trackRow,
+                          sub.active && styles.trackRowActive
+                        ]}
+                        onPress={() => handleSelectSubtitleTrack(sub.id)}
+                      >
+                        <Ionicons
+                          name={sub.active ? 'radio-button-on' : 'radio-button-off'}
+                          size={18}
+                          color={sub.active ? colors.primary : colors.textMuted}
+                        />
+                        <Text style={[styles.trackLabel, sub.active && styles.trackLabelActive]}>
+                          {sub.label} {sub.language ? `(${sub.language.toUpperCase()})` : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </>
+                )}
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* ── Mini-Player Floating Card Controls Overlay ── */}
+        {isMinimized && (
+          <View
+            style={styles.miniOverlay}
+            // @ts-ignore
+            onMouseEnter={() => setIsHoveredMini(true)}
+            // @ts-ignore
+            onMouseLeave={() => setIsHoveredMini(false)}
+          >
+            {/* Top Bar on Mini Player */}
+            <View style={styles.miniTopBar}>
+              <Text style={styles.miniTitle} numberOfLines={1}>
+                {stream.title}
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <TouchableOpacity
+                  style={styles.miniIconBtn}
+                  onPress={onToggleMinimize}
+                  accessibilityLabel="Espandi"
+                >
+                  <Ionicons name="expand" size={15} color="#fff" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.miniIconBtn}
+                  onPress={handleClose}
+                  accessibilityLabel="Chiudi"
+                >
+                  <Ionicons name="close" size={16} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Center Play/Pause Overlay */}
+            <TouchableOpacity
+              style={styles.miniCenterTap}
+              activeOpacity={0.8}
+              onPress={togglePlayPause}
+            >
+              {(!isPlaying || isHoveredMini) && (
+                <View style={styles.miniPlayCircle}>
+                  <Ionicons name={isPlaying ? 'pause' : 'play'} size={20} color="#fff" />
+                </View>
+              )}
+            </TouchableOpacity>
+
+            {/* Bottom Mini Progress Bar */}
+            {!isLive && duration > 0 && (
+              <View style={styles.miniProgressTrack}>
+                <View
+                  style={[
+                    styles.miniProgressFill,
+                    { width: `${Math.min(100, Math.max(0, (currentTime / duration) * 100))}%` }
+                  ]}
+                />
+              </View>
+            )}
+          </View>
+        )}
       </Animated.View>
+  );
+
+  if (Platform.OS === 'web') {
+    return playerContent;
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="none" onRequestClose={handleClose}>
+      {playerContent}
     </Modal>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
+    // @ts-ignore
+    position: Platform.OS === 'web' ? 'fixed' : 'relative',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     flex: 1,
     backgroundColor: '#030508',
     width: '100%',
     height: '100%',
     overflow: 'hidden',
-    position: 'relative'
+    zIndex: 99999
+  },
+  miniContainer: {
+    // @ts-ignore
+    position: Platform.OS === 'web' ? 'fixed' : 'absolute',
+    bottom: Platform.OS === 'web' ? 24 : 76,
+    right: 18,
+    width: 320,
+    height: 180,
+    backgroundColor: '#000',
+    borderRadius: 16,
+    overflow: 'hidden',
+    zIndex: 99999,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.8,
+    shadowRadius: 28,
+    elevation: 24,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.2)'
   },
   video: {
     width: '100%',
@@ -1591,5 +2178,248 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.5
+  },
+
+  // ── Mini Player Styles ──
+  miniOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    zIndex: 10
+  },
+  miniTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)'
+  },
+  miniTitle: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+    flex: 1,
+    marginRight: 6
+  },
+  miniIconBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  miniCenterTap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  miniPlayCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(59, 130, 246, 0.85)',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  miniProgressTrack: {
+    width: '100%',
+    height: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)'
+  },
+  miniProgressFill: {
+    height: '100%',
+    backgroundColor: colors.primary
+  },
+
+  // ── Resume Playback Prompt Styles ──
+  resumePromptContainer: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 70 : 40,
+    left: 20,
+    right: 20,
+    alignItems: 'center',
+    zIndex: 40
+  },
+  resumePromptCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(15, 22, 35, 0.94)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.4)',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.6,
+    shadowRadius: 20,
+    // @ts-ignore
+    backdropFilter: Platform.OS === 'web' ? 'blur(16px)' : undefined,
+    maxWidth: 500,
+    width: '100%'
+  },
+  resumeIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primaryMuted,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  resumeTextWrap: {
+    flex: 1
+  },
+  resumePromptTitle: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700'
+  },
+  resumePromptSub: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    marginTop: 2
+  },
+  resumeBtnGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  resumeBtnPrimary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8
+  },
+  resumeBtnSecondary: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8
+  },
+  resumeBtnClose: {
+    padding: 6
+  },
+  resumeBtnText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  resumeBtnTextSecondary: {
+    color: '#cbd5e1',
+    fontSize: 12,
+    fontWeight: '500'
+  },
+
+  // ── Track Selector Modal Styles ──
+  trackModalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(3, 5, 8, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 50,
+    padding: 20
+  },
+  trackModalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#121724',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.6,
+    shadowRadius: 32
+  },
+  trackModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)'
+  },
+  trackModalTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700'
+  },
+  trackModalCloseBtn: {
+    padding: 4
+  },
+  trackModalTabs: {
+    flexDirection: 'row',
+    padding: 8,
+    gap: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)'
+  },
+  trackTabBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 9,
+    borderRadius: 8
+  },
+  trackTabBtnActive: {
+    backgroundColor: 'rgba(59, 130, 246, 0.22)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.5)'
+  },
+  trackTabText: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  trackTabTextActive: {
+    color: '#fff',
+    fontWeight: '700'
+  },
+  trackListContainer: {
+    padding: 12,
+    maxHeight: 280
+  },
+  trackRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 10
+  },
+  trackRowActive: {
+    backgroundColor: 'rgba(59, 130, 246, 0.12)'
+  },
+  trackLabel: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '500'
+  },
+  trackLabelActive: {
+    color: '#fff',
+    fontWeight: '700'
+  },
+  trackEmptyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 8
   }
 });

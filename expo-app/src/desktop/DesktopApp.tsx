@@ -15,12 +15,14 @@ import {
   FavoriteItem,
   LiveStream,
   MediaType,
-  NavTab
+  NavTab,
+  WatchHistoryItem
 } from '../types';
 import { Header } from '../components/Header';
 import { CategorySelector } from '../components/CategorySelector';
 import { StreamCard } from '../components/StreamCard';
 import { EpgGuideView } from '../components/EpgGuideView';
+import { ContinueWatchingRow } from '../components/ContinueWatchingRow';
 import { Ionicons } from '@expo/vector-icons';
 
 interface DesktopAppProps {
@@ -48,6 +50,9 @@ interface DesktopAppProps {
   onLoadEpg: (channel: LiveStream) => Promise<EPGChannelSchedule | null>;
   onOpenLogin: () => void;
   onLogout: () => void;
+  history?: WatchHistoryItem[];
+  onPressHistoryItem?: (item: WatchHistoryItem) => void;
+  onRemoveHistoryItem?: (id: string) => void;
   onToggleMobileMode?: () => void;
 }
 
@@ -76,9 +81,20 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
   onLoadEpg,
   onOpenLogin,
   onLogout,
+  history = [],
+  onPressHistoryItem,
+  onRemoveHistoryItem,
   onToggleMobileMode
 }) => {
   const { width } = useWindowDimensions();
+
+  // Filter history relevant to current tab
+  const relevantHistory = useMemo(() => {
+    if (!history || history.length === 0) return [];
+    if (activeTab === 'vod') return history.filter(h => h.type === 'vod');
+    if (activeTab === 'series') return history.filter(h => h.type === 'series');
+    return [];
+  }, [history, activeTab]);
 
   // Filtered items by search query
   const displayedItems = useMemo(() => {
@@ -223,6 +239,15 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
                   showsVerticalScrollIndicator={false}
                   refreshing={refreshing}
                   onRefresh={onRefresh}
+                  ListHeaderComponent={
+                    (activeTab === 'vod' || activeTab === 'series') && relevantHistory.length > 0 && onPressHistoryItem && onRemoveHistoryItem ? (
+                      <ContinueWatchingRow
+                        history={relevantHistory}
+                        onPressItem={onPressHistoryItem}
+                        onRemoveItem={onRemoveHistoryItem}
+                      />
+                    ) : undefined
+                  }
                 />
               )}
             </View>

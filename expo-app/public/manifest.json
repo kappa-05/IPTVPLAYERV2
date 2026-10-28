@@ -1,0 +1,25 @@
+{
+  "name": "IPTV Player V2",
+  "short_name": "IPTV Player",
+  "start_url": "/",
+  "id": "/",
+  "display": "standalone",
+  "background_color": "#090b10",
+  "theme_color": "#090b10",
+  "orientation": "any",
+  "description": "Universal IPTV Web Player with VOD HLS pipeline, continuous playback and native player support",
+  "icons": [
+    {
+      "src": "/assets/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/favicon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

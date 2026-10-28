@@ -227,4 +227,22 @@ export class StorageService {
       console.error('Failed to save watch progress:', e);
     }
   }
+
+  static async removeHistoryItem(accId: string, id: string): Promise<void> {
+    try {
+      const history = await this.getHistory(accId);
+      const filtered = history.filter(h => h.id !== id);
+      await AsyncStorage.setItem(KEYS.HISTORY(accId), JSON.stringify(filtered));
+    } catch (e) {
+      console.error('Failed to remove history item:', e);
+    }
+  }
+
+  static async clearHistory(accId: string): Promise<void> {
+    try {
+      await AsyncStorage.removeItem(KEYS.HISTORY(accId));
+    } catch (e) {
+      console.error('Failed to clear history:', e);
+    }
+  }
 }

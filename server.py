@@ -1171,15 +1171,55 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             version_info = {
                 "app": "IPTV Player V2",
-                "version": "2.6.1",
+                "version": "2.7.0",
                 "branch": "main",
-                "latest_update": "Definitive VOD fix: on-the-fly HLS remuxing pipeline for movies/series, IPTVSmarters/VLC anti-403 User-Agent, zero demo sections, removed VLC button",
-                "features": ["mobile_ui", "desktop_ui", "device_native_player", "vod_hls_pipeline", "first_category_default", "apple_avplayer_ios", "epg_guide", "m3u_support", "xtream_support"]
+                "latest_update": "Continua a guardare (Resume playback), Tracce audio e sottotitoli multipli, Mini-Player flottante e PiP, PWA con Service Worker e Manifest standalone",
+                "features": [
+                    "mobile_ui",
+                    "desktop_ui",
+                    "device_native_player",
+                    "vod_hls_pipeline",
+                    "continue_watching_carousel",
+                    "audio_subtitle_track_selector",
+                    "floating_mini_player",
+                    "picture_in_picture",
+                    "pwa_standalone_manifest",
+                    "offline_app_shell_cache"
+                ]
             }
             self.wfile.write(json.dumps(version_info, ensure_ascii=False, indent=2).encode('utf-8'))
             return
 
-        # Default: Serve static files from /public
+        # 5d. PWA Manifest & Service Worker
+        if path in ('/manifest.json', '/manifest.webmanifest'):
+            for m_candidate in [
+                os.path.join(PUBLIC_DIR, 'manifest.json'),
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'expo-app', 'public', 'manifest.json'),
+            ]:
+                if os.path.exists(m_candidate):
+                    self.send_response(200)
+                    self.end_cors_headers(content_type="application/manifest+json; charset=utf-8")
+                    self.end_headers()
+                    with open(m_candidate, 'rb') as mf:
+                        self.wfile.write(mf.read())
+                    return
+
+        if path in ('/sw.js', '/service-worker.js'):
+            for sw_candidate in [
+                os.path.join(PUBLIC_DIR, 'sw.js'),
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'expo-app', 'public', 'sw.js'),
+            ]:
+                if os.path.exists(sw_candidate):
+                    self.send_response(200)
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+                    self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                    self.end_headers()
+                    with open(sw_candidate, 'rb') as swf:
+                        self.wfile.write(swf.read())
+                    return
+
+        # Default: Serve static files from /public or /dist
         super().do_GET()
 
 

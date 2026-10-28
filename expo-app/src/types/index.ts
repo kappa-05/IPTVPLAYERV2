@@ -140,6 +140,7 @@ export interface PlayingStream {
   extension?: string;
   rawItem?: any;
   epgSchedule?: EPGChannelSchedule | null;
+  initialSeekTime?: number;
 }
 
 export interface EPGProgram {

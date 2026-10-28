@@ -16,7 +16,8 @@ import {
   FavoriteItem,
   LiveStream,
   MediaType,
-  NavTab
+  NavTab,
+  WatchHistoryItem
 } from '../types';
 import { MobileHeader } from './components/MobileHeader';
 import { MobileBottomNav } from './components/MobileBottomNav';
@@ -25,6 +26,7 @@ import { MobileVodCard } from './components/MobileVodCard';
 import { MobileCategorySheet } from './components/MobileCategorySheet';
 import { MobileAccountSheet } from './components/MobileAccountSheet';
 import { MobileEpgView } from './components/MobileEpgView';
+import { ContinueWatchingRow } from '../components/ContinueWatchingRow';
 import { Ionicons } from '@expo/vector-icons';
 
 interface MobileAppProps {
@@ -48,6 +50,9 @@ interface MobileAppProps {
   onLoadEpg: (channel: LiveStream) => Promise<EPGChannelSchedule | null>;
   onOpenLogin: () => void;
   onLogout: () => void;
+  history?: WatchHistoryItem[];
+  onPressHistoryItem?: (item: WatchHistoryItem) => void;
+  onRemoveHistoryItem?: (id: string) => void;
   onToggleDesktopMode: () => void;
 }
 
@@ -72,6 +77,9 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onLoadEpg,
   onOpenLogin,
   onLogout,
+  history = [],
+  onPressHistoryItem,
+  onRemoveHistoryItem,
   onToggleDesktopMode
 }) => {
   const { width } = useWindowDimensions();
@@ -81,6 +89,14 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const [categorySheetVisible, setCategorySheetVisible] = useState(false);
   const [accountSheetVisible, setAccountSheetVisible] = useState(false);
   const [favFilter, setFavFilter] = useState<'all' | 'live' | 'vod' | 'series'>('all');
+
+  // Filter history relevant to current tab
+  const relevantHistory = useMemo(() => {
+    if (!history || history.length === 0) return [];
+    if (activeTab === 'vod') return history.filter(h => h.type === 'vod');
+    if (activeTab === 'series') return history.filter(h => h.type === 'series');
+    return [];
+  }, [history, activeTab]);
 
   // Filter items by search
   const displayedItems = useMemo(() => {
@@ -254,6 +270,15 @@ export const MobileApp: React.FC<MobileAppProps> = ({
             maxToRenderPerBatch={10}
             initialNumToRender={12}
             removeClippedSubviews={Platform.OS !== 'web'}
+            ListHeaderComponent={
+              (activeTab === 'vod' || activeTab === 'series') && relevantHistory.length > 0 && onPressHistoryItem && onRemoveHistoryItem ? (
+                <ContinueWatchingRow
+                  history={relevantHistory}
+                  onPressItem={onPressHistoryItem}
+                  onRemoveItem={onRemoveHistoryItem}
+                />
+              ) : undefined
+            }
           />
         )}
       </View>

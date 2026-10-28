@@ -18,7 +18,8 @@ import {
   NavTab,
   PlayingStream,
   SeriesEpisode,
-  SeriesItem
+  SeriesItem,
+  WatchHistoryItem
 } from './src/types';
 import { XtreamAPI } from './src/services/api';
 import { StorageService } from './src/services/storage';
@@ -98,12 +99,23 @@ export default function App() {
   // Modals & Playback State
   const [playingStream, setPlayingStream] = useState<PlayingStream | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<SeriesItem | null>(null);
+  const [isMiniPlayer, setIsMiniPlayer] = useState(false);
+  const [history, setHistory] = useState<WatchHistoryItem[]>([]);
 
   // EPG / TV Guide State
   const [epgMap, setEpgMap] = useState<Record<string, EPGChannelSchedule>>({});
   const [selectedEpgSchedule, setSelectedEpgSchedule] = useState<EPGChannelSchedule | null>(null);
   const [activeEpgStream, setActiveEpgStream] = useState<LiveStream | null>(null);
   const [epgModalVisible, setEpgModalVisible] = useState(false);
+
+  const loadHistory = useCallback(async (accountId: string) => {
+    try {
+      const h = await StorageService.getHistory(accountId);
+      setHistory(h);
+    } catch (e) {
+      console.error('Failed to load history:', e);
+    }
+  }, []);
 
   // Initial Boot
   useEffect(() => {
@@ -129,6 +141,7 @@ export default function App() {
         }
         setAccount(current);
         loadFavorites(current.id);
+        loadHistory(current.id);
         loadCategoriesAndStreams(current, 'live');
       } else {
         setLoginModalVisible(true);
@@ -274,6 +287,7 @@ export default function App() {
   const handleLoginSuccess = (newAccount: Account) => {
     setAccount(newAccount);
     loadFavorites(newAccount.id);
+    loadHistory(newAccount.id);
     const targetTab = activeTab === 'epg' ? 'live' : activeTab;
     loadCategoriesAndStreams(newAccount, targetTab, undefined, true);
   };
@@ -319,7 +333,11 @@ export default function App() {
     return sched;
   };
 
-  const handlePressItem = (item: any, typeOverride?: MediaType) => {
+  const handlePressItem = (
+    item: any,
+    typeOverride?: MediaType,
+    initialSeekTime?: number
+  ) => {
     if (!account) return;
     const raw = item.rawItem || item;
     const currentTab = typeOverride || (activeTab === 'epg' ? 'live' : (activeTab === 'favorites' ? (item.type || 'live') : activeTab));
@@ -367,6 +385,7 @@ export default function App() {
       ? `${epg.current.title} (${epg.current.start} - ${epg.current.end})`
       : undefined;
 
+    setIsMiniPlayer(false);
     setPlayingStream({
       streamId: sid,
       title: raw.name || raw.title || item.title || 'Contenuto',
@@ -375,7 +394,8 @@ export default function App() {
       streamUrl,
       poster: raw.stream_icon || raw.cover || item.icon,
       extension,
-      rawItem: raw
+      rawItem: raw,
+      initialSeekTime
     });
   };
 
@@ -383,7 +403,8 @@ export default function App() {
     episode: SeriesEpisode,
     seasonNum: number | string,
     seriesName: string,
-    cover?: string
+    cover?: string,
+    initialSeekTime?: number
   ) => {
     if (!account) return;
     const streamUrl = XtreamAPI.buildStreamUrl(
@@ -393,6 +414,7 @@ export default function App() {
       episode.container_extension || 'mp4'
     );
 
+    setIsMiniPlayer(false);
     setPlayingStream({
       streamId: episode.id,
       title: episode.title || `Episodio ${episode.episode_num}`,
@@ -400,9 +422,40 @@ export default function App() {
       type: 'series',
       streamUrl,
       poster: cover,
-      rawItem: episode
+      rawItem: episode,
+      initialSeekTime
     });
   };
+
+  const handlePressHistoryItem = useCallback((hItem: WatchHistoryItem) => {
+    if (!account) return;
+    if (hItem.type === 'series') {
+      if (hItem.rawItem) {
+        handlePlaySeriesEpisode(
+          hItem.rawItem,
+          hItem.seasonNum || 1,
+          hItem.seriesName || hItem.title,
+          hItem.poster,
+          hItem.currentTime
+        );
+      }
+    } else {
+      const vodRaw = hItem.rawItem || {
+        stream_id: hItem.id,
+        name: hItem.title,
+        stream_icon: hItem.poster,
+        stream_type: 'movie',
+        container_extension: 'mp4'
+      };
+      handlePressItem(vodRaw, 'vod', hItem.currentTime);
+    }
+  }, [account]);
+
+  const handleRemoveHistoryItem = useCallback(async (id: string) => {
+    if (!account) return;
+    await StorageService.removeHistoryItem(account.id, id);
+    loadHistory(account.id);
+  }, [account, loadHistory]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -421,6 +474,9 @@ export default function App() {
           liveChannels={liveChannels}
           liveCategories={liveCategories}
           favorites={favorites}
+          history={history}
+          onPressHistoryItem={handlePressHistoryItem}
+          onRemoveHistoryItem={handleRemoveHistoryItem}
           epgMap={epgMap}
           loading={loading}
           refreshing={refreshing}
@@ -449,6 +505,9 @@ export default function App() {
           liveChannels={liveChannels}
           liveCategories={liveCategories}
           favorites={favorites}
+          history={history}
+          onPressHistoryItem={handlePressHistoryItem}
+          onRemoveHistoryItem={handleRemoveHistoryItem}
           epgMap={epgMap}
           loading={loading}
           refreshing={refreshing}
@@ -486,7 +545,21 @@ export default function App() {
       <UniversalVideoPlayer
         visible={!!playingStream}
         stream={playingStream}
-        onClose={() => setPlayingStream(null)}
+        account={account}
+        isMinimized={isMiniPlayer}
+        onToggleMinimize={() => setIsMiniPlayer((prev) => !prev)}
+        onWatchProgressUpdated={() => {
+          if (account) {
+            loadHistory(account.id);
+          }
+        }}
+        onClose={() => {
+          setPlayingStream(null);
+          setIsMiniPlayer(false);
+          if (account) {
+            loadHistory(account.id);
+          }
+        }}
         onOpenEpg={() => {
           if (playingStream?.rawItem) {
             handleOpenEpg(playingStream.rawItem);
