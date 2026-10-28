@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,11 +7,15 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Platform,
-  useWindowDimensions
+  useWindowDimensions,
+  Animated,
+  Easing,
+  Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { PlayingStream } from '../types';
+import { XtreamAPI } from '../services/api';
 
 let HlsClass: any = null;
 if (Platform.OS === 'web') {
@@ -50,9 +54,9 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
   onClose,
   onOpenEpg
 }) => {
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
 
-  // OS & Device Detection
+  // Detect Mobile / Touch / Apple Device
   const isIOS = Platform.OS === 'ios' || (Platform.OS === 'web' && typeof navigator !== 'undefined' && (
     /iPhone|iPad|iPod/i.test(navigator.userAgent || '') ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
@@ -62,75 +66,275 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     /Android/i.test(navigator.userAgent || '')
   ));
 
-  const isMobileDevice = Platform.OS !== 'web' || isIOS || isAndroid || (typeof navigator !== 'undefined' && (
-    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|mobile|Tablet/i.test(navigator.userAgent || '')
-  )) || width < 900;
+  const isTouchDevice = isIOS || isAndroid || (Platform.OS === 'web' && typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0));
 
-  // Web HTML5 Video Ref
+  // Video Element Refs
   const webVideoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<any>(null);
-
-  // Native Expo Video Ref
   const nativeVideoRef = useRef<any>(null);
 
+  // Playback States
   const [loading, setLoading] = useState(true);
+  const [loadingStatus, setLoadingStatus] = useState('Connessione allo stream...');
   const [isPlaying, setIsPlaying] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
+  const [volume, setVolume] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [bufferPercent, setBufferPercent] = useState(0);
   const [showControls, setShowControls] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showTimeRemaining, setShowTimeRemaining] = useState(false);
 
-  const controlsTimeoutRef = useRef<any>(null);
+  // Quick Skip Ripple Feedback Indicator (-10s / +10s)
+  const [seekFeedback, setSeekFeedback] = useState<{ direction: 'back' | 'forward'; key: number } | null>(null);
+
+  // Scrubber Dragging State
+  const [isDraggingTrack, setIsDraggingTrack] = useState(false);
+  const [dragTime, setDragTime] = useState<number | null>(null);
   const [trackWidth, setTrackWidth] = useState<number>(0);
+  const trackRef = useRef<any>(null);
 
-  const isMovieOrSeries = stream?.type === 'vod' || stream?.type === 'series' || stream?.streamUrl.includes('/movie/') || stream?.streamUrl.includes('/series/');
-  const isLive = !isMovieOrSeries && (stream?.type === 'live' || stream?.streamUrl.includes('/live/'));
+  // Timers & Mounted tracking
+  const controlsTimeoutRef = useRef<any>(null);
+  const lastTapRef = useRef<number>(0);
+  const retryCountRef = useRef(0);
+  const isClosingRef = useRef(false);
 
-  // Fetch duration via server ffprobe if not yet known (especially useful for transcoded or remote VOD streams)
-  useEffect(() => {
-    if (visible && stream && isMovieOrSeries) {
-      let rawUrl = stream.streamUrl;
-      if (rawUrl.includes('/api/proxy?url=')) {
-        rawUrl = decodeURIComponent(rawUrl.split('/api/proxy?url=')[1]);
-      } else if (rawUrl.includes('/api/hls/master.m3u8?url=')) {
-        rawUrl = decodeURIComponent(rawUrl.split('/api/hls/master.m3u8?url=')[1]);
-      }
-      if (rawUrl.startsWith('http')) {
-        fetch(`/api/media_info?url=${encodeURIComponent(rawUrl)}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data && data.duration && data.duration > 0 && isFinite(data.duration)) {
-              setDuration(prev => (prev > 0 && isFinite(prev) ? prev : data.duration));
-            }
-          })
-          .catch(() => {});
-      }
+  // ── Cinematic Opening & Closing Animations ──
+  const animFade = useRef(new Animated.Value(0)).current;
+  const animScale = useRef(new Animated.Value(0.95)).current;
+  const controlsAnim = useRef(new Animated.Value(1)).current;
+  const splashFade = useRef(new Animated.Value(1)).current;
+
+  // ── 100% Robust Content Type Detection (Guaranteed NO Movie marked as LIVE) ──
+  const isMovieOrSeries = Boolean(
+    stream?.type === 'vod' ||
+    stream?.type === 'series' ||
+    stream?.streamUrl.includes('/movie/') ||
+    stream?.streamUrl.includes('/series/') ||
+    stream?.streamUrl.includes('%2Fmovie%2F') ||
+    stream?.streamUrl.includes('%2Fseries%2F') ||
+    stream?.extension === 'mp4' ||
+    stream?.extension === 'mkv' ||
+    stream?.extension === 'avi' ||
+    Boolean(stream?.rawItem?.container_extension) ||
+    stream?.rawItem?.stream_type === 'movie' ||
+    stream?.rawItem?.type === 'vod' ||
+    stream?.rawItem?.type === 'series'
+  );
+  const isLive = !isMovieOrSeries;
+
+  // ── Smooth Close Trigger with Fade-Out & Scale-Down ──
+  const handleClose = useCallback(() => {
+    if (isClosingRef.current) return;
+    isClosingRef.current = true;
+
+    // Gently fade out audio
+    if (Platform.OS === 'web' && webVideoRef.current) {
+      try {
+        const vid = webVideoRef.current;
+        let v = vid.volume;
+        const fadeAudio = setInterval(() => {
+          v = Math.max(0, v - 0.25);
+          vid.volume = v;
+          if (v <= 0) {
+            clearInterval(fadeAudio);
+            vid.pause();
+          }
+        }, 30);
+      } catch {}
     }
-  }, [visible, stream, isMovieOrSeries]);
 
+    // Play smooth cinematic exit animation
+    Animated.parallel([
+      Animated.timing(animFade, {
+        toValue: 0,
+        duration: 220,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true
+      }),
+      Animated.timing(animScale, {
+        toValue: 0.95,
+        duration: 220,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true
+      })
+    ]).start(() => {
+      cleanupWebPlayer();
+      onClose();
+    });
+  }, [animFade, animScale, onClose]);
+
+  // ── Reset Controls Auto-Hide Timer ──
+  const clearControlsTimer = useCallback(() => {
+    if (controlsTimeoutRef.current) {
+      clearTimeout(controlsTimeoutRef.current);
+      controlsTimeoutRef.current = null;
+    }
+  }, []);
+
+  const resetControlsTimer = useCallback(() => {
+    clearControlsTimer();
+    setShowControls(true);
+    Animated.timing(controlsAnim, {
+      toValue: 1,
+      duration: 150,
+      useNativeDriver: true
+    }).start();
+
+    // Auto-hide after 3.8s if playing
+    controlsTimeoutRef.current = setTimeout(() => {
+      if (webVideoRef.current && !webVideoRef.current.paused && !isDraggingTrack) {
+        Animated.timing(controlsAnim, {
+          toValue: 0,
+          duration: 250,
+          useNativeDriver: true
+        }).start(() => {
+          setShowControls(false);
+        });
+      }
+    }, 3800);
+  }, [clearControlsTimer, controlsAnim, isDraggingTrack]);
+
+  // ── Initialize Media Metadata and Duration ──
   useEffect(() => {
     if (visible && stream) {
+      isClosingRef.current = false;
       setLoading(true);
+      setLoadingStatus('Connessione allo stream...');
       setErrorMsg(null);
       setIsPlaying(true);
       setCurrentTime(0);
-      setDuration(0);
+      setBufferPercent(0);
+      retryCountRef.current = 0;
+
+      // 1. Initial Duration from raw item if present
+      const initialDur = XtreamAPI.extractDuration(stream.rawItem);
+      if (initialDur > 0) {
+        setDuration(initialDur);
+      } else {
+        setDuration(0);
+      }
+
+      // 2. Fetch server duration probe for movies/series
+      if (isMovieOrSeries) {
+        let rawUrl = stream.streamUrl;
+        if (rawUrl.includes('/api/proxy?url=')) {
+          rawUrl = decodeURIComponent(rawUrl.split('/api/proxy?url=')[1]);
+        } else if (rawUrl.includes('/api/hls/master.m3u8?url=')) {
+          const parts = rawUrl.split('/api/hls/master.m3u8?url=')[1];
+          rawUrl = decodeURIComponent(parts.split('&')[0]);
+        }
+        if (rawUrl.startsWith('http')) {
+          fetch(`/api/media_info?url=${encodeURIComponent(rawUrl)}`)
+            .then(res => res.json())
+            .then(data => {
+              if (data && data.duration && data.duration > 0 && isFinite(data.duration)) {
+                setDuration(data.duration);
+              }
+            })
+            .catch(() => {});
+        }
+      }
+
+      // 3. Play Cinematic Open Animation
+      animFade.setValue(0);
+      animScale.setValue(0.95);
+      splashFade.setValue(1);
+
+      Animated.parallel([
+        Animated.timing(animFade, {
+          toValue: 1,
+          duration: 260,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true
+        }),
+        Animated.timing(animScale, {
+          toValue: 1,
+          duration: 260,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true
+        })
+      ]).start();
+
       resetControlsTimer();
 
       if (Platform.OS === 'web') {
-        initWebPlayer();
+        initWebPlayer(stream.streamUrl);
       }
     } else {
       clearControlsTimer();
       cleanupWebPlayer();
     }
+
     return () => {
       clearControlsTimer();
       cleanupWebPlayer();
     };
   }, [visible, stream]);
 
+  // ── Keyboard Shortcuts (Desktop Web) ──
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !visible) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept if user is typing in an input
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+
+      switch (e.key) {
+        case ' ':
+        case 'k':
+        case 'K':
+          e.preventDefault();
+          togglePlayPause();
+          break;
+        case 'ArrowLeft':
+        case 'j':
+        case 'J':
+          e.preventDefault();
+          seekRelative(-10);
+          break;
+        case 'ArrowRight':
+        case 'l':
+        case 'L':
+          e.preventDefault();
+          seekRelative(10);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          adjustVolume(0.1);
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          adjustVolume(-0.1);
+          break;
+        case 'm':
+        case 'M':
+          e.preventDefault();
+          toggleMute();
+          break;
+        case 'f':
+        case 'F':
+          e.preventDefault();
+          toggleFullscreen();
+          break;
+        case 'Escape':
+          e.preventDefault();
+          handleClose();
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [visible, isPlaying, duration, currentTime, isMuted, volume]);
+
+  // ── Web Player Teardown ──
   const cleanupWebPlayer = () => {
     if (hlsRef.current) {
       try {
@@ -148,96 +352,107 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
-  const tryEnterAppleFullscreen = (video: HTMLVideoElement) => {
-    if (isIOS && typeof (video as any).webkitEnterFullscreen === 'function') {
-      try {
-        (video as any).webkitEnterFullscreen();
-      } catch (err) {
-        // Fullscreen may require direct user touch
-        console.log('Apple fullscreen deferred until user touch:', err);
-      }
-    }
-  };
-
-  const initWebPlayer = () => {
+  // ── Web HTML5 Video & HLS Setup ──
+  const initWebPlayer = (targetUrl: string) => {
     cleanupWebPlayer();
     const video = webVideoRef.current;
     if (!video || !stream) return;
 
-    const streamUrl = stream.streamUrl;
-    const isM3U8 = streamUrl.toLowerCase().includes('.m3u8') || (isLive && !streamUrl.includes('/movie/') && !streamUrl.includes('/series/'));
+    const isM3U8 = targetUrl.toLowerCase().includes('.m3u8') || targetUrl.includes('/api/hls/') || (isLive && !targetUrl.includes('/movie/') && !targetUrl.includes('/series/'));
     const canNativeHls = typeof video.canPlayType === 'function' && Boolean(video.canPlayType('application/vnd.apple.mpegurl'));
 
-    video.onwaiting = () => setLoading(true);
+    video.onwaiting = () => {
+      setLoading(true);
+      setLoadingStatus('Buffering...');
+    };
+
     video.onplaying = () => {
       setLoading(false);
       setIsPlaying(true);
+      Animated.timing(splashFade, {
+        toValue: 0,
+        duration: 350,
+        useNativeDriver: true
+      }).start();
+
       if (isIOS) {
         tryEnterAppleFullscreen(video);
       }
     };
+
     video.onpause = () => setIsPlaying(false);
-    video.onvolumechange = () => setIsMuted(video.muted);
+    video.onvolumechange = () => {
+      setIsMuted(video.muted);
+      setVolume(video.volume);
+    };
+
+    video.onprogress = () => {
+      if (video.buffered && video.buffered.length > 0 && video.duration > 0) {
+        const end = video.buffered.end(video.buffered.length - 1);
+        setBufferPercent(Math.min(100, (end / video.duration) * 100));
+      }
+    };
+
     video.onloadedmetadata = () => {
       if (video.duration && isFinite(video.duration) && video.duration > 0) {
         setDuration(video.duration);
       }
     };
+
     video.ondurationchange = () => {
       if (video.duration && isFinite(video.duration) && video.duration > 0) {
         setDuration(video.duration);
       }
     };
+
     video.ontimeupdate = () => {
-      setCurrentTime(video.currentTime);
-      if (video.duration && isFinite(video.duration) && video.duration > 0) {
+      if (!isDraggingTrack) {
+        setCurrentTime(video.currentTime);
+      }
+      if (video.duration && isFinite(video.duration) && video.duration > 0 && duration <= 0) {
         setDuration(video.duration);
       }
     };
+
     video.onerror = () => {
       console.warn('HTML5 Video Error:', video.error);
       const code = video.error ? video.error.code : 'ignoto';
 
-      // Fallback 1: If direct stream failed on VOD/Series (Code 4 unsupported format), retry via HLS remuxing
-      if (!stream.streamUrl.includes('/api/hls/master.m3u8') && !stream.streamUrl.includes('/api/transcode') && isMovieOrSeries) {
-        console.log(`Direct stream error (Code ${code}), falling back to HLS remuxing pipeline...`);
+      // Fallback 1: If direct stream failed on VOD/Movie, fallback to HLS remuxing
+      if (!targetUrl.includes('/api/hls/master.m3u8') && !targetUrl.includes('/api/transcode') && isMovieOrSeries) {
+        console.log(`Direct stream error (Code ${code}), falling back to HLS remuxing...`);
         let hlsUrl = '';
-        if (stream.streamUrl.includes('/api/proxy?url=')) {
-          hlsUrl = stream.streamUrl.replace('/api/proxy?url=', '/api/hls/master.m3u8?url=');
+        if (targetUrl.includes('/api/proxy?url=')) {
+          hlsUrl = targetUrl.replace('/api/proxy?url=', '/api/hls/master.m3u8?url=');
         } else {
-          hlsUrl = `/api/hls/master.m3u8?url=${encodeURIComponent(stream.streamUrl)}`;
+          hlsUrl = `/api/hls/master.m3u8?url=${encodeURIComponent(targetUrl)}`;
         }
-        stream.streamUrl = hlsUrl;
-        cleanupWebPlayer();
-        initWebPlayer();
+        initWebPlayer(hlsUrl);
         return;
       }
 
-      // Fallback 2: if HLS failed, retry via direct proxy
-      if (stream.streamUrl.includes('/api/hls/master.m3u8')) {
+      // Fallback 2: If HLS failed, fallback to direct proxy stream
+      if (targetUrl.includes('/api/hls/master.m3u8') && retryCountRef.current === 0) {
+        retryCountRef.current = 1;
         console.log('HLS pipeline error, falling back to direct proxy stream...');
-        const proxyUrl = stream.streamUrl.replace('/api/hls/master.m3u8', '/api/proxy');
-        stream.streamUrl = proxyUrl;
-        cleanupWebPlayer();
-        video.src = proxyUrl;
-        video.load();
-        video.play().catch(() => {});
+        const proxyUrl = targetUrl.replace('/api/hls/master.m3u8', '/api/proxy');
+        initWebPlayer(proxyUrl);
         return;
       }
 
-      setErrorMsg(`Errore riproduzione stream (Codice ${code}). Verifica la connessione o il formato del server.`);
+      setErrorMsg(`Impossibile riprodurre il contenuto (Codice ${code}). Verifica la connessione o il server IPTV.`);
       setLoading(false);
     };
 
-    // When exiting Apple's native player (tapping 'Fine' / 'Done'), dismiss the modal smoothly
+    // Exit fullscreen listener for Apple devices
     const handleWebkitEnd = () => {
-      onClose();
+      setIsFullscreen(false);
     };
     video.addEventListener('webkitendfullscreen', handleWebkitEnd, { once: true });
 
-    // Use native Apple AVPlayer HLS engine if supported (iPhone / iPad / Safari)
+    // Apple AVPlayer HLS Engine (iPhone / iPad / Safari)
     if (isM3U8 && canNativeHls) {
-      video.src = streamUrl;
+      video.src = targetUrl;
       video.load();
       video.play().then(() => {
         tryEnterAppleFullscreen(video);
@@ -245,123 +460,131 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
         console.log('Autoplay waiting for user touch:', e);
       });
     } else if (isM3U8 && HlsClass && HlsClass.isSupported()) {
+      // HLS.js for Chrome, Firefox, Edge, Android
       const hls = new HlsClass({
         enableWorker: true,
         lowLatencyMode: isLive,
-        backBufferLength: 60
+        backBufferLength: isLive ? 30 : 120,
+        maxBufferLength: isLive ? 30 : 90,
+        maxMaxBufferLength: isLive ? 60 : 180
       });
       hlsRef.current = hls;
 
-      hls.loadSource(streamUrl);
+      hls.loadSource(targetUrl);
       hls.attachMedia(video);
 
-      hls.on(HlsClass.Events.MANIFEST_PARSED, () => {
+      hls.on(HlsClass.Events.MANIFEST_PARSED, (_event: any, data: any) => {
         setLoading(false);
+        if (data?.levels?.[0]?.details?.totalduration) {
+          setDuration(data.levels[0].details.totalduration);
+        }
         video.play().catch(() => {});
+      });
+
+      hls.on(HlsClass.Events.LEVEL_LOADED, (_event: any, data: any) => {
+        if (data?.details?.totalduration && isFinite(data.details.totalduration)) {
+          setDuration(data.details.totalduration);
+        }
       });
 
       hls.on(HlsClass.Events.ERROR, (_event: any, data: any) => {
         if (data.fatal) {
           switch (data.type) {
             case HlsClass.ErrorTypes.NETWORK_ERROR:
-              console.warn('HLS Network error, attempting recovery...');
+              console.warn('HLS Network error, recovering...');
               hls.startLoad();
               break;
             case HlsClass.ErrorTypes.MEDIA_ERROR:
-              console.warn('HLS Media error, attempting recovery...');
+              console.warn('HLS Media error, recovering...');
               hls.recoverMediaError();
               break;
             default:
               console.error('Fatal HLS error:', data);
-              if (stream.streamUrl.includes('/api/hls/master.m3u8')) {
-                console.log('Falling back to proxy stream after fatal HLS error...');
-                const proxyUrl = stream.streamUrl.replace('/api/hls/master.m3u8', '/api/proxy');
-                stream.streamUrl = proxyUrl;
-                cleanupWebPlayer();
-                video.src = proxyUrl;
-                video.load();
-                video.play().catch(() => {});
+              if (targetUrl.includes('/api/hls/master.m3u8')) {
+                const proxyUrl = targetUrl.replace('/api/hls/master.m3u8', '/api/proxy');
+                initWebPlayer(proxyUrl);
                 return;
               }
               setErrorMsg('Errore critico durante la riproduzione stream.');
+              setLoading(false);
               cleanupWebPlayer();
               break;
           }
         }
       });
     } else {
-      // Standard MP4/MKV
-      video.src = streamUrl;
+      // Direct MP4 / MKV stream
+      video.src = targetUrl;
       video.load();
       video.play().catch(() => {});
     }
   };
 
-  const handleLaunchNativePlayer = () => {
-    if (Platform.OS === 'web' && webVideoRef.current) {
-      const video = webVideoRef.current;
-      video.play().catch(() => {});
-      if (isIOS && typeof (video as any).webkitEnterFullscreen === 'function') {
-        try {
-          (video as any).webkitEnterFullscreen();
-        } catch (e) {
-          console.warn('Could not enter Apple fullscreen:', e);
-        }
-      } else if (typeof video.requestFullscreen === 'function') {
-        video.requestFullscreen().catch(() => {});
+  const tryEnterAppleFullscreen = (video: HTMLVideoElement) => {
+    if (isIOS && typeof (video as any).webkitEnterFullscreen === 'function') {
+      try {
+        (video as any).webkitEnterFullscreen();
+        setIsFullscreen(true);
+      } catch (err) {
+        console.log('Apple fullscreen deferred until user touch:', err);
       }
-    } else if (nativeVideoRef.current) {
-      nativeVideoRef.current.presentFullscreenPlayer();
     }
   };
 
-  const clearControlsTimer = () => {
-    if (controlsTimeoutRef.current) {
-      clearTimeout(controlsTimeoutRef.current);
-      controlsTimeoutRef.current = null;
-    }
-  };
-
-  const resetControlsTimer = () => {
-    clearControlsTimer();
-    setShowControls(true);
-    controlsTimeoutRef.current = setTimeout(() => {
-      setShowControls(false);
-    }, 4000);
-  };
-
-  const togglePlayPause = () => {
+  // ── Play / Pause ──
+  const togglePlayPause = useCallback(() => {
     resetControlsTimer();
     if (Platform.OS === 'web' && webVideoRef.current) {
       if (webVideoRef.current.paused) {
         webVideoRef.current.play().catch(() => {});
+        setIsPlaying(true);
       } else {
         webVideoRef.current.pause();
+        setIsPlaying(false);
       }
     } else if (nativeVideoRef.current) {
       if (isPlaying) {
         nativeVideoRef.current.pauseAsync();
+        setIsPlaying(false);
       } else {
         nativeVideoRef.current.playAsync();
+        setIsPlaying(true);
       }
     }
-  };
+  }, [isPlaying, resetControlsTimer]);
 
-  const toggleMute = () => {
+  // ── Mute / Unmute ──
+  const toggleMute = useCallback(() => {
     resetControlsTimer();
     if (Platform.OS === 'web' && webVideoRef.current) {
-      webVideoRef.current.muted = !webVideoRef.current.muted;
-      setIsMuted(webVideoRef.current.muted);
+      const nextMuted = !webVideoRef.current.muted;
+      webVideoRef.current.muted = nextMuted;
+      setIsMuted(nextMuted);
     } else if (nativeVideoRef.current) {
       nativeVideoRef.current.setIsMutedAsync(!isMuted);
+      setIsMuted(!isMuted);
     }
-  };
+  }, [isMuted, resetControlsTimer]);
 
-  const seekTo = (targetSecs: number) => {
+  // ── Volume Slider / Adjust ──
+  const adjustVolume = useCallback((delta: number) => {
+    resetControlsTimer();
+    if (Platform.OS === 'web' && webVideoRef.current) {
+      const newVol = Math.max(0, Math.min(1, webVideoRef.current.volume + delta));
+      webVideoRef.current.volume = newVol;
+      webVideoRef.current.muted = newVol === 0;
+      setVolume(newVol);
+      setIsMuted(newVol === 0);
+    }
+  }, [resetControlsTimer]);
+
+  // ── Direct Seek To Target Timestamp ──
+  const seekTo = useCallback((targetSecs: number) => {
     resetControlsTimer();
     const maxDur = duration > 0 && isFinite(duration) ? duration : (webVideoRef.current?.duration || 0);
     if (maxDur <= 0) return;
     const clamped = Math.max(0, Math.min(maxDur, targetSecs));
+
     if (Platform.OS === 'web' && webVideoRef.current) {
       webVideoRef.current.currentTime = clamped;
       setCurrentTime(clamped);
@@ -369,48 +592,78 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       nativeVideoRef.current.setPositionAsync(clamped * 1000);
       setCurrentTime(clamped);
     }
-  };
+  }, [duration, resetControlsTimer]);
 
-  const seekRelative = (offsetSecs: number) => {
+  // ── Relative Seek with Ripple Feedback (±10s) ──
+  const seekRelative = useCallback((offsetSecs: number) => {
     resetControlsTimer();
+    const cur = (Platform.OS === 'web' && webVideoRef.current)
+      ? (webVideoRef.current.currentTime || currentTime)
+      : currentTime;
+
+    const maxDur = duration > 0 && isFinite(duration) ? duration : (webVideoRef.current?.duration || 86400);
+    const target = Math.max(0, Math.min(maxDur, cur + offsetSecs));
+
     if (Platform.OS === 'web' && webVideoRef.current) {
-      const vid = webVideoRef.current;
-      const cur = vid.currentTime || currentTime || 0;
-      const maxDur = duration > 0 && isFinite(duration) ? duration : (vid.duration && isFinite(vid.duration) ? vid.duration : 86400);
-      const target = Math.max(0, Math.min(maxDur, cur + offsetSecs));
-      vid.currentTime = target;
+      webVideoRef.current.currentTime = target;
       setCurrentTime(target);
     } else if (nativeVideoRef.current) {
-      const cur = currentTime || 0;
-      const maxDur = duration > 0 ? duration : 86400;
-      const target = Math.max(0, Math.min(maxDur, cur + offsetSecs));
       nativeVideoRef.current.setPositionAsync(target * 1000);
       setCurrentTime(target);
     }
-  };
 
-  const toggleFullscreen = () => {
+    // Trigger visual ripple burst
+    setSeekFeedback({
+      direction: offsetSecs > 0 ? 'forward' : 'back',
+      key: Date.now()
+    });
+    setTimeout(() => {
+      setSeekFeedback(null);
+    }, 650);
+  }, [currentTime, duration, resetControlsTimer]);
+
+  // ── Fullscreen Toggle ──
+  const toggleFullscreen = useCallback(() => {
     resetControlsTimer();
     if (Platform.OS === 'web') {
       const video = webVideoRef.current;
-      if (video) {
-        if (isIOS && typeof (video as any).webkitEnterFullscreen === 'function') {
+      if (isIOS && video && typeof (video as any).webkitEnterFullscreen === 'function') {
+        try {
           (video as any).webkitEnterFullscreen();
+          setIsFullscreen(true);
           return;
-        }
-        if (!document.fullscreenElement) {
-          video.requestFullscreen?.().catch(() => {
-            document.documentElement.requestFullscreen?.();
-          });
-        } else {
-          document.exitFullscreen?.();
-        }
+        } catch {}
+      }
+
+      if (!document.fullscreenElement) {
+        const root = document.getElementById('root') || document.documentElement;
+        root.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {
+          video?.requestFullscreen?.().then(() => setIsFullscreen(true));
+        });
+      } else {
+        document.exitFullscreen?.().then(() => setIsFullscreen(false));
       }
     } else if (nativeVideoRef.current) {
       nativeVideoRef.current.presentFullscreenPlayer();
     }
+  }, [isIOS, resetControlsTimer]);
+
+  // ── Open in VLC (Desktop) ──
+  const handleOpenInVlc = () => {
+    if (!stream?.streamUrl) return;
+    let target = stream.streamUrl;
+    if (target.includes('/api/proxy?url=')) {
+      target = decodeURIComponent(target.split('/api/proxy?url=')[1]);
+    } else if (target.includes('/api/hls/master.m3u8?url=')) {
+      const parts = target.split('/api/hls/master.m3u8?url=')[1];
+      target = decodeURIComponent(parts.split('&')[0]);
+    }
+    fetch(`/api/open_vlc?url=${encodeURIComponent(target)}`)
+      .then(res => res.json())
+      .catch(() => {});
   };
 
+  // ── Time Formatting (H:MM:SS or M:SS) ──
   const formatTime = (seconds: number) => {
     if (!isFinite(seconds) || isNaN(seconds) || seconds <= 0) return '0:00';
     const totalSecs = Math.floor(seconds);
@@ -423,28 +676,126 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
-  const handleTimelinePress = (e: any) => {
-    if (duration <= 0 || !isFinite(duration)) return;
-    const nativeEvent = e.nativeEvent;
-    const clickX = nativeEvent.locationX ?? nativeEvent.offsetX ?? 0;
-    const w = trackWidth > 0 ? trackWidth : 1;
-    const ratio = Math.max(0, Math.min(1, clickX / w));
-    seekTo(ratio * duration);
+  // ── Interactive Timeline Scrubbing (Drag & Click) ──
+  const calculateScrubPosition = (clientX: number) => {
+    if (!trackRef.current || duration <= 0) return 0;
+    const rect = trackRef.current.getBoundingClientRect ? trackRef.current.getBoundingClientRect() : null;
+    if (!rect) return 0;
+    const offsetX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const ratio = offsetX / rect.width;
+    return ratio * duration;
+  };
+
+  const handleTimelineMouseDown = (e: any) => {
+    if (duration <= 0) return;
+    e.preventDefault?.();
+    const clientX = e.clientX ?? e.nativeEvent?.clientX ?? 0;
+    const target = calculateScrubPosition(clientX);
+    setIsDraggingTrack(true);
+    setDragTime(target);
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const movedTarget = calculateScrubPosition(moveEvent.clientX);
+      setDragTime(movedTarget);
+    };
+
+    const onMouseUp = (upEvent: MouseEvent) => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      const finalTarget = calculateScrubPosition(upEvent.clientX);
+      setIsDraggingTrack(false);
+      setDragTime(null);
+      seekTo(finalTarget);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  const handleTimelineTouchStart = (e: any) => {
+    if (duration <= 0) return;
+    const touch = e.nativeEvent.touches[0];
+    if (!touch) return;
+    const target = calculateScrubPosition(touch.clientX);
+    setIsDraggingTrack(true);
+    setDragTime(target);
+  };
+
+  const handleTimelineTouchMove = (e: any) => {
+    if (!isDraggingTrack || duration <= 0) return;
+    const touch = e.nativeEvent.touches[0];
+    if (!touch) return;
+    const target = calculateScrubPosition(touch.clientX);
+    setDragTime(target);
+  };
+
+  const handleTimelineTouchEnd = () => {
+    if (!isDraggingTrack || duration <= 0) return;
+    if (dragTime !== null) {
+      seekTo(dragTime);
+    }
+    setIsDraggingTrack(false);
+    setDragTime(null);
+  };
+
+  // ── Double Tap Center to Skip / Single Tap to Toggle Controls ──
+  const handleCenterTap = (e: any) => {
+    const now = Date.now();
+    const timeDiff = now - lastTapRef.current;
+    lastTapRef.current = now;
+
+    if (timeDiff < 300) {
+      // Double tap detected
+      const clickX = e.nativeEvent?.locationX ?? e.nativeEvent?.offsetX ?? (width / 2);
+      if (clickX < width / 2) {
+        seekRelative(-10);
+      } else {
+        seekRelative(10);
+      }
+    } else {
+      // Single tap: toggle controls
+      if (showControls) {
+        Animated.timing(controlsAnim, {
+          toValue: 0,
+          duration: 200,
+          useNativeDriver: true
+        }).start(() => setShowControls(false));
+      } else {
+        resetControlsTimer();
+      }
+    }
   };
 
   if (!visible || !stream) return null;
 
-  const progressPercent = (duration > 0 && isFinite(duration)) ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+  const displayTime = isDraggingTrack && dragTime !== null ? dragTime : currentTime;
+  const progressPercent = duration > 0 && isFinite(duration)
+    ? Math.min(100, Math.max(0, (displayTime / duration) * 100))
+    : 0;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View
-        style={styles.container}
+    <Modal visible={visible} transparent animationType="none" onRequestClose={handleClose}>
+      <Animated.View
+        style={[
+          styles.container,
+          {
+            opacity: animFade,
+            transform: [{ scale: animScale }]
+          }
+        ]}
         // @ts-ignore
-        onMouseMove={!isMobileDevice ? resetControlsTimer : undefined}
-        onTouchStart={!isMobileDevice ? resetControlsTimer : undefined}
+        onMouseMove={resetControlsTimer}
       >
-        {/* Web HTML5 Video with Native Device Player Controls on Mobile */}
+        {/* Ambient Glow Backdrop from content poster */}
+        {stream.poster ? (
+          <Image
+            source={{ uri: stream.poster }}
+            style={styles.ambientBackdrop}
+            blurRadius={ Platform.OS === 'web' ? 40 : 25 }
+          />
+        ) : null}
+
+        {/* Web HTML5 Video Engine */}
         {Platform.OS === 'web' ? (
           <video
             // @ts-ignore
@@ -455,18 +806,18 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
               backgroundColor: '#000',
               objectFit: 'contain'
             }}
-            playsInline={!isIOS}
-            controls={isMobileDevice}
+            playsInline={true}
+            controls={false}
             autoPlay
           />
         ) : (
-          /* Native Android / iOS ExoPlayer / AVPlayer */
+          /* Native ExoPlayer (Android) / AVPlayer (iOS) */
           ExpoVideo ? (
             <ExpoVideo
               ref={nativeVideoRef}
               style={styles.video}
               source={{ uri: stream.streamUrl }}
-              useNativeControls={true}
+              useNativeControls={false}
               resizeMode={ResizeModeEnum ? ResizeModeEnum.CONTAIN : 'contain'}
               shouldPlay={true}
               onPlaybackStatusUpdate={(status: any) => {
@@ -475,7 +826,9 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
                   setIsPlaying(status.isPlaying);
                   setIsMuted(status.isMuted);
                   setCurrentTime((status.positionMillis || 0) / 1000);
-                  setDuration((status.durationMillis || 0) / 1000);
+                  if (status.durationMillis && status.durationMillis > 0) {
+                    setDuration(status.durationMillis / 1000);
+                  }
                 } else if (status.error) {
                   setErrorMsg('Errore riproduzione stream nativo.');
                   setLoading(false);
@@ -485,204 +838,297 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
           ) : null
         )}
 
-        {/* Loading Spinner */}
+        {/* ── Cinematic Loading Splash Overlay ── */}
         {loading && (
-          <View style={styles.centerFeedback} pointerEvents="none">
-            <ActivityIndicator size="large" color="#fff" />
-            <Text style={styles.centerLoadingText}>Caricamento stream in corso...</Text>
-          </View>
-        )}
+          <Animated.View style={[styles.splashOverlay, { opacity: splashFade }]} pointerEvents="none">
+            <View style={styles.splashCard}>
+              {stream.poster ? (
+                <View style={styles.splashPosterWrapper}>
+                  <Image source={{ uri: stream.poster }} style={styles.splashPoster} resizeMode="cover" />
+                </View>
+              ) : (
+                <View style={[styles.splashPosterWrapper, styles.splashPosterFallback]}>
+                  <Ionicons name={isLive ? 'tv-outline' : 'film-outline'} size={42} color={colors.primary} />
+                </View>
+              )}
 
-        {/* Error Display */}
-        {errorMsg && (
-          <View style={styles.centerFeedback}>
-            <Ionicons name="alert-circle-outline" size={38} color={colors.accentRed} />
-            <Text style={styles.errorText}>{errorMsg}</Text>
-            <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 10, marginTop: 14 }}>
-              <TouchableOpacity
-                style={styles.retryBtn}
-                onPress={() => {
-                  setErrorMsg(null);
-                  setLoading(true);
-                  if (Platform.OS === 'web') {
-                    initWebPlayer();
-                  } else if (nativeVideoRef.current) {
-                    nativeVideoRef.current.replayAsync();
-                  }
-                }}
-              >
-                <Text style={styles.retryBtnText}>Riprova</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.retryBtn, { backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.border }]}
-                onPress={onClose}
-              >
-                <Text style={styles.retryBtnText}>Chiudi</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
-        {/* MOBILE FLOATING HEADER: Leaves bottom area unobstructed for device's native controls */}
-        {isMobileDevice ? (
-          <View style={styles.mobileFloatingOverlay} pointerEvents="box-none">
-            <View style={styles.mobileTopBar}>
-              <TouchableOpacity
-                style={styles.mobileBackBtn}
-                onPress={onClose}
-                accessibilityLabel="Chiudi player"
-              >
-                <Ionicons name="chevron-back" size={20} color="#fff" />
-                <Text style={styles.mobileBackBtnText}>Chiudi</Text>
-              </TouchableOpacity>
-
-              <View style={styles.mobileTitleCol}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <View style={styles.typeBadge}>
-                    <Text style={styles.typeBadgeText}>
-                      {isLive ? 'LIVE' : stream.type === 'series' ? 'SERIE' : 'VOD'}
-                    </Text>
-                  </View>
-                  <Text style={styles.mobileStreamTitle} numberOfLines={1}>
-                    {stream.title}
+              <View style={styles.splashInfo}>
+                <View style={[styles.typeBadge, isLive ? styles.typeBadgeLive : styles.typeBadgeVod]}>
+                  <Text style={styles.typeBadgeText}>
+                    {isLive ? 'LIVE' : stream.type === 'series' ? 'SERIE' : 'VOD'}
                   </Text>
                 </View>
+                <Text style={styles.splashTitle} numberOfLines={2}>
+                  {stream.title}
+                </Text>
                 {stream.subTitle ? (
-                  <Text style={styles.mobileStreamSub} numberOfLines={1}>
+                  <Text style={styles.splashSubtitle} numberOfLines={1}>
                     {stream.subTitle}
                   </Text>
                 ) : null}
+
+                <View style={styles.splashLoaderRow}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <Text style={styles.splashLoadingStatus}>{loadingStatus}</Text>
+                </View>
               </View>
+            </View>
+          </Animated.View>
+        )}
 
-              <View style={styles.mobileRightActions}>
-                {isIOS && (
+        {/* ── Visual Seek Ripple Indicator (-10s / +10s) ── */}
+        {seekFeedback && (
+          <View
+            style={[
+              styles.seekRippleBadge,
+              seekFeedback.direction === 'back' ? styles.seekRippleLeft : styles.seekRippleRight
+            ]}
+            pointerEvents="none"
+          >
+            <View style={styles.seekRippleInner}>
+              <Ionicons
+                name={seekFeedback.direction === 'back' ? 'arrow-undo' : 'arrow-redo'}
+                size={28}
+                color="#fff"
+              />
+              <Text style={styles.seekRippleText}>
+                {seekFeedback.direction === 'back' ? '-10s' : '+10s'}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* ── Center Tap Layer for Controls & Double Tap ── */}
+        <TouchableOpacity
+          style={styles.centerTapArea}
+          activeOpacity={1}
+          onPress={handleCenterTap}
+        />
+
+        {/* ── Error Display Modal ── */}
+        {errorMsg && (
+          <View style={styles.errorOverlay}>
+            <View style={styles.errorCard}>
+              <Ionicons name="alert-circle-outline" size={48} color={colors.accentRed} />
+              <Text style={styles.errorHeading}>Impossibile riprodurre lo stream</Text>
+              <Text style={styles.errorMessage}>{errorMsg}</Text>
+
+              <View style={styles.errorActionsRow}>
+                <TouchableOpacity
+                  style={[styles.btnAction, styles.btnPrimary]}
+                  onPress={() => {
+                    setErrorMsg(null);
+                    setLoading(true);
+                    if (Platform.OS === 'web') {
+                      initWebPlayer(stream.streamUrl);
+                    } else if (nativeVideoRef.current) {
+                      nativeVideoRef.current.replayAsync();
+                    }
+                  }}
+                >
+                  <Ionicons name="refresh" size={18} color="#fff" />
+                  <Text style={styles.btnActionText}>Riprova</Text>
+                </TouchableOpacity>
+
+                {Platform.OS === 'web' && (
                   <TouchableOpacity
-                    style={styles.applePlayerBtn}
-                    onPress={handleLaunchNativePlayer}
-                    accessibilityLabel="Apri Player Apple Schermo Intero"
+                    style={[styles.btnAction, styles.btnSecondary]}
+                    onPress={handleOpenInVlc}
                   >
-                    <Ionicons name="expand" size={15} color="#fff" />
-                    <Text style={styles.applePlayerBtnText}>Apple</Text>
+                    <Ionicons name="play-outline" size={18} color="#fff" />
+                    <Text style={styles.btnActionText}>Apri in VLC</Text>
                   </TouchableOpacity>
                 )}
 
-                {isLive && onOpenEpg && (
-                  <TouchableOpacity style={styles.guideBtn} onPress={onOpenEpg}>
-                    <Ionicons name="calendar-outline" size={15} color="#fff" />
-                    <Text style={styles.guideBtnText}>Guida</Text>
-                  </TouchableOpacity>
-                )}
+                <TouchableOpacity
+                  style={[styles.btnAction, styles.btnDismiss]}
+                  onPress={handleClose}
+                >
+                  <Text style={styles.btnActionText}>Chiudi</Text>
+                </TouchableOpacity>
               </View>
             </View>
           </View>
-        ) : (
-          /* DESKTOP CONTROLS OVERLAY */
-          showControls && (
-            <View style={styles.overlay} pointerEvents="box-none">
-              {/* Top Bar */}
-              <View style={styles.topBar}>
-                <View style={styles.topTitleContainer}>
-                  <View style={styles.typeBadge}>
-                    <Text style={styles.typeBadgeText}>
-                      {isLive ? 'LIVE' : stream.type === 'series' ? 'SERIE' : 'VOD'}
-                    </Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
+        )}
+
+        {/* ── Full Interactive Controls Overlay (Universal Desktop & Mobile) ── */}
+        {showControls && (
+          <Animated.View
+            style={[
+              styles.controlsOverlay,
+              { opacity: controlsAnim }
+            ]}
+            pointerEvents="box-none"
+          >
+            {/* Top Bar */}
+            <View style={styles.topBar}>
+              <View style={styles.topLeft}>
+                <TouchableOpacity
+                  style={styles.backButton}
+                  onPress={handleClose}
+                  accessibilityLabel="Chiudi player"
+                >
+                  <Ionicons name="chevron-back" size={22} color="#fff" />
+                  <Text style={styles.backButtonText}>Chiudi</Text>
+                </TouchableOpacity>
+
+                <View style={styles.titleContainer}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <View style={[styles.typeBadge, isLive ? styles.typeBadgeLive : styles.typeBadgeVod]}>
+                      {isLive && <View style={styles.livePulseDot} />}
+                      <Text style={styles.typeBadgeText}>
+                        {isLive ? 'LIVE' : stream.type === 'series' ? 'SERIE' : 'VOD'}
+                      </Text>
+                    </View>
                     <Text style={styles.streamTitle} numberOfLines={1}>
                       {stream.title}
                     </Text>
-                    {stream.subTitle ? (
-                      <Text style={styles.streamSubtitle} numberOfLines={1}>
-                        {stream.subTitle}
-                      </Text>
-                    ) : null}
                   </View>
-                </View>
-
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  {isLive && onOpenEpg && (
-                    <TouchableOpacity style={styles.guideBtn} onPress={onOpenEpg}>
-                      <Ionicons name="calendar-outline" size={16} color="#fff" />
-                      <Text style={styles.guideBtnText}>Guida TV</Text>
-                    </TouchableOpacity>
-                  )}
-
-                  <TouchableOpacity style={styles.iconBtn} onPress={onClose}>
-                    <Ionicons name="close" size={22} color="#fff" />
-                  </TouchableOpacity>
+                  {stream.subTitle ? (
+                    <Text style={styles.streamSubtitle} numberOfLines={1}>
+                      {stream.subTitle}
+                    </Text>
+                  ) : null}
                 </View>
               </View>
 
-              {/* Center tap area to toggle play/pause */}
-              <TouchableOpacity style={styles.centerTapArea} activeOpacity={1} onPress={togglePlayPause} />
-
-              {/* Bottom Controls */}
-              <View style={styles.bottomBar}>
-                {!isLive && (
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    style={styles.timelineContainer}
-                    onPress={handleTimelinePress}
-                    onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
-                  >
-                    <View style={styles.timelineTrack}>
-                      <View style={[styles.timelinePlayed, { width: `${progressPercent}%` }]} />
-                      {duration > 0 && (
-                        <View style={[styles.timelineThumb, { left: `${progressPercent}%` }]} />
-                      )}
-                    </View>
+              <View style={styles.topRight}>
+                {isLive && onOpenEpg && (
+                  <TouchableOpacity style={styles.glassBtn} onPress={onOpenEpg}>
+                    <Ionicons name="calendar-outline" size={16} color="#fff" />
+                    <Text style={styles.glassBtnText}>Guida TV</Text>
                   </TouchableOpacity>
                 )}
 
-                <View style={styles.bottomControlsRow}>
-                  <View style={styles.bottomLeftControls}>
-                    <TouchableOpacity style={styles.iconBtn} onPress={togglePlayPause}>
-                      <Ionicons name={isPlaying ? 'pause' : 'play'} size={20} color="#fff" />
-                    </TouchableOpacity>
+                <TouchableOpacity style={styles.roundIconBtn} onPress={handleClose}>
+                  <Ionicons name="close" size={20} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            </View>
 
-                    {!isLive && (
-                      <>
-                        <TouchableOpacity style={styles.iconBtn} onPress={() => seekRelative(-10)}>
-                          <Ionicons name="play-back" size={18} color="#fff" />
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.iconBtn} onPress={() => seekRelative(10)}>
-                          <Ionicons name="play-forward" size={18} color="#fff" />
-                        </TouchableOpacity>
-                      </>
-                    )}
+            {/* Center Big Play/Pause Trigger */}
+            <View style={styles.centerControlArea} pointerEvents="box-none">
+              <TouchableOpacity
+                style={styles.bigPlayButton}
+                activeOpacity={0.8}
+                onPress={togglePlayPause}
+                accessibilityLabel={isPlaying ? 'Pausa' : 'Riproduci'}
+              >
+                <Ionicons name={isPlaying ? 'pause' : 'play'} size={38} color="#fff" />
+              </TouchableOpacity>
+            </View>
 
-                    {isLive ? (
-                      <View style={styles.liveIndicator}>
-                        <View style={styles.liveRedDot} />
-                        <Text style={styles.liveText}>DIRETTA</Text>
-                      </View>
-                    ) : (
-                      <Text style={styles.timeText}>
-                        {formatTime(currentTime)} / {formatTime(duration)}
+            {/* Bottom Controls Bar */}
+            <View style={styles.bottomBar} pointerEvents="auto">
+              {/* Scrubber Timeline (For Movies and Series) */}
+              {!isLive && (
+                <View
+                  // @ts-ignore
+                  ref={trackRef}
+                  style={styles.timelineHitArea}
+                  // @ts-ignore
+                  onMouseDown={handleTimelineMouseDown}
+                  onTouchStart={handleTimelineTouchStart}
+                  onTouchMove={handleTimelineTouchMove}
+                  onTouchEnd={handleTimelineTouchEnd}
+                  onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+                >
+                  <View style={styles.timelineBarBackground}>
+                    {/* Buffer Bar */}
+                    <View style={[styles.timelineBuffer, { width: `${bufferPercent}%` }]} />
+                    {/* Played Bar */}
+                    <View style={[styles.timelinePlayed, { width: `${progressPercent}%` }]} />
+                    {/* Scrubber Handle Thumb */}
+                    <View style={[styles.timelineThumb, { left: `${progressPercent}%` }]} />
+                  </View>
+
+                  {/* Scrubber Hover / Drag Tooltip */}
+                  {isDraggingTrack && dragTime !== null && (
+                    <View style={[styles.scrubTooltip, { left: `${progressPercent}%` }]}>
+                      <Text style={styles.scrubTooltipText}>{formatTime(dragTime)}</Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Controls Row */}
+              <View style={styles.controlsRow}>
+                {/* Left Controls: Play/Pause, -10s, +10s, Time */}
+                <View style={styles.leftControlsGroup}>
+                  <TouchableOpacity style={styles.ctrlIconBtn} onPress={togglePlayPause}>
+                    <Ionicons name={isPlaying ? 'pause' : 'play'} size={22} color="#fff" />
+                  </TouchableOpacity>
+
+                  {!isLive && (
+                    <>
+                      <TouchableOpacity
+                        style={styles.ctrlIconBtn}
+                        onPress={() => seekRelative(-10)}
+                        accessibilityLabel="Indietro di 10 secondi"
+                      >
+                        <Ionicons name="arrow-undo" size={20} color="#fff" />
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.ctrlIconBtn}
+                        onPress={() => seekRelative(10)}
+                        accessibilityLabel="Avanti di 10 secondi"
+                      >
+                        <Ionicons name="arrow-redo" size={20} color="#fff" />
+                      </TouchableOpacity>
+                    </>
+                  )}
+
+                  {isLive ? (
+                    <View style={styles.liveStatusBadge}>
+                      <View style={styles.livePulseDot} />
+                      <Text style={styles.liveStatusText}>DIRETTA</Text>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      onPress={() => setShowTimeRemaining(!showTimeRemaining)}
+                      style={styles.timeDisplay}
+                    >
+                      <Text style={styles.timeCurrent}>{formatTime(currentTime)}</Text>
+                      <Text style={styles.timeSeparator}>/</Text>
+                      <Text style={styles.timeTotal}>
+                        {showTimeRemaining && duration > 0
+                          ? `-${formatTime(Math.max(0, duration - currentTime))}`
+                          : formatTime(duration)}
                       </Text>
-                    )}
-                  </View>
-
-                  <View style={styles.bottomRightControls}>
-                    <TouchableOpacity style={styles.iconBtn} onPress={toggleMute}>
-                      <Ionicons
-                        name={isMuted ? 'volume-mute' : 'volume-high'}
-                        size={18}
-                        color="#fff"
-                      />
                     </TouchableOpacity>
+                  )}
+                </View>
 
-                    <TouchableOpacity style={styles.iconBtn} onPress={toggleFullscreen}>
-                      <Ionicons name="expand" size={18} color="#fff" />
-                    </TouchableOpacity>
-                  </View>
+                {/* Right Controls: Volume, Fullscreen */}
+                <View style={styles.rightControlsGroup}>
+                  {/* Volume Button */}
+                  <TouchableOpacity style={styles.ctrlIconBtn} onPress={toggleMute}>
+                    <Ionicons
+                      name={isMuted || volume === 0 ? 'volume-mute' : volume < 0.5 ? 'volume-low' : 'volume-high'}
+                      size={22}
+                      color="#fff"
+                    />
+                  </TouchableOpacity>
+
+                  {/* Fullscreen Button */}
+                  <TouchableOpacity
+                    style={styles.ctrlIconBtn}
+                    onPress={toggleFullscreen}
+                    accessibilityLabel="Schermo intero"
+                  >
+                    <Ionicons
+                      name={isFullscreen ? 'contract' : 'expand'}
+                      size={20}
+                      color="#fff"
+                    />
+                  </TouchableOpacity>
                 </View>
               </View>
             </View>
-          )
+          </Animated.View>
         )}
-      </View>
+      </Animated.View>
     </Modal>
   );
 };
@@ -690,253 +1136,512 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: '#030508',
+    width: '100%',
+    height: '100%',
+    overflow: 'hidden',
     position: 'relative'
   },
   video: {
     width: '100%',
+    height: '100%',
+    backgroundColor: '#000'
+  },
+  ambientBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
+    opacity: 0.18,
+    // @ts-ignore
+    filter: Platform.OS === 'web' ? 'blur(60px)' : undefined
+  },
+
+  // ── Cinematic Splash Overlay ──
+  splashOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(3, 5, 8, 0.88)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+    padding: 20
+  },
+  splashCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(20, 24, 34, 0.92)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    padding: 20,
+    maxWidth: 520,
+    width: '100%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.5,
+    shadowRadius: 24,
+    // @ts-ignore
+    backdropFilter: Platform.OS === 'web' ? 'blur(20px)' : undefined
+  },
+  splashPosterWrapper: {
+    width: 90,
+    height: 130,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#10131a',
+    marginRight: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)'
+  },
+  splashPoster: {
+    width: '100%',
     height: '100%'
   },
-  centerFeedback: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: 'center',
+  splashPosterFallback: {
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    zIndex: 25
+    alignItems: 'center'
   },
-  centerLoadingText: {
+  splashInfo: {
+    flex: 1,
+    justifyContent: 'center'
+  },
+  splashTitle: {
+    fontSize: 18,
+    fontWeight: '700',
     color: '#fff',
+    marginTop: 6,
+    marginBottom: 4
+  },
+  splashSubtitle: {
     fontSize: 13,
-    marginTop: 10,
+    color: colors.textSecondary,
+    marginBottom: 12
+  },
+  splashLoaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 8
+  },
+  splashLoadingStatus: {
+    fontSize: 13,
+    color: '#3b82f6',
     fontWeight: '500'
   },
-  errorText: {
-    color: colors.accentRed,
+
+  // ── Seek Ripple Burst Feedback ──
+  seekRippleBadge: {
+    position: 'absolute',
+    top: '45%',
+    zIndex: 25,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.25)',
+    // @ts-ignore
+    backdropFilter: Platform.OS === 'web' ? 'blur(10px)' : undefined
+  },
+  seekRippleLeft: {
+    left: '15%'
+  },
+  seekRippleRight: {
+    right: '15%'
+  },
+  seekRippleInner: {
+    alignItems: 'center',
+    gap: 4
+  },
+  seekRippleText: {
     fontSize: 13,
-    marginTop: 8,
-    textAlign: 'center',
-    maxWidth: 340
+    fontWeight: '700',
+    color: '#fff'
   },
-  retryBtn: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 6
-  },
-  retryBtnText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700'
-  },
-  // Mobile Floating Overlay Styles
-  mobileFloatingOverlay: {
+
+  // ── Error Overlay ──
+  errorOverlay: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    zIndex: 20
-  },
-  mobileTopBar: {
-    flexDirection: 'row',
+    bottom: 0,
+    backgroundColor: 'rgba(3, 5, 8, 0.94)',
+    justifyContent: 'center',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    paddingTop: Platform.OS === 'web' ? 10 : 36,
-    backgroundColor: 'rgba(5, 7, 11, 0.85)',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.1)'
+    zIndex: 30,
+    padding: 24
   },
-  mobileBackBtn: {
-    flexDirection: 'row',
+  errorCard: {
+    backgroundColor: '#141822',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+    padding: 28,
+    maxWidth: 480,
+    width: '100%',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.6,
+    shadowRadius: 30
   },
-  mobileBackBtnText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700'
-  },
-  mobileTitleCol: {
-    flex: 1,
-    marginHorizontal: 10
-  },
-  mobileStreamTitle: {
-    color: '#fff',
-    fontSize: 13,
+  errorHeading: {
+    fontSize: 18,
     fontWeight: '700',
-    flex: 1
-  },
-  mobileStreamSub: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    marginTop: 2
-  },
-  mobileRightActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8
-  },
-  applePlayerBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.primary,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    borderRadius: 8
-  },
-  applePlayerBtnText: {
     color: '#fff',
-    fontSize: 12,
-    fontWeight: '700'
+    marginTop: 14,
+    marginBottom: 8,
+    textAlign: 'center'
   },
-  // Desktop Controls Overlay Styles
-  overlay: {
+  errorMessage: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 22
+  },
+  errorActionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 10
+  },
+  btnAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10
+  },
+  btnPrimary: {
+    backgroundColor: '#3b82f6'
+  },
+  btnSecondary: {
+    backgroundColor: '#212838',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)'
+  },
+  btnDismiss: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)'
+  },
+  btnActionText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600'
+  },
+
+  // ── Controls Overlay ──
+  controlsOverlay: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
     justifyContent: 'space-between',
-    zIndex: 10
+    zIndex: 20
   },
+  centerTapArea: {
+    position: 'absolute',
+    top: 70,
+    left: 0,
+    right: 0,
+    bottom: 90,
+    zIndex: 15
+  },
+
+  // ── Top Bar ──
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
-    paddingTop: Platform.OS === 'web' ? 16 : 38,
-    backgroundColor: 'rgba(5, 7, 11, 0.75)'
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'ios' ? 48 : 18,
+    paddingBottom: 24,
+    backgroundColor: 'transparent',
+    // @ts-ignore
+    background: Platform.OS === 'web'
+      ? 'linear-gradient(to bottom, rgba(3, 5, 8, 0.92) 0%, rgba(3, 5, 8, 0.4) 65%, transparent 100%)'
+      : undefined
   },
-  topTitleContainer: {
+  topLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 14,
     flex: 1,
-    marginRight: 10
+    marginRight: 16
   },
-  guideBtn: {
+  backButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6
+    gap: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    // @ts-ignore
+    backdropFilter: Platform.OS === 'web' ? 'blur(12px)' : undefined
   },
-  guideBtnText: {
+  backButtonText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600'
   },
-  typeBadge: {
-    backgroundColor: colors.surfaceElevated,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 4
-  },
-  typeBadgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '700'
+  titleContainer: {
+    flex: 1
   },
   streamTitle: {
     color: '#fff',
-    fontSize: 15,
-    fontWeight: '700'
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: -0.2
   },
   streamSubtitle: {
     color: colors.textSecondary,
-    fontSize: 12
+    fontSize: 12,
+    marginTop: 2
   },
-  centerTapArea: {
-    flex: 1
-  },
-  bottomBar: {
-    padding: 16,
-    backgroundColor: 'rgba(5, 7, 11, 0.8)'
-  },
-  timelineContainer: {
-    width: '100%',
-    paddingVertical: 8,
-    marginBottom: 6,
-    // @ts-ignore
-    cursor: 'pointer'
-  },
-  timelineTrack: {
-    height: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.25)',
-    borderRadius: 3,
-    position: 'relative',
-    overflow: 'visible'
-  },
-  timelinePlayed: {
-    height: '100%',
-    backgroundColor: colors.primary,
-    borderRadius: 3
-  },
-  timelineThumb: {
-    position: 'absolute',
-    top: -4,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: '#fff',
-    marginLeft: -7,
-    // @ts-ignore
-    boxShadow: '0 0 6px rgba(0,0,0,0.6)'
-  },
-  bottomControlsRow: {
+  topRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between'
+    gap: 8
   },
-  bottomLeftControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12
-  },
-  bottomRightControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12
-  },
-  iconBtn: {
-    padding: 6
-  },
-  liveIndicator: {
+  glassBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(239, 68, 68, 0.12)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    // @ts-ignore
+    backdropFilter: Platform.OS === 'web' ? 'blur(12px)' : undefined
+  },
+  glassBtnText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  roundIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    // @ts-ignore
+    backdropFilter: Platform.OS === 'web' ? 'blur(12px)' : undefined
+  },
+
+  // ── Badges ──
+  typeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
     borderRadius: 4
   },
-  liveRedDot: {
+  typeBadgeVod: {
+    backgroundColor: 'rgba(59, 130, 246, 0.25)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.5)'
+  },
+  typeBadgeLive: {
+    backgroundColor: 'rgba(239, 68, 68, 0.25)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.5)',
+    gap: 5
+  },
+  typeBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#fff',
+    letterSpacing: 0.5
+  },
+  livePulseDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: colors.accentRed
+    backgroundColor: '#ef4444'
   },
-  liveText: {
-    color: colors.accentRed,
-    fontSize: 10,
+
+  // ── Center Big Play Button ──
+  centerControlArea: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  bigPlayButton: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(15, 20, 30, 0.78)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.25)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 16,
+    // @ts-ignore
+    backdropFilter: Platform.OS === 'web' ? 'blur(16px)' : undefined
+  },
+
+  // ── Bottom Controls Bar ──
+  bottomBar: {
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 18,
+    paddingTop: 16,
+    backgroundColor: 'transparent',
+    // @ts-ignore
+    background: Platform.OS === 'web'
+      ? 'linear-gradient(to top, rgba(3, 5, 8, 0.94) 0%, rgba(3, 5, 8, 0.5) 65%, transparent 100%)'
+      : undefined
+  },
+
+  // ── Timeline Scrubber ──
+  timelineHitArea: {
+    height: 32,
+    justifyContent: 'center',
+    position: 'relative',
+    // @ts-ignore
+    cursor: Platform.OS === 'web' ? 'pointer' : undefined
+  },
+  timelineBarBackground: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    position: 'relative'
+  },
+  timelineBuffer: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.35)'
+  },
+  timelinePlayed: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: 3,
+    backgroundColor: '#3b82f6'
+  },
+  timelineThumb: {
+    position: 'absolute',
+    top: -5,
+    width: 15,
+    height: 15,
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    marginLeft: -7.5,
+    borderWidth: 2,
+    borderColor: '#3b82f6',
+    shadowColor: '#3b82f6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 6
+  },
+  scrubTooltip: {
+    position: 'absolute',
+    top: -28,
+    marginLeft: -26,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)'
+  },
+  scrubTooltipText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+
+  // ── Controls Row ──
+  controlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6
+  },
+  leftControlsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12
+  },
+  rightControlsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10
+  },
+  ctrlIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    // @ts-ignore
+    backdropFilter: Platform.OS === 'web' ? 'blur(8px)' : undefined
+  },
+
+  // ── Time Display ──
+  timeDisplay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 6
+  },
+  timeCurrent: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums']
+  },
+  timeSeparator: {
+    color: colors.textMuted,
+    fontSize: 13
+  },
+  timeTotal: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
+    fontVariant: ['tabular-nums']
+  },
+
+  // ── Live Status Badge ──
+  liveStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 6
+  },
+  liveStatusText: {
+    color: '#fff',
+    fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.5
-  },
-  timeText: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '600'
   }
 });

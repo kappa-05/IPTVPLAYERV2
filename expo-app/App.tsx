@@ -321,63 +321,61 @@ export default function App() {
 
   const handlePressItem = (item: any, typeOverride?: MediaType) => {
     if (!account) return;
-    const currentTab = typeOverride || (activeTab === 'epg' ? 'live' : activeTab);
+    const raw = item.rawItem || item;
+    const currentTab = typeOverride || (activeTab === 'epg' ? 'live' : (activeTab === 'favorites' ? (item.type || 'live') : activeTab));
 
-    if (currentTab === 'series') {
-      setSelectedSeries(item as SeriesItem);
+    // 1. Check if Series
+    const isSeries = Boolean(
+      typeOverride === 'series' ||
+      item.type === 'series' ||
+      raw.series_id ||
+      (currentTab === 'series')
+    );
+    if (isSeries) {
+      setSelectedSeries(raw as SeriesItem);
       return;
     }
 
-    if (currentTab === 'favorites') {
-      if (item.type === 'series') {
-        setSelectedSeries(item.rawItem || item);
-        return;
-      }
-      const itemType: MediaType = item.type || (item.stream_type === 'movie' || item.container_extension ? 'vod' : (item.series_id ? 'series' : 'live'));
-      const streamUrl = XtreamAPI.buildStreamUrl(
-        account,
-        item.rawItem || item,
-        itemType,
-        itemType === 'live' ? 'm3u8' : (item.container_extension || 'mp4')
-      );
+    // 2. Check if Movie / VOD
+    const isVod = Boolean(
+      typeOverride === 'vod' ||
+      item.type === 'vod' ||
+      raw.stream_type === 'movie' ||
+      raw.container_extension ||
+      (typeof raw.direct_source === 'string' && (
+        raw.direct_source.includes('/movie/') ||
+        raw.direct_source.endsWith('.mp4') ||
+        raw.direct_source.endsWith('.mkv') ||
+        raw.direct_source.endsWith('.avi')
+      )) ||
+      (currentTab === 'vod')
+    );
 
-      const sid = String(item.streamId);
-      const epg = epgMap[sid];
-      const subTitle = (itemType === 'live' && epg?.current) ? `${epg.current.title} (${epg.current.start} - ${epg.current.end})` : undefined;
-
-      setPlayingStream({
-        streamId: item.streamId,
-        title: item.title,
-        subTitle,
-        type: itemType,
-        streamUrl,
-        poster: item.icon,
-        rawItem: item.rawItem || item
-      });
-      return;
-    }
+    const detectedType: MediaType = isVod ? 'vod' : (currentTab === 'live' ? 'live' : (activeTab === 'epg' ? 'live' : 'live'));
+    const extension = raw.container_extension || (detectedType === 'live' ? 'm3u8' : 'mp4');
 
     const streamUrl = XtreamAPI.buildStreamUrl(
       account,
-      item,
-      currentTab as MediaType,
-      currentTab === 'live' ? 'm3u8' : (item.container_extension || 'mp4')
+      raw,
+      detectedType,
+      extension
     );
 
-    const sid = String(item.stream_id || item.id);
+    const sid = String(raw.stream_id || raw.id || item.streamId || '');
     const epg = epgMap[sid];
-    const subTitle = (currentTab === 'live' && epg?.current)
+    const subTitle = (detectedType === 'live' && epg?.current)
       ? `${epg.current.title} (${epg.current.start} - ${epg.current.end})`
       : undefined;
 
     setPlayingStream({
       streamId: sid,
-      title: item.name || item.title || 'Contenuto',
+      title: raw.name || raw.title || item.title || 'Contenuto',
       subTitle,
-      type: currentTab as MediaType,
+      type: detectedType,
       streamUrl,
-      poster: item.stream_icon || item.cover,
-      rawItem: item
+      poster: raw.stream_icon || raw.cover || item.icon,
+      extension,
+      rawItem: raw
     });
   };
 

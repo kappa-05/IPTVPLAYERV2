@@ -125,7 +125,7 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
         <StreamCard
           item={cardItem}
           type={cardType}
-          onPress={onPressItem}
+          onPress={(it) => onPressItem(it, cardType)}
           isFavorite={isFav}
           onToggleFavorite={onToggleFavorite}
           onOpenEpg={cardType === 'live' ? onOpenEpgModal : undefined}
