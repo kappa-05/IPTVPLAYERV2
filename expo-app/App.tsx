@@ -232,17 +232,20 @@ export default function App() {
     setActiveTab(newTab);
     setSearchQuery('');
     setCategorySearchQuery('');
+    // Immediately clear state to prevent stale content from previous tab (e.g. movies showing in series tab)
+    setStreams([]);
+    setCategories([]);
+    setSelectedCategoryId('all');
     if (!account) return;
 
     if (newTab === 'epg') {
       if (liveChannels.length === 0) {
-        await loadCategoriesAndStreams(account, 'live');
+        await loadCategoriesAndStreams(account, 'live', 'all');
       }
     } else if (newTab === 'favorites') {
       loadFavorites(account.id);
     } else {
-      // Automatically selects the first available category after 'all' (cats[0])
-      loadCategoriesAndStreams(account, newTab);
+      await loadCategoriesAndStreams(account, newTab, 'all');
     }
   };
 

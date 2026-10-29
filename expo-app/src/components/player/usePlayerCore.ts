@@ -5,6 +5,8 @@ import { XtreamAPI } from '../../services/api';
 import { StorageService } from '../../services/storage';
 
 let HlsClass: any = null;
+let mpegts: any = null;
+
 if (Platform.OS === 'web') {
   try {
     HlsClass = require('hls.js');
@@ -13,6 +15,15 @@ if (Platform.OS === 'web') {
     }
   } catch (e) {
     console.warn('Hls.js module not available:', e);
+  }
+
+  try {
+    mpegts = require('mpegts.js');
+    if (mpegts?.default) {
+      mpegts = mpegts.default;
+    }
+  } catch (e) {
+    console.warn('mpegts.js module not available:', e);
   }
 }
 
@@ -76,6 +87,7 @@ export function usePlayerCore({
   // Media Element Refs
   const webVideoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<any>(null);
+  const mpegtsRef = useRef<any>(null);
   const nativeVideoRef = useRef<any>(null);
 
   // Playback & Timing States
@@ -136,6 +148,15 @@ export function usePlayerCore({
 
   // Teardown web player cleanly
   const cleanupWebPlayer = useCallback(() => {
+    if (mpegtsRef.current) {
+      try {
+        mpegtsRef.current.pause();
+        mpegtsRef.current.unload();
+        mpegtsRef.current.detachMediaElement();
+        mpegtsRef.current.destroy();
+      } catch {}
+      mpegtsRef.current = null;
+    }
     if (hlsRef.current) {
       try {
         hlsRef.current.destroy();
@@ -214,7 +235,7 @@ export function usePlayerCore({
     }
   }, []);
 
-  // Update native HTML5 audio and subtitle tracks
+  // Update native HTML5 audio and subtitle tracks (Apple Safari AVPlayer & Android native)
   const syncNativeTracks = useCallback(() => {
     const video = webVideoRef.current;
     if (!video) return;
@@ -319,7 +340,7 @@ export function usePlayerCore({
     return false;
   }, [isIOS, isMinimized]);
 
-  // Initialize Web Video & HLS Engine
+  // Initialize Web Video & Multi-Platform Engine
   const initWebPlayer = useCallback((targetUrl: string) => {
     cleanupWebPlayer();
     const video = webVideoRef.current;
@@ -329,13 +350,15 @@ export function usePlayerCore({
     setLoadingStatus('Connessione allo stream...');
     setErrorMsg(null);
 
-    // Cross-origin attribute is required for WebVTT subtitle tracks and Safari AVPlayer
+    // Cross-origin attribute is mandatory for WebVTT subtitle tracks and Safari AVPlayer
     video.crossOrigin = 'anonymous';
 
-    const isM3U8 = targetUrl.toLowerCase().includes('.m3u8') || targetUrl.includes('/api/hls/') || (isLive && !targetUrl.includes('/movie/') && !targetUrl.includes('/series/'));
+    const urlLower = targetUrl.toLowerCase();
+    const isM3U8 = urlLower.includes('.m3u8') || targetUrl.includes('/api/hls/') || (isLive && !targetUrl.includes('/movie/') && !targetUrl.includes('/series/'));
+    const isMpegTs = !isM3U8 && isLive && (urlLower.endsWith('.ts') || urlLower.includes('.ts?') || stream.extension === 'ts');
     const canNativeHls = typeof video.canPlayType === 'function' && Boolean(video.canPlayType('application/vnd.apple.mpegurl'));
 
-    // Video Events
+    // Video Element Standard Events
     video.onwaiting = () => {
       setLoading(true);
       setLoadingStatus('Buffering...');
@@ -414,20 +437,39 @@ export function usePlayerCore({
       }
     };
 
-    video.onerror = () => {
-      const code = video.error ? video.error.code : 'ignoto';
-      console.warn('HTML5 Video Error code:', code);
+    // Track listeners for Safari AVPlayer and native tracks
+    try {
+      const aTracks = (video as any).audioTracks;
+      if (aTracks) {
+        aTracks.onchange = () => syncNativeTracks();
+        aTracks.onaddtrack = () => syncNativeTracks();
+      }
+      if (video.textTracks) {
+        video.textTracks.onchange = () => syncNativeTracks();
+        video.textTracks.onaddtrack = () => syncNativeTracks();
+      }
+    } catch {}
 
-      // Fallback 1: If direct stream failed on VOD, fallback to HLS remuxing
-      if (!targetUrl.includes('/api/hls/master.m3u8') && !targetUrl.includes('/api/transcode') && isMovieOrSeries) {
-        const hlsUrl = targetUrl.includes('/api/proxy?url=')
-          ? targetUrl.replace('/api/proxy?url=', '/api/hls/master.m3u8?url=')
-          : `/api/hls/master.m3u8?url=${encodeURIComponent(targetUrl)}`;
-        initWebPlayer(hlsUrl);
+    // Resilient HTML5 Error Recovery Pipeline (Fixes Media Error Code 4 / Code 3)
+    video.onerror = () => {
+      const err = video.error;
+      const code = err ? err.code : 0;
+      console.warn('HTML5 Video Error code:', code, err ? err.message : '');
+
+      // Fallback 1: If direct stream threw Error Code 4 (MEDIA_ERR_SRC_NOT_SUPPORTED) or 3 (MEDIA_ERR_DECODE),
+      // seamlessly convert to our HLS Remuxer/Transcoder pipeline without crashing or showing an error dialog!
+      if (!targetUrl.includes('/api/hls/master.m3u8')) {
+        setLoading(true);
+        setLoadingStatus('Ottimizzazione formato stream (HLS)...');
+        const encodedTarget = encodeURIComponent(cleanTargetUrl || targetUrl);
+        const fallbackHlsUrl = `/api/hls/master.m3u8?url=${encodedTarget}`;
+        setTimeout(() => {
+          initWebPlayer(fallbackHlsUrl);
+        }, 150);
         return;
       }
 
-      // Fallback 2: If HLS failed, fallback to direct proxy
+      // Fallback 2: If HLS master playlist failed, retry through direct proxy
       if (targetUrl.includes('/api/hls/master.m3u8') && retryCountRef.current === 0) {
         retryCountRef.current = 1;
         const proxyUrl = targetUrl.replace('/api/hls/master.m3u8', '/api/proxy');
@@ -435,7 +477,7 @@ export function usePlayerCore({
         return;
       }
 
-      setErrorMsg(`Impossibile riprodurre il flusso multimediale (Codice ${code}).`);
+      setErrorMsg(`Impossibile riprodurre il flusso multimediale (Codice ${code || 'sorgente non supportata'}).`);
       setLoading(false);
     };
 
@@ -456,16 +498,53 @@ export function usePlayerCore({
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
 
-    // Engine Selection:
-    // 1. Native Apple HLS (Safari, iOS, iPadOS)
-    if (isM3U8 && canNativeHls) {
+    // ─────────────────────────────────────────────────────────────
+    // ENGINE SELECTION PIPELINE
+    // ─────────────────────────────────────────────────────────────
+
+    // Engine 1: Apple Native HLS (Safari on iOS / iPadOS / macOS)
+    if (isM3U8 && canNativeHls && isIOS) {
       video.src = targetUrl;
       video.load();
       video.play().catch(e => {
-        console.log('Autoplay waiting for touch:', e);
+        console.log('Apple autoplay deferred until user touch:', e);
       });
     }
-    // 2. Industrial HLS.js Engine (Chrome, Firefox, Edge, Android Web)
+    // Engine 2: mpegts.js for MPEG-TS Live Streams
+    else if (isMpegTs && mpegts && mpegts.isSupported()) {
+      try {
+        const player = mpegts.createPlayer({
+          type: 'mse',
+          isLive: true,
+          url: targetUrl
+        }, {
+          enableWorker: true,
+          lazyLoad: false,
+          stashInitialSize: 128 * 1024,
+          liveBufferLatencyChasing: true,
+          liveBufferLatencyMaxLatency: 3.5,
+          liveBufferLatencyMinRemain: 1.0
+        });
+        mpegtsRef.current = player;
+        player.attachMediaElement(video);
+        player.load();
+        player.play().catch((e: any) => console.log('mpegts autoplay pending user gesture:', e));
+
+        player.on(mpegts.Events.ERROR, (errType: any, errDetail: any) => {
+          console.warn('mpegts error:', errType, errDetail);
+          // Fallback to HLS
+          if (!targetUrl.includes('/api/hls/master.m3u8')) {
+            const encoded = encodeURIComponent(cleanTargetUrl || targetUrl);
+            initWebPlayer(`/api/hls/master.m3u8?url=${encoded}`);
+          }
+        });
+      } catch (err) {
+        console.warn('mpegts init failed, falling back to HLS:', err);
+        const encoded = encodeURIComponent(cleanTargetUrl || targetUrl);
+        initWebPlayer(`/api/hls/master.m3u8?url=${encoded}`);
+      }
+    }
+    // Engine 3: HLS.js (Chrome, Firefox, Edge, Android Web)
     else if (isM3U8 && HlsClass && HlsClass.isSupported()) {
       const hls = new HlsClass({
         enableWorker: true,
@@ -473,12 +552,12 @@ export function usePlayerCore({
         backBufferLength: isLive ? 60 : 180,
         maxBufferLength: isLive ? 45 : 120,
         maxMaxBufferLength: isLive ? 90 : 300,
-        maxBufferSize: 80 * 1024 * 1024, // 80 MB
+        maxBufferSize: 90 * 1024 * 1024, // 90 MB
         maxBufferHole: 0.5,
         highBufferWatchdogPeriod: 2,
         nudgeOffset: 0.2,
         nudgeMaxRetry: 5,
-        startLevel: -1, // Auto ABR start
+        startLevel: -1, // Auto ABR
         abrEwmaFastLive: 3.0,
         abrEwmaSlowLive: 9.0,
         abrEwmaFastVoD: 2.0,
@@ -581,7 +660,7 @@ export function usePlayerCore({
                 initWebPlayer(proxyUrl);
                 return;
               }
-              setErrorMsg('Errore critico durante la decodifica del flusso.');
+              setErrorMsg('Errore durante la decodifica del flusso.');
               setLoading(false);
               cleanupWebPlayer();
               break;
@@ -589,7 +668,7 @@ export function usePlayerCore({
         }
       });
     }
-    // 3. Direct Progressive Stream (MP4, etc.)
+    // Engine 4: Direct Native Stream (MP4, etc.)
     else {
       video.src = targetUrl;
       video.load();
@@ -607,7 +686,8 @@ export function usePlayerCore({
     account,
     saveCurrentProgress,
     handleClose,
-    isIOS
+    isIOS,
+    cleanTargetUrl
   ]);
 
   // Initial Boot & Media Probe
@@ -697,7 +777,7 @@ export function usePlayerCore({
     return () => {
       cleanupWebPlayer();
     };
-  }, [visible, stream]);
+  }, [visible, stream, isMovieOrSeries, cleanTargetUrl, initWebPlayer, cleanupWebPlayer]);
 
   // Lifecycle Management (Android ExoPlayer & iOS Backgrounding)
   useEffect(() => {
@@ -781,7 +861,7 @@ export function usePlayerCore({
     }
   }, [duration]);
 
-  // Relative Seek (±10s) with Ripple
+  // Relative Seek (+/-10s) with Ripple
   const seekRelative = useCallback((offsetSecs: number) => {
     const cur = (Platform.OS === 'web' && webVideoRef.current)
       ? (webVideoRef.current.currentTime || currentTime)
@@ -981,6 +1061,7 @@ export function usePlayerCore({
     webVideoRef,
     nativeVideoRef,
     hlsRef,
+    mpegtsRef,
     isPlaying,
     loading,
     loadingStatus,
@@ -1029,4 +1110,3 @@ export function usePlayerCore({
     saveCurrentProgress
   };
 }
-

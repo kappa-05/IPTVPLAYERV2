@@ -134,23 +134,35 @@ export class M3UParser {
     };
   }
 
-  private static detectMediaType(group: string, url: string): MediaType {
-    const g = group.toLowerCase();
-    const u = url.toLowerCase();
+  private static detectMediaType(group: string, url: string, name: string = ''): MediaType {
+    const g = (group || '').toLowerCase();
+    const u = (url || '').toLowerCase();
+    const n = (name || '').toLowerCase();
 
-    if (g.includes('serie') || g.includes('series') || g.includes('season') || g.includes('stagione') || u.includes('/series/')) {
+    // 1. Definite Series Patterns in title, group or URL
+    const seriesPattern = /(?:s\d{1,2}\s*[ex]\s*\d{1,2}|\b\d{1,2}x\d{1,2}\b|\bstagione\s*\d+|\bseason\s*\d+|\bepisod[io]\s*\d+|\bep\s*\d+)/i;
+    const seriesKeywords = /(serie|series|serial|tv-show|stagione|season|fiction|sitcom|anime|dramacool)/i;
+
+    if (
+      seriesPattern.test(n) ||
+      seriesPattern.test(g) ||
+      seriesKeywords.test(g) ||
+      u.includes('/series/') ||
+      u.includes('series_id')
+    ) {
       return 'series';
     }
 
+    // 2. Definite Movie / VOD
     if (
       g.includes('movie') ||
       g.includes('film') ||
       g.includes('vod') ||
       g.includes('cinema') ||
+      u.includes('/movie/') ||
       u.endsWith('.mp4') ||
       u.endsWith('.mkv') ||
-      u.endsWith('.avi') ||
-      u.includes('/movie/')
+      u.endsWith('.avi')
     ) {
       return 'vod';
     }

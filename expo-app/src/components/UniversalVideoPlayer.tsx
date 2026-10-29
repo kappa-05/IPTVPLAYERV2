@@ -339,20 +339,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
     setResumePrompt(null);
   };
 
-  // Open VLC helper for desktop
-  const handleOpenInVlc = () => {
-    if (!stream?.streamUrl) return;
-    let target = stream.streamUrl;
-    if (target.includes('/api/proxy?url=')) {
-      target = decodeURIComponent(target.split('/api/proxy?url=')[1]);
-    } else if (target.includes('/api/hls/master.m3u8?url=')) {
-      const parts = target.split('/api/hls/master.m3u8?url=')[1];
-      target = decodeURIComponent(parts.split('&')[0]);
-    }
-    fetch(`/api/open_vlc?url=${encodeURIComponent(target)}`)
-      .then(res => res.json())
-      .catch(() => {});
-  };
+
 
   if (!visible || !stream) return null;
 
@@ -470,15 +457,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
                 <Text style={styles.btnActionText}>Riprova</Text>
               </TouchableOpacity>
 
-              {Platform.OS === 'web' && (
-                <TouchableOpacity
-                  style={[styles.btnAction, styles.btnSecondary]}
-                  onPress={handleOpenInVlc}
-                >
-                  <Ionicons name="play-outline" size={18} color="#fff" />
-                  <Text style={styles.btnActionText}>Apri in VLC</Text>
-                </TouchableOpacity>
-              )}
+
 
               <TouchableOpacity
                 style={[styles.btnAction, styles.btnDismiss]}
