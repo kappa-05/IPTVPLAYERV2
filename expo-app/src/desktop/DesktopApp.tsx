@@ -109,9 +109,16 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
     let list = streams;
     // Strict type separation: ensure movies never leak into series tab and vice versa
     if (activeTab === 'series') {
-      list = list.filter(s => s.stream_type !== 'movie');
+      list = list.filter(s => {
+        if (s.stream_type === 'movie' || s.type === 'vod') return false;
+        return true;
+      });
     } else if (activeTab === 'vod') {
-      list = list.filter(s => !(s.series_id && !s.stream_id));
+      list = list.filter(s => {
+        if (s.series_id && !s.stream_id) return false;
+        if (s.stream_type === 'series' || s.type === 'series') return false;
+        return true;
+      });
     }
 
     if (!searchQuery) return list;

@@ -382,9 +382,9 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
             backgroundColor: '#000',
             objectFit: 'contain'
           }}
-          playsInline={!isIOS}
+          playsInline
           crossOrigin="anonymous"
-          controls={false}
+          controls={isIOS && isFullscreen}
           autoPlay
         />
       ) : (

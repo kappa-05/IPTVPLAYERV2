@@ -375,7 +375,7 @@ export function usePlayerCore({
     };
 
     video.oncanplay = () => {
-      setFirstFrameRendered(true);
+      // Do not mark firstFrameRendered here; wait strictly for playing event to eliminate black flash
       setLoading(false);
     };
 
@@ -465,44 +465,59 @@ export function usePlayerCore({
       const cleanTarget = cleanTargetUrl || targetUrl;
       const encodedTarget = encodeURIComponent(cleanTarget);
 
-      // Tier 1 Fallback: Direct MP4/MKV stream failed with Code 4 (MEDIA_ERR_SRC_NOT_SUPPORTED) or 3 (MEDIA_ERR_DECODE)
-      // Switch automatically to HLS Master Playlist remuxer (copies video, transcodes audio to stereo AAC)
-      if (fallbackTierRef.current === 0 && !targetUrl.includes('/api/hls/master.m3u8')) {
+      // Do NOT show error for Code 4 / Code 3: perform automatic multi-tier fallback through server.py FFmpeg remuxing
+      // Tier 1: Real-time FFmpeg pipe remuxer via server.py (/api/transcode)
+      if (fallbackTierRef.current === 0 && !targetUrl.includes('/api/transcode')) {
         fallbackTierRef.current = 1;
+        setErrorMsg(null);
+        setLoading(true);
+        setLoadingStatus('Remuxing compatibile (FFmpeg)...');
+        const transcodeUrl = `/api/transcode?url=${encodedTarget}`;
+        setTimeout(() => {
+          initWebPlayer(transcodeUrl);
+        }, 100);
+        return;
+      }
+
+      // Tier 2: Switch to HLS Master Playlist remuxer (/api/hls/master.m3u8)
+      if (fallbackTierRef.current <= 1 && !targetUrl.includes('/api/hls/master.m3u8')) {
+        fallbackTierRef.current = 2;
         setErrorMsg(null);
         setLoading(true);
         setLoadingStatus('Ottimizzazione formato stream (HLS)...');
         const fallbackHlsUrl = `/api/hls/master.m3u8?url=${encodedTarget}`;
         setTimeout(() => {
           initWebPlayer(fallbackHlsUrl);
-        }, 120);
+        }, 100);
         return;
       }
 
-      // Tier 2 Fallback: If HLS master playlist failed, try real-time fragmented MP4 transcoding via /api/transcode
-      if (fallbackTierRef.current <= 1 && !targetUrl.includes('/api/transcode')) {
-        fallbackTierRef.current = 2;
-        setErrorMsg(null);
-        setLoading(true);
-        setLoadingStatus('Transcodifica compatibile browser...');
-        const transcodeUrl = `/api/transcode?url=${encodedTarget}`;
-        setTimeout(() => {
-          initWebPlayer(transcodeUrl);
-        }, 120);
-        return;
-      }
-
-      // Tier 3 Fallback: Try remux proxy with ?remux=1
+      // Tier 3: Try proxy with remux=1
       if (fallbackTierRef.current <= 2 && !targetUrl.includes('remux=1')) {
         fallbackTierRef.current = 3;
         setErrorMsg(null);
         setLoading(true);
-        setLoadingStatus('Tentativo finale proxy compatibile...');
+        setLoadingStatus('Tentativo proxy remux...');
         const proxyRemuxUrl = `/api/proxy?url=${encodedTarget}&remux=1`;
         setTimeout(() => {
           initWebPlayer(proxyRemuxUrl);
-        }, 120);
+        }, 100);
         return;
+      }
+
+      // Tier 4: Try alternative extension (.m3u8) if supported by Xtream Codes server
+      if (fallbackTierRef.current <= 3 && (cleanTarget.includes('/movie/') || cleanTarget.includes('/series/') || cleanTarget.includes('/live/'))) {
+        fallbackTierRef.current = 4;
+        const altUrl = cleanTarget.replace(/\.(mkv|avi|mp4)(\?.*)?$/i, '.m3u8$2');
+        if (altUrl !== cleanTarget) {
+          setErrorMsg(null);
+          setLoading(true);
+          setLoadingStatus('Tentativo stream alternativo (.m3u8)...');
+          setTimeout(() => {
+            initWebPlayer(XtreamAPI.getProxyUrl(altUrl, true));
+          }, 100);
+          return;
+        }
       }
 
       setErrorMsg(`Impossibile riprodurre il flusso multimediale (Codice ${code || 'sorgente non supportata'}).`);

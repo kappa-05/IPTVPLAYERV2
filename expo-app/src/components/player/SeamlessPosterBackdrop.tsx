@@ -33,14 +33,15 @@ export const SeamlessPosterBackdrop: React.FC<SeamlessPosterBackdropProps> = ({
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const [shouldRender, setShouldRender] = useState(true);
 
-  // Synchronize fade-out strictly with actual video rendering to eliminate any black flash / glitch
-  const isVideoActivelyRendering = firstFrameRendered || (isPlaying && currentTime > 0);
+  // Synchronize fade-out strictly with actual video playback (playing event / active render)
+  // Eliminates black screen flash before player opens
+  const isVideoActivelyRendering = firstFrameRendered && (isPlaying || currentTime > 0);
 
   useEffect(() => {
     if (isVideoActivelyRendering) {
       Animated.timing(fadeAnim, {
         toValue: 0,
-        duration: 350,
+        duration: 200, // Rapid fade-out
         easing: Easing.out(Easing.cubic),
         useNativeDriver: Platform.OS !== 'web'
       }).start(() => {
@@ -148,9 +149,9 @@ const styles = StyleSheet.create({
   },
   posterCard: {
     width: 320,
-    height: 200,
+    height: 420,
     maxWidth: '85%',
-    maxHeight: 240,
+    maxHeight: '65%',
     borderRadius: 14,
     overflow: 'hidden',
     borderWidth: 1,

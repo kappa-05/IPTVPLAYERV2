@@ -1123,13 +1123,40 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             "pipe:1"
         ])
 
-        self.send_response(200)
+        # HTTP Range header support (206 Partial Content) for Safari/AVPlayer and modern browsers
+        client_range = self.headers.get('Range')
+        is_range_req = bool(client_range and client_range.startswith('bytes='))
+        status_code = 206 if is_range_req else 200
+
+        r_start = 0
+        r_end = None
+        if is_range_req:
+            try:
+                parts = client_range[6:].strip().split('-')
+                if parts[0]:
+                    r_start = int(parts[0])
+                if len(parts) > 1 and parts[1]:
+                    r_end = int(parts[1])
+            except Exception:
+                r_start = 0
+                r_end = None
+
+        self.send_response(status_code)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
         self.send_header('Access-Control-Allow-Headers', '*')
-        self.send_header('Access-Control-Expose-Headers', 'Content-Type, Content-Length, Accept-Ranges')
+        self.send_header('Access-Control-Expose-Headers', 'Content-Type, Content-Length, Accept-Ranges, Content-Range')
         self.send_header('Content-Type', 'video/mp4')
-        self.send_header('Cache-Control', 'public, max-age=3600')
+        self.send_header('Accept-Ranges', 'bytes')
+
+        if is_range_req:
+            if r_end is not None:
+                bytes_to_send = max(0, r_end - r_start + 1)
+                self.send_header('Content-Range', f"bytes {r_start}-{r_end}/*")
+                self.send_header('Content-Length', str(bytes_to_send))
+            else:
+                self.send_header('Content-Range', f"bytes {r_start}-/*")
+        self.send_header('Cache-Control', 'no-cache')
         self.end_headers()
 
         if is_head:
@@ -1138,11 +1165,32 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         proc = None
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=clean_env)
+            bytes_skipped = 0
+            bytes_left = (r_end - r_start + 1) if (is_range_req and r_end is not None) else None
+
             while True:
                 chunk = proc.stdout.read(65536)
                 if not chunk:
                     break
-                self.wfile.write(chunk)
+
+                if is_range_req and r_start > 0 and bytes_skipped < r_start:
+                    remaining_skip = r_start - bytes_skipped
+                    if len(chunk) <= remaining_skip:
+                        bytes_skipped += len(chunk)
+                        continue
+                    else:
+                        chunk = chunk[remaining_skip:]
+                        bytes_skipped = r_start
+
+                if bytes_left is not None:
+                    if len(chunk) >= bytes_left:
+                        self.wfile.write(chunk[:bytes_left])
+                        break
+                    else:
+                        self.wfile.write(chunk)
+                        bytes_left -= len(chunk)
+                else:
+                    self.wfile.write(chunk)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
         except Exception as e:
