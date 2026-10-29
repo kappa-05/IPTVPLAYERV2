@@ -99,16 +99,24 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
     return [];
   }, [history, activeTab]);
 
-  // Filtered items by search query
+  // Filtered items by search query and active tab
   const displayedItems = useMemo(() => {
     if (activeTab === 'favorites') {
       if (!searchQuery) return favorites;
       return favorites.filter(f => f.title.toLowerCase().includes(searchQuery.toLowerCase()));
     }
 
-    if (!searchQuery) return streams;
+    let list = streams;
+    // Strict type separation: ensure movies never leak into series tab and vice versa
+    if (activeTab === 'series') {
+      list = list.filter(s => s.stream_type !== 'movie');
+    } else if (activeTab === 'vod') {
+      list = list.filter(s => !(s.series_id && !s.stream_id));
+    }
+
+    if (!searchQuery) return list;
     const q = searchQuery.toLowerCase();
-    return streams.filter(s => {
+    return list.filter(s => {
       const name = (s.name || s.title || '').toLowerCase();
       const sid = String(s.stream_id || s.series_id || '');
       return name.includes(q) || sid.includes(q);

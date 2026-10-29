@@ -17,6 +17,8 @@ interface SeamlessPosterBackdropProps {
   loading: boolean;
   statusText?: string;
   firstFrameRendered: boolean;
+  isPlaying?: boolean;
+  currentTime?: number;
 }
 
 export const SeamlessPosterBackdrop: React.FC<SeamlessPosterBackdropProps> = ({
@@ -24,14 +26,18 @@ export const SeamlessPosterBackdrop: React.FC<SeamlessPosterBackdropProps> = ({
   title,
   loading,
   statusText = 'Caricamento...',
-  firstFrameRendered
+  firstFrameRendered,
+  isPlaying = false,
+  currentTime = 0
 }) => {
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const [shouldRender, setShouldRender] = useState(true);
 
-  // When first frame is decoded and rendered, smoothly fade out this poster overlay
+  // Synchronize fade-out strictly with actual video rendering to eliminate any black flash / glitch
+  const isVideoActivelyRendering = firstFrameRendered || (isPlaying && currentTime > 0);
+
   useEffect(() => {
-    if (firstFrameRendered) {
+    if (isVideoActivelyRendering) {
       Animated.timing(fadeAnim, {
         toValue: 0,
         duration: 350,
@@ -44,7 +50,7 @@ export const SeamlessPosterBackdrop: React.FC<SeamlessPosterBackdropProps> = ({
       setShouldRender(true);
       fadeAnim.setValue(1);
     }
-  }, [firstFrameRendered, fadeAnim]);
+  }, [isVideoActivelyRendering, fadeAnim]);
 
   if (!shouldRender) return null;
 
@@ -58,7 +64,7 @@ export const SeamlessPosterBackdrop: React.FC<SeamlessPosterBackdropProps> = ({
       ]}
       pointerEvents="none"
     >
-      {/* Ambient Deep Blur Backdrop matching poster colors */}
+      {/* 1. Ambient Blurred Backdrop matching dominant poster colors (cover mode for cinematic atmosphere) */}
       {posterUri ? (
         <Image
           source={{ uri: posterUri }}
@@ -70,7 +76,7 @@ export const SeamlessPosterBackdrop: React.FC<SeamlessPosterBackdropProps> = ({
 
       <View style={styles.darkVignette} />
 
-      {/* Center Poster Preview with Responsive Aspect-Ratio Contain */}
+      {/* 2. Responsive Foreground Container: resizeMode="contain" ensuring neither 2:3 nor 16:9 thumbnails are cut off */}
       <View style={styles.centerContainer}>
         {posterUri ? (
           <View style={styles.posterCard}>
@@ -120,7 +126,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    opacity: 0.32,
+    opacity: 0.35,
     width: '100%',
     height: '100%'
   },
@@ -135,15 +141,16 @@ const styles = StyleSheet.create({
   centerContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 24,
-    maxWidth: 480,
-    width: '100%'
+    paddingHorizontal: 20,
+    maxWidth: 520,
+    width: '100%',
+    zIndex: 2
   },
   posterCard: {
-    width: 280,
-    height: 180,
+    width: 320,
+    height: 200,
     maxWidth: '85%',
-    maxHeight: 220,
+    maxHeight: 240,
     borderRadius: 14,
     overflow: 'hidden',
     borderWidth: 1,
@@ -154,7 +161,7 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     elevation: 16,
     marginBottom: 20,
-    backgroundColor: 'rgba(15, 20, 30, 0.7)',
+    backgroundColor: 'rgba(12, 16, 26, 0.85)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 6

@@ -39,10 +39,10 @@ export class M3UParser {
       } else if (!line.startsWith('#') && currentMeta) {
         // Stream URL line
         const streamUrl = line;
-        const mediaType = this.detectMediaType(currentMeta.group || '', streamUrl);
         const categoryName = currentMeta.group || 'Generale';
         const categoryId = this.slugify(categoryName);
         const name = currentMeta.name || currentMeta.tvgName || `Canale ${streamIndex}`;
+        const mediaType = this.detectMediaType(currentMeta.group || '', streamUrl, name);
 
         if (mediaType === 'vod') {
           if (!vodCatMap.has(categoryId)) {
@@ -67,7 +67,8 @@ export class M3UParser {
             name,
             cover: currentMeta.logo,
             category_id: categoryId,
-            genre: categoryName
+            genre: categoryName,
+            direct_source: streamUrl
           });
         } else {
           // Default: Live stream

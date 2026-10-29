@@ -310,6 +310,17 @@ export class XtreamAPI {
     return Array.isArray(data) ? data : [];
   }
 
+  static async getVodInfo(account: Account, vodId: string | number): Promise<any> {
+    if (account.accountType === 'm3u') {
+      const cached = await StorageService.getCachedStreams(account.id, 'vod', 'all');
+      const item = (cached || []).find((s: any) => s.stream_id === vodId);
+      return item ? { info: item, movie_data: item } : null;
+    }
+
+    const url = `${account.host}/player_api.php?username=${encodeURIComponent(account.username)}&password=${encodeURIComponent(account.password || '')}&action=get_vod_info&vod_id=${encodeURIComponent(String(vodId))}`;
+    return await this.fetchJSON<any>(url, account.useProxy);
+  }
+
   static async getSeriesInfo(account: Account, seriesId: string | number): Promise<SeriesDetails> {
     if (account.accountType === 'm3u') {
       // In standalone M3U series, wrap series info from cached item

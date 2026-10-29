@@ -129,11 +129,11 @@ export function usePlayerCore({
   const hasResumedRef = useRef(false);
   const lastSaveTimeRef = useRef(0);
   const resumeTimerRef = useRef<any>(null);
-  const retryCountRef = useRef(0);
+  const fallbackTierRef = useRef<number>(0);
   const isClosingRef = useRef(false);
   const appStateRef = useRef<AppStateStatus>((AppState.currentState as AppStateStatus) || 'active');
 
-  // Extract clean target URL from proxy or HLS wrapper for probes
+  // Extract clean target URL from proxy, HLS wrapper, or transcode wrapper for probes & fallbacks
   const cleanTargetUrl = useMemo(() => {
     if (!stream?.streamUrl) return '';
     let raw = stream.streamUrl;
@@ -141,6 +141,9 @@ export function usePlayerCore({
       raw = decodeURIComponent(raw.split('/api/proxy?url=')[1]);
     } else if (raw.includes('/api/hls/master.m3u8?url=')) {
       const parts = raw.split('/api/hls/master.m3u8?url=')[1];
+      raw = decodeURIComponent(parts.split('&')[0]);
+    } else if (raw.includes('/api/transcode?url=')) {
+      const parts = raw.split('/api/transcode?url=')[1];
       raw = decodeURIComponent(parts.split('&')[0]);
     }
     return raw;
@@ -241,7 +244,7 @@ export function usePlayerCore({
     if (!video) return;
 
     try {
-      // 1. Audio tracks
+      // 1. Audio tracks (Apple Safari WebKit HTMLAudioElement.audioTracks)
       const aTracks = (video as any).audioTracks;
       if (aTracks && aTracks.length > 0) {
         const list: MediaTrack[] = [];
@@ -260,7 +263,7 @@ export function usePlayerCore({
         setActiveAudioTrack(activeIdx);
       }
 
-      // 2. Subtitle / Text tracks
+      // 2. Subtitle / Text tracks (video.textTracks)
       const tTracks = video.textTracks;
       if (tTracks && tTracks.length > 0) {
         const list: MediaTrack[] = [];
@@ -420,6 +423,9 @@ export function usePlayerCore({
     };
 
     video.ontimeupdate = () => {
+      if (video.currentTime > 0) {
+        setFirstFrameRendered(true);
+      }
       if (!isDraggingTrack) {
         setCurrentTime(video.currentTime);
       }
@@ -450,30 +456,52 @@ export function usePlayerCore({
       }
     } catch {}
 
-    // Resilient HTML5 Error Recovery Pipeline (Fixes Media Error Code 4 / Code 3)
+    // Resilient Multi-Tier Error Recovery Pipeline (Fixes Media Error Code 4 / Code 3 on 4K & MKV/HEVC/AC3 streams)
     video.onerror = () => {
       const err = video.error;
       const code = err ? err.code : 0;
       console.warn('HTML5 Video Error code:', code, err ? err.message : '');
 
-      // Fallback 1: If direct stream threw Error Code 4 (MEDIA_ERR_SRC_NOT_SUPPORTED) or 3 (MEDIA_ERR_DECODE),
-      // seamlessly convert to our HLS Remuxer/Transcoder pipeline without crashing or showing an error dialog!
-      if (!targetUrl.includes('/api/hls/master.m3u8')) {
+      const cleanTarget = cleanTargetUrl || targetUrl;
+      const encodedTarget = encodeURIComponent(cleanTarget);
+
+      // Tier 1 Fallback: Direct MP4/MKV stream failed with Code 4 (MEDIA_ERR_SRC_NOT_SUPPORTED) or 3 (MEDIA_ERR_DECODE)
+      // Switch automatically to HLS Master Playlist remuxer (copies video, transcodes audio to stereo AAC)
+      if (fallbackTierRef.current === 0 && !targetUrl.includes('/api/hls/master.m3u8')) {
+        fallbackTierRef.current = 1;
+        setErrorMsg(null);
         setLoading(true);
         setLoadingStatus('Ottimizzazione formato stream (HLS)...');
-        const encodedTarget = encodeURIComponent(cleanTargetUrl || targetUrl);
         const fallbackHlsUrl = `/api/hls/master.m3u8?url=${encodedTarget}`;
         setTimeout(() => {
           initWebPlayer(fallbackHlsUrl);
-        }, 150);
+        }, 120);
         return;
       }
 
-      // Fallback 2: If HLS master playlist failed, retry through direct proxy
-      if (targetUrl.includes('/api/hls/master.m3u8') && retryCountRef.current === 0) {
-        retryCountRef.current = 1;
-        const proxyUrl = targetUrl.replace('/api/hls/master.m3u8', '/api/proxy');
-        initWebPlayer(proxyUrl);
+      // Tier 2 Fallback: If HLS master playlist failed, try real-time fragmented MP4 transcoding via /api/transcode
+      if (fallbackTierRef.current <= 1 && !targetUrl.includes('/api/transcode')) {
+        fallbackTierRef.current = 2;
+        setErrorMsg(null);
+        setLoading(true);
+        setLoadingStatus('Transcodifica compatibile browser...');
+        const transcodeUrl = `/api/transcode?url=${encodedTarget}`;
+        setTimeout(() => {
+          initWebPlayer(transcodeUrl);
+        }, 120);
+        return;
+      }
+
+      // Tier 3 Fallback: Try remux proxy with ?remux=1
+      if (fallbackTierRef.current <= 2 && !targetUrl.includes('remux=1')) {
+        fallbackTierRef.current = 3;
+        setErrorMsg(null);
+        setLoading(true);
+        setLoadingStatus('Tentativo finale proxy compatibile...');
+        const proxyRemuxUrl = `/api/proxy?url=${encodedTarget}&remux=1`;
+        setTimeout(() => {
+          initWebPlayer(proxyRemuxUrl);
+        }, 120);
         return;
       }
 
@@ -503,6 +531,7 @@ export function usePlayerCore({
     // ─────────────────────────────────────────────────────────────
 
     // Engine 1: Apple Native HLS (Safari on iOS / iPadOS / macOS)
+    // Uses native <video> with controls to expose Apple AVPlayer native Audio and Subtitle tracks
     if (isM3U8 && canNativeHls && isIOS) {
       video.src = targetUrl;
       video.load();
@@ -545,13 +574,14 @@ export function usePlayerCore({
       }
     }
     // Engine 3: HLS.js (Chrome, Firefox, Edge, Android Web)
+    // Calibrated for ZERO buffering: maxBufferLength 60s, maxMaxBufferLength 120s, backBufferLength 30s
     else if (isM3U8 && HlsClass && HlsClass.isSupported()) {
       const hls = new HlsClass({
         enableWorker: true,
         lowLatencyMode: false, // Prevents aggressive stalls on IPTV streams
-        backBufferLength: isLive ? 60 : 180,
-        maxBufferLength: isLive ? 45 : 120,
-        maxMaxBufferLength: isLive ? 90 : 300,
+        backBufferLength: 30,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
         maxBufferSize: 90 * 1024 * 1024, // 90 MB
         maxBufferHole: 0.5,
         highBufferWatchdogPeriod: 2,
@@ -565,11 +595,11 @@ export function usePlayerCore({
         abrBandWidthFactor: 0.85,
         abrBandWidthUpFactor: 0.7,
         manifestLoadingTimeOut: 20000,
-        manifestLoadingMaxRetry: 5,
+        manifestLoadingMaxRetry: 4,
         manifestLoadingRetryDelay: 1000,
         manifestLoadingMaxRetryTimeout: 32000,
         levelLoadingTimeOut: 20000,
-        levelLoadingMaxRetry: 5,
+        levelLoadingMaxRetry: 4,
         levelLoadingRetryDelay: 1000,
         levelLoadingMaxRetryTimeout: 32000,
         fragLoadingTimeOut: 25000,
@@ -655,9 +685,10 @@ export function usePlayerCore({
               break;
             default:
               console.error('Fatal HLS error:', data);
+              // Fallback to transcode or proxy
               if (targetUrl.includes('/api/hls/master.m3u8')) {
-                const proxyUrl = targetUrl.replace('/api/hls/master.m3u8', '/api/proxy');
-                initWebPlayer(proxyUrl);
+                const encoded = encodeURIComponent(cleanTargetUrl || targetUrl);
+                initWebPlayer(`/api/transcode?url=${encoded}`);
                 return;
               }
               setErrorMsg('Errore durante la decodifica del flusso.');
@@ -701,7 +732,7 @@ export function usePlayerCore({
       setIsPlaying(true);
       setCurrentTime(0);
       setBufferPercent(0);
-      retryCountRef.current = 0;
+      fallbackTierRef.current = 0;
 
       // Extract duration from stream object
       const initialDur = XtreamAPI.extractDuration(stream.rawItem);

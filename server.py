@@ -87,19 +87,6 @@ def find_ffprobe():
     return None
 
 
-def find_vlc():
-    """Detect VLC Media Player executable."""
-    p = shutil.which("vlc")
-    if p:
-        return p
-    for candidate in [
-        r"C:\Program Files\VideoLAN\VLC\vlc.exe",
-        r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
-    ]:
-        if os.path.exists(candidate):
-            return candidate
-    return None
-
 
 def rewrite_m3u8(content_text, base_url, proxy_prefix='/api/proxy?url='):
     """
@@ -734,9 +721,9 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                                 self.wfile.write(c_body)
                         return
 
-        # HTML5 browsers (especially Safari on iOS) cannot demux or play MKV/AVI containers natively.
-        # If ffmpeg is available, transparently delegate to ffmpeg real-time remuxer to output progressive MP4!
-        if is_mkv and find_ffmpeg():
+        # Real-time remuxing: if remux=1 requested, or if MKV/AVI container, delegate to FFmpeg remuxer
+        want_remux = ('remux=1' in self.path or 'remux=true' in self.path)
+        if (is_mkv or want_remux) and find_ffmpeg():
             return self.handle_transcode(is_head=is_head, override_url=target_url)
 
         req_headers = {
@@ -1025,57 +1012,16 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                     self.wfile.write(json.dumps(err_body).encode('utf-8'))
 
     def handle_tools(self):
-        vlc = find_vlc()
         ffmpeg = find_ffmpeg()
         self.send_response(200)
         self.end_cors_headers()
         self.end_headers()
         res = {
-            "vlc_available": bool(vlc),
-            "vlc_path": vlc,
             "ffmpeg_available": bool(ffmpeg),
             "ffmpeg_path": ffmpeg
         }
         self.wfile.write(json.dumps(res).encode('utf-8'))
 
-    def handle_open_vlc(self):
-        prefix = '/api/open_vlc?url='
-        if self.path.startswith(prefix):
-            target_url = self.path[len(prefix):]
-        else:
-            parsed = urllib.parse.urlparse(self.path)
-            qs = urllib.parse.parse_qs(parsed.query)
-            target_url = qs.get('url', [None])[0]
-
-        if not target_url:
-            self.send_response(400)
-            self.end_cors_headers()
-            self.end_headers()
-            self.wfile.write(b'{"success": false, "error": "Parametro url mancante"}')
-            return
-
-        if target_url.startswith('http%3A') or target_url.startswith('https%3A') or '%2F' in target_url:
-            target_url = urllib.parse.unquote(target_url)
-
-        vlc_path = find_vlc()
-        if not vlc_path:
-            self.send_response(404)
-            self.end_cors_headers()
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": False, "error": "VLC Media Player non trovato sul sistema."}).encode('utf-8'))
-            return
-
-        try:
-            subprocess.Popen([vlc_path, target_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.send_response(200)
-            self.end_cors_headers()
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": True, "message": "VLC avviato con successo!", "path": vlc_path}).encode('utf-8'))
-        except Exception as e:
-            self.send_response(500)
-            self.end_cors_headers()
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
 
     def handle_transcode(self, is_head=False, override_url=None):
         parsed = urllib.parse.urlparse(self.path)
@@ -1145,13 +1091,27 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             cmd.extend(["-ss", str(start_seconds)])
 
         is_hevc = any(k in target_url.lower() for k in ('hevc', 'h265', '4k', 'uhd', '2160p', 'hdr'))
+        force_h264 = qs.get('h264', [None])[0] == '1' or qs.get('transcode_video', [None])[0] == '1'
 
         cmd.extend([
             "-i", target_url,
-            "-c:v", "copy",
+            "-map", "0:v:0",
+            "-map", "0:a:0?",
         ])
-        if is_hevc:
-            cmd.extend(["-tag:v", "hvc1"])
+
+        if force_h264:
+            cmd.extend([
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-crf", "23"
+            ])
+        else:
+            cmd.extend([
+                "-c:v", "copy"
+            ])
+            if is_hevc:
+                cmd.extend(["-tag:v", "hvc1"])
 
         cmd.extend([
             "-c:a", "aac",
@@ -1456,10 +1416,7 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.handle_subtitles()
             return
 
-        # 4. Direct Launch in VLC Media Player: /api/open_vlc?url=<TARGET_URL>
-        if path == '/api/open_vlc':
-            self.handle_open_vlc()
-            return
+
 
         # 5. Diagnostic System Tools Status: /api/tools
         if path == '/api/tools':

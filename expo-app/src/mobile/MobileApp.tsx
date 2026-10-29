@@ -100,7 +100,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     return [];
   }, [history, activeTab]);
 
-  // Filter items by search
+  // Filter items by search and active tab
   const displayedItems = useMemo(() => {
     if (activeTab === 'favorites') {
       let list = favorites;
@@ -112,9 +112,17 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       return list.filter(f => f.title.toLowerCase().includes(q));
     }
 
-    if (!searchQuery.trim()) return streams;
+    let list = streams;
+    // Strict type separation: ensure movies never leak into series tab and vice versa
+    if (activeTab === 'series') {
+      list = list.filter(s => s.stream_type !== 'movie');
+    } else if (activeTab === 'vod') {
+      list = list.filter(s => !(s.series_id && !s.stream_id));
+    }
+
+    if (!searchQuery.trim()) return list;
     const q = searchQuery.toLowerCase();
-    return streams.filter(s => {
+    return list.filter(s => {
       const name = (s.name || s.title || '').toLowerCase();
       const sid = String(s.stream_id || s.series_id || '');
       return name.includes(q) || sid.includes(q);

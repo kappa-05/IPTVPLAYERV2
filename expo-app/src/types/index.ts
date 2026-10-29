@@ -63,7 +63,8 @@ export interface SeriesItem {
   releaseDate?: string;
   rating?: string | number;
   rating_5based?: number;
-  category_id?: string;
+  category_id?: string;
+  direct_source?: string;
 }
 
 export interface SeriesSeason {

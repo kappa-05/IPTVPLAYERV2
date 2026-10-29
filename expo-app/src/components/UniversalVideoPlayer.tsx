@@ -172,7 +172,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
       useNativeDriver: Platform.OS !== 'web'
     }).start();
 
-    // Auto-hide after 3.8s if video is playing
+    // Auto-hide after 3.0s if video is playing
     controlsTimeoutRef.current = setTimeout(() => {
       if (isPlaying && !isDraggingTrack && !trackModalVisible && !qualityModalVisible && !speedModalVisible) {
         Animated.timing(controlsAnim, {
@@ -183,7 +183,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
           setShowControls(false);
         });
       }
-    }, 3800);
+    }, 3000);
   }, [clearControlsTimer, controlsAnim, isPlaying, isDraggingTrack, trackModalVisible, qualityModalVisible, speedModalVisible]);
 
   // Animated close handler
@@ -367,6 +367,8 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
         loading={loading}
         statusText={loadingStatus}
         firstFrameRendered={firstFrameRendered}
+        isPlaying={isPlaying}
+        currentTime={currentTime}
       />
 
       {/* ── 2. Video Engine: Web HTML5 or Native Expo-AV ── */}
