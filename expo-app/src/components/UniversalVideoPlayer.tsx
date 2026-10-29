@@ -1,34 +1,23 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Modal,
   TouchableOpacity,
-  ActivityIndicator,
   Platform,
   useWindowDimensions,
   Animated,
-  Easing,
-  Image
+  Easing
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { PlayingStream, Account } from '../types';
-import { XtreamAPI } from '../services/api';
-import { StorageService } from '../services/storage';
-
-let HlsClass: any = null;
-if (Platform.OS === 'web') {
-  try {
-    HlsClass = require('hls.js');
-    if (HlsClass.default) {
-      HlsClass = HlsClass.default;
-    }
-  } catch (e) {
-    console.warn('Hls.js not available:', e);
-  }
-}
+import { usePlayerCore } from './player/usePlayerCore';
+import { SeamlessPosterBackdrop } from './player/SeamlessPosterBackdrop';
+import { TrackSelectionModal } from './player/TrackSelectionModal';
+import { QualitySelectionModal } from './player/QualitySelectionModal';
+import { SpeedSelectionModal } from './player/SpeedSelectionModal';
 
 let ExpoVideo: any = null;
 let ResizeModeEnum: any = null;
@@ -42,14 +31,7 @@ if (Platform.OS !== 'web') {
   }
 }
 
-export interface MediaTrack {
-  id: number;
-  label: string;
-  language: string;
-  active: boolean;
-}
-
-interface VideoPlayerProps {
+interface UniversalVideoPlayerProps {
   visible: boolean;
   stream: PlayingStream | null;
   account?: Account | null;
@@ -60,7 +42,7 @@ interface VideoPlayerProps {
   onWatchProgressUpdated?: () => void;
 }
 
-export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
+export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
   visible,
   stream,
   account,
@@ -70,232 +52,110 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
   onToggleMinimize,
   onWatchProgressUpdated
 }) => {
-  const { width, height } = useWindowDimensions();
+  const { width } = useWindowDimensions();
 
-  // Detect Mobile / Touch / Apple Device
-  const isIOS = Platform.OS === 'ios' || (Platform.OS === 'web' && typeof navigator !== 'undefined' && (
-    /iPhone|iPad|iPod/i.test(navigator.userAgent || '') ||
-    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-  ));
+  // Core Playback & Device Engine Hook
+  const {
+    isIOS,
+    isAndroid,
+    isTouchDevice,
+    isLive,
+    isMovieOrSeries,
+    webVideoRef,
+    nativeVideoRef,
+    isPlaying,
+    loading,
+    loadingStatus,
+    firstFrameRendered,
+    currentTime,
+    duration,
+    bufferPercent,
+    volume,
+    isMuted,
+    playbackSpeed,
+    isFullscreen,
+    errorMsg,
+    audioTracks,
+    subtitleTracks,
+    qualityLevels,
+    activeAudioTrack,
+    activeSubtitleTrack,
+    activeQualityLevel,
+    trackModalVisible,
+    setTrackModalVisible,
+    qualityModalVisible,
+    setQualityModalVisible,
+    speedModalVisible,
+    setSpeedModalVisible,
+    isDraggingTrack,
+    setIsDraggingTrack,
+    dragTime,
+    setDragTime,
+    seekFeedback,
+    resumePrompt,
+    setResumePrompt,
+    togglePlayPause,
+    toggleMute,
+    changeVolume,
+    seekTo,
+    seekRelative,
+    toggleFullscreen,
+    togglePictureInPicture,
+    openDevicePlayer,
+    handleSelectAudioTrack,
+    handleSelectSubtitleTrack,
+    handleSelectQualityLevel,
+    handleSelectPlaybackSpeed,
+    handleClose: handleCoreClose,
+    initWebPlayer
+  } = usePlayerCore({
+    visible,
+    stream,
+    account,
+    isMinimized,
+    onClose,
+    onWatchProgressUpdated
+  });
 
-  const isAndroid = Platform.OS === 'android' || (Platform.OS === 'web' && typeof navigator !== 'undefined' && (
-    /Android/i.test(navigator.userAgent || '')
-  ));
-
-  const isTouchDevice = isIOS || isAndroid || (Platform.OS === 'web' && typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0));
-
-  // Video Element Refs
-  const webVideoRef = useRef<HTMLVideoElement | null>(null);
-  const hlsRef = useRef<any>(null);
-  const nativeVideoRef = useRef<any>(null);
-
-  // Playback States
-  const [loading, setLoading] = useState(true);
-  const [loadingStatus, setLoadingStatus] = useState('Connessione allo stream...');
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [isMuted, setIsMuted] = useState(false);
-  const [volume, setVolume] = useState(1);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [bufferPercent, setBufferPercent] = useState(0);
+  // UI Controls Animation & Auto-Hide
   const [showControls, setShowControls] = useState(true);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [showTimeRemaining, setShowTimeRemaining] = useState(false);
+  const [volumeHovered, setVolumeHovered] = useState(false);
+  const [isHoveredMini, setIsHoveredMini] = useState(false);
+  const [hoverSeekTime, setHoverSeekTime] = useState<number | null>(null);
+  const [hoverSeekPos, setHoverSeekPos] = useState<number>(0);
 
-  // Quick Skip Ripple Feedback Indicator (-10s / +10s)
-  const [seekFeedback, setSeekFeedback] = useState<{ direction: 'back' | 'forward'; key: number } | null>(null);
-
-  // Scrubber Dragging State
-  const [isDraggingTrack, setIsDraggingTrack] = useState(false);
-  const [dragTime, setDragTime] = useState<number | null>(null);
-  const [trackWidth, setTrackWidth] = useState<number>(0);
-  const trackRef = useRef<any>(null);
-
-  // Timers & Mounted tracking
+  const controlsAnim = useRef(new Animated.Value(1)).current;
+  const animFade = useRef(new Animated.Value(0)).current;
+  const animScale = useRef(new Animated.Value(0.96)).current;
   const controlsTimeoutRef = useRef<any>(null);
   const lastTapRef = useRef<number>(0);
-  const retryCountRef = useRef(0);
-  const isClosingRef = useRef(false);
+  const trackRef = useRef<any>(null);
 
-  // ── Multi-Audio & Subtitles States ──
-  const [audioTracks, setAudioTracks] = useState<MediaTrack[]>([]);
-  const [subtitleTracks, setSubtitleTracks] = useState<MediaTrack[]>([]);
-  const [activeAudioTrack, setActiveAudioTrack] = useState<number>(-1);
-  const [activeSubtitleTrack, setActiveSubtitleTrack] = useState<number>(-1);
-  const [trackModalVisible, setTrackModalVisible] = useState(false);
-  const [trackModalTab, setTrackModalTab] = useState<'audio' | 'subtitles'>('audio');
-
-  // ── "Continua a guardare" (Resume Playback) States ──
-  const [resumePrompt, setResumePrompt] = useState<{ visible: boolean; time: number } | null>(null);
-  const hasResumedRef = useRef(false);
-  const lastSaveTimeRef = useRef(0);
-  const resumeTimerRef = useRef<any>(null);
-
-  // ── Mini-Player State ──
-  const [isHoveredMini, setIsHoveredMini] = useState(false);
-
-  // ── Cinematic Opening & Closing Animations ──
-  const animFade = useRef(new Animated.Value(0)).current;
-  const animScale = useRef(new Animated.Value(0.95)).current;
-  const controlsAnim = useRef(new Animated.Value(1)).current;
-
-  // ── 100% Robust Content Type Detection (Guaranteed NO Movie marked as LIVE) ──
-  const isMovieOrSeries = Boolean(
-    stream?.type === 'vod' ||
-    stream?.type === 'series' ||
-    stream?.streamUrl.includes('/movie/') ||
-    stream?.streamUrl.includes('/series/') ||
-    stream?.streamUrl.includes('%2Fmovie%2F') ||
-    stream?.streamUrl.includes('%2Fseries%2F') ||
-    stream?.extension === 'mp4' ||
-    stream?.extension === 'mkv' ||
-    stream?.extension === 'avi' ||
-    Boolean(stream?.rawItem?.container_extension) ||
-    stream?.rawItem?.stream_type === 'movie' ||
-    stream?.rawItem?.type === 'vod' ||
-    stream?.rawItem?.type === 'series'
-  );
-  const isLive = !isMovieOrSeries;
-
-  // ── Smooth Close Trigger with Fade-Out & Scale-Down ──
-  const handleClose = useCallback(() => {
-    if (isClosingRef.current) return;
-    isClosingRef.current = true;
-
-    // Gently fade out audio
-    if (Platform.OS === 'web' && webVideoRef.current) {
-      try {
-        const vid = webVideoRef.current;
-        let v = vid.volume;
-        const fadeAudio = setInterval(() => {
-          v = Math.max(0, v - 0.25);
-          vid.volume = v;
-          if (v <= 0) {
-            clearInterval(fadeAudio);
-            vid.pause();
-          }
-        }, 30);
-      } catch {}
+  // Smooth entrance animation
+  useEffect(() => {
+    if (visible && stream) {
+      animFade.setValue(0);
+      animScale.setValue(0.96);
+      Animated.parallel([
+        Animated.timing(animFade, {
+          toValue: 1,
+          duration: 250,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: Platform.OS !== 'web'
+        }),
+        Animated.timing(animScale, {
+          toValue: 1,
+          duration: 250,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: Platform.OS !== 'web'
+        })
+      ]).start();
+      resetControlsTimer();
     }
+  }, [visible, stream]);
 
-    // Save watch progress immediately upon closing
-    if (isMovieOrSeries && account?.id && webVideoRef.current && webVideoRef.current.currentTime > 10) {
-      const vid = webVideoRef.current;
-      const dur = (vid.duration && isFinite(vid.duration) && vid.duration > 0) ? vid.duration : duration;
-      const pct = dur > 0 ? Math.min(100, Math.floor((vid.currentTime / dur) * 100)) : 0;
-      if (pct >= 96) {
-        StorageService.removeHistoryItem(account.id, String(stream?.streamId)).catch(() => {});
-      } else {
-        StorageService.saveWatchProgress(account.id, {
-          id: String(stream?.streamId),
-          accountId: account.id,
-          type: stream?.type === 'series' ? 'series' : 'vod',
-          title: stream?.title || '',
-          subTitle: stream?.subTitle,
-          poster: stream?.poster,
-          currentTime: Math.floor(vid.currentTime),
-          duration: Math.floor(dur),
-          percent: pct,
-          rawItem: stream?.rawItem
-        }).catch(() => {});
-      }
-      onWatchProgressUpdated?.();
-    }
-
-    // Play smooth cinematic exit animation
-    Animated.parallel([
-      Animated.timing(animFade, {
-        toValue: 0,
-        duration: 220,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: true
-      }),
-      Animated.timing(animScale, {
-        toValue: 0.95,
-        duration: 220,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: true
-      })
-    ]).start(() => {
-      cleanupWebPlayer();
-      onClose();
-    });
-  }, [animFade, animScale, onClose, isMovieOrSeries, account, stream, duration, onWatchProgressUpdated]);
-
-  // ── Multi-Audio & Subtitles Track Switch Handlers ──
-  const handleSelectAudioTrack = (idx: number) => {
-    setActiveAudioTrack(idx);
-    if (hlsRef.current) {
-      try {
-        hlsRef.current.audioTrack = idx;
-      } catch {}
-    } else if (webVideoRef.current) {
-      const aTracks = (webVideoRef.current as any).audioTracks;
-      if (aTracks && aTracks.length > 0) {
-        for (let i = 0; i < aTracks.length; i++) {
-          aTracks[i].enabled = (i === idx);
-        }
-      }
-    }
-    setAudioTracks(prev => prev.map(t => ({ ...t, active: t.id === idx })));
-  };
-
-  const handleSelectSubtitleTrack = (idx: number) => {
-    setActiveSubtitleTrack(idx);
-    if (hlsRef.current) {
-      try {
-        hlsRef.current.subtitleTrack = idx;
-      } catch {}
-    } else if (webVideoRef.current) {
-      const tTracks = webVideoRef.current.textTracks;
-      if (tTracks && tTracks.length > 0) {
-        for (let i = 0; i < tTracks.length; i++) {
-          tTracks[i].mode = (i === idx ? 'showing' : 'disabled');
-        }
-      }
-    }
-    setSubtitleTracks(prev => prev.map(t => ({ ...t, active: t.id === idx })));
-  };
-
-  // ── Native Picture-in-Picture Toggle ──
-  const togglePictureInPicture = async () => {
-    if (Platform.OS !== 'web' || !webVideoRef.current) return;
-    const vid = webVideoRef.current as any;
-    try {
-      if (document.pictureInPictureElement) {
-        await (document as any).exitPictureInPicture();
-      } else if (typeof vid.requestPictureInPicture === 'function') {
-        await vid.requestPictureInPicture();
-      } else if (typeof vid.webkitSetPresentationMode === 'function') {
-        const mode = vid.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture';
-        vid.webkitSetPresentationMode(mode);
-      }
-    } catch (err) {
-      console.warn('PiP error:', err);
-    }
-  };
-
-  // ── Resume Playback Prompt Handlers ──
-  const handleConfirmResume = () => {
-    if (resumePrompt && webVideoRef.current) {
-      webVideoRef.current.currentTime = resumePrompt.time;
-      setCurrentTime(resumePrompt.time);
-    }
-    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
-    setResumePrompt(null);
-  };
-
-  const handleRestartFromBeginning = () => {
-    if (webVideoRef.current) {
-      webVideoRef.current.currentTime = 0;
-      setCurrentTime(0);
-    }
-    if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
-    setResumePrompt(null);
-  };
-
-  // ── Reset Controls Auto-Hide Timer ──
+  // Controls auto-hide timer
   const clearControlsTimer = useCallback(() => {
     if (controlsTimeoutRef.current) {
       clearTimeout(controlsTimeoutRef.current);
@@ -309,740 +169,79 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     Animated.timing(controlsAnim, {
       toValue: 1,
       duration: 150,
-      useNativeDriver: true
+      useNativeDriver: Platform.OS !== 'web'
     }).start();
 
-    // Auto-hide after 3.8s if playing
+    // Auto-hide after 3.8s if video is playing
     controlsTimeoutRef.current = setTimeout(() => {
-      if (webVideoRef.current && !webVideoRef.current.paused && !isDraggingTrack) {
+      if (isPlaying && !isDraggingTrack && !trackModalVisible && !qualityModalVisible && !speedModalVisible) {
         Animated.timing(controlsAnim, {
           toValue: 0,
           duration: 250,
-          useNativeDriver: true
+          useNativeDriver: Platform.OS !== 'web'
         }).start(() => {
           setShowControls(false);
         });
       }
     }, 3800);
-  }, [clearControlsTimer, controlsAnim, isDraggingTrack]);
+  }, [clearControlsTimer, controlsAnim, isPlaying, isDraggingTrack, trackModalVisible, qualityModalVisible, speedModalVisible]);
 
-  // ── Initialize Media Metadata and Duration ──
-  useEffect(() => {
-    if (visible && stream) {
-      isClosingRef.current = false;
-      setLoading(true);
-      setLoadingStatus('Connessione allo stream...');
-      setErrorMsg(null);
-      setIsPlaying(true);
-      setCurrentTime(0);
-      setBufferPercent(0);
-      retryCountRef.current = 0;
-
-      // 1. Initial Duration from raw item if present
-      const initialDur = XtreamAPI.extractDuration(stream.rawItem);
-      if (initialDur > 0) {
-        setDuration(initialDur);
-      } else {
-        setDuration(0);
-      }
-
-      // 2. Fetch server duration probe for movies/series
-      if (isMovieOrSeries) {
-        let rawUrl = stream.streamUrl;
-        if (rawUrl.includes('/api/proxy?url=')) {
-          rawUrl = decodeURIComponent(rawUrl.split('/api/proxy?url=')[1]);
-        } else if (rawUrl.includes('/api/hls/master.m3u8?url=')) {
-          const parts = rawUrl.split('/api/hls/master.m3u8?url=')[1];
-          rawUrl = decodeURIComponent(parts.split('&')[0]);
-        }
-          fetch(`/api/media_info?url=${encodeURIComponent(rawUrl)}`)
-            .then(res => res.json())
-            .then(data => {
-              if (data) {
-                if (data.duration && data.duration > 0 && isFinite(data.duration)) {
-                  setDuration(data.duration);
-                }
-                // Discovered Audio Tracks from source file
-                if (data.audio_tracks && Array.isArray(data.audio_tracks) && data.audio_tracks.length > 0) {
-                  const aList: MediaTrack[] = data.audio_tracks.map((t: any, idx: number) => ({
-                    id: idx,
-                    label: t.title || t.language || `Traccia ${idx + 1}`,
-                    language: t.language || '',
-                    active: idx === 0
-                  }));
-                  setAudioTracks(aList);
-                  setActiveAudioTrack(0);
-                }
-                // Discovered Subtitle Tracks from source file & dynamic injection for device player
-                if (data.subtitle_tracks && Array.isArray(data.subtitle_tracks) && data.subtitle_tracks.length > 0) {
-                  const sList: MediaTrack[] = data.subtitle_tracks.map((t: any, idx: number) => ({
-                    id: idx,
-                    label: t.title || t.language || `Sottotitolo ${idx + 1}`,
-                    language: t.language || '',
-                    active: false
-                  }));
-                  setSubtitleTracks(sList);
-
-                  // Inject <track> DOM elements into HTML5 <video> so native device players (AVPlayer / Android) show subtitles!
-                  if (webVideoRef.current) {
-                    const vid = webVideoRef.current;
-                    const existingTracks = vid.querySelectorAll('track');
-                    existingTracks.forEach(tr => tr.remove());
-
-                    data.subtitle_tracks.forEach((sub: any, idx: number) => {
-                      const trackEl = document.createElement('track');
-                      trackEl.kind = 'subtitles';
-                      trackEl.label = sub.title || sub.language || `Sottotitolo ${idx + 1}`;
-                      trackEl.srclang = sub.language || 'it';
-                      trackEl.src = `/api/subtitles?url=${encodeURIComponent(rawUrl)}&track_index=${sub.stream_index !== undefined ? sub.stream_index : idx}`;
-                      trackEl.default = false;
-                      vid.appendChild(trackEl);
-                    });
-                  }
-                }
-              }
-            })
-            .catch(() => {});
-      }
-
-      // 3. Play Cinematic Open Animation
-      animFade.setValue(0);
-      animScale.setValue(0.95);
-
-      Animated.parallel([
-        Animated.timing(animFade, {
-          toValue: 1,
-          duration: 260,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true
-        }),
-        Animated.timing(animScale, {
-          toValue: 1,
-          duration: 260,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true
-        })
-      ]).start();
-
-      resetControlsTimer();
-
-      if (Platform.OS === 'web') {
-        initWebPlayer(stream.streamUrl);
-      }
-    } else {
-      clearControlsTimer();
-      cleanupWebPlayer();
-    }
-
-    return () => {
-      clearControlsTimer();
-      cleanupWebPlayer();
-    };
-  }, [visible, stream]);
-
-  // ── Keyboard Shortcuts (Desktop Web) ──
-  useEffect(() => {
-    if (Platform.OS !== 'web' || !visible) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept if user is typing in an input
-      const target = e.target as HTMLElement;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
-
-      switch (e.key) {
-        case ' ':
-        case 'k':
-        case 'K':
-          e.preventDefault();
-          togglePlayPause();
-          break;
-        case 'ArrowLeft':
-        case 'j':
-        case 'J':
-          e.preventDefault();
-          seekRelative(-10);
-          break;
-        case 'ArrowRight':
-        case 'l':
-        case 'L':
-          e.preventDefault();
-          seekRelative(10);
-          break;
-        case 'ArrowUp':
-          e.preventDefault();
-          adjustVolume(0.1);
-          break;
-        case 'ArrowDown':
-          e.preventDefault();
-          adjustVolume(-0.1);
-          break;
-        case 'm':
-        case 'M':
-          e.preventDefault();
-          toggleMute();
-          break;
-        case 'f':
-        case 'F':
-          e.preventDefault();
-          toggleFullscreen();
-          break;
-        case 'Escape':
-          e.preventDefault();
-          handleClose();
-          break;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [visible, isPlaying, duration, currentTime, isMuted, volume]);
-
-  // ── Web Player Teardown ──
-  const cleanupWebPlayer = () => {
-    if (hlsRef.current) {
-      try {
-        hlsRef.current.destroy();
-      } catch {}
-      hlsRef.current = null;
-    }
-    if (webVideoRef.current) {
-      try {
-        const vid = webVideoRef.current;
-        vid.pause();
-        vid.removeAttribute('src');
-        vid.load();
-      } catch {}
-    }
-  };
-
-  // ── Web HTML5 Video & HLS Setup ──
-  const initWebPlayer = (targetUrl: string) => {
-    cleanupWebPlayer();
-    const video = webVideoRef.current;
-    if (!video || !stream) return;
-
-    const isM3U8 = targetUrl.toLowerCase().includes('.m3u8') || targetUrl.includes('/api/hls/') || (isLive && !targetUrl.includes('/movie/') && !targetUrl.includes('/series/'));
-    const canNativeHls = typeof video.canPlayType === 'function' && Boolean(video.canPlayType('application/vnd.apple.mpegurl'));
-    video.controls = false;
-    if (isIOS) {
-      video.removeAttribute('playsinline');
-      video.removeAttribute('webkit-playsinline');
-      (video as any).playsInline = false;
-      (video as any).webkitPlaysInline = false;
-    }
-
-    const updateNativeTracks = () => {
-      try {
-        const aTracks = (video as any).audioTracks;
-        if (aTracks && aTracks.length > 0) {
-          const list: MediaTrack[] = [];
-          let activeIdx = 0;
-          for (let i = 0; i < aTracks.length; i++) {
-            if (aTracks[i].enabled) activeIdx = i;
-            list.push({
-              id: i,
-              label: aTracks[i].label || aTracks[i].language || `Traccia ${i + 1}`,
-              language: aTracks[i].language || '',
-              active: aTracks[i].enabled
-            });
-          }
-          setAudioTracks(list);
-          setActiveAudioTrack(activeIdx);
-        }
-
-        const tTracks = video.textTracks;
-        if (tTracks && tTracks.length > 0) {
-          const list: MediaTrack[] = [];
-          let activeIdx = -1;
-          for (let i = 0; i < tTracks.length; i++) {
-            if (tTracks[i].mode === 'showing') activeIdx = i;
-            list.push({
-              id: i,
-              label: tTracks[i].label || tTracks[i].language || `Sottotitolo ${i + 1}`,
-              language: tTracks[i].language || '',
-              active: tTracks[i].mode === 'showing'
-            });
-          }
-          setSubtitleTracks(list);
-          setActiveSubtitleTrack(activeIdx);
-        }
-      } catch {}
-    };
-
-    const checkResumeProgress = (vid: HTMLVideoElement) => {
-      if (hasResumedRef.current) return;
-      hasResumedRef.current = true;
-
-      // 1. If explicit initialSeekTime was requested
-      if (stream.initialSeekTime && stream.initialSeekTime > 0) {
-        vid.currentTime = stream.initialSeekTime;
-        setCurrentTime(stream.initialSeekTime);
-        return;
-      }
-
-      // 2. Otherwise check storage history for saved time
-      if (isMovieOrSeries && account?.id) {
-        StorageService.getHistory(account.id).then(hist => {
-          const match = hist.find(h => String(h.id) === String(stream.streamId));
-          const maxDur = (vid.duration && isFinite(vid.duration) && vid.duration > 0) ? vid.duration : duration;
-          if (match && match.currentTime > 15 && match.currentTime < (maxDur > 0 ? maxDur - 40 : 36000)) {
-            setResumePrompt({ visible: true, time: match.currentTime });
-            if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
-            resumeTimerRef.current = setTimeout(() => {
-              setResumePrompt(null);
-            }, 8500);
-          }
-        }).catch(() => {});
-      }
-    };
-
-    video.onwaiting = () => {
-      setLoading(true);
-      setLoadingStatus('Buffering...');
-    };
-
-    video.onplaying = () => {
-      setLoading(false);
-      setIsPlaying(true);
-      if (!isMinimized) {
-        openDevicePlayer(video);
-      }
-      updateNativeTracks();
-      checkResumeProgress(video);
-    };
-
-    video.onplay = () => {
-      setIsPlaying(true);
-      if (!isMinimized) {
-        openDevicePlayer(video);
-      }
-      updateNativeTracks();
-    };
-
-    video.onloadeddata = () => {
-      if (!isMinimized) {
-        openDevicePlayer(video);
-      }
-      updateNativeTracks();
-    };
-
-    video.onpause = () => setIsPlaying(false);
-    video.onvolumechange = () => {
-      setIsMuted(video.muted);
-      setVolume(video.volume);
-    };
-
-    video.onprogress = () => {
-      if (video.buffered && video.buffered.length > 0 && video.duration > 0) {
-        const end = video.buffered.end(video.buffered.length - 1);
-        setBufferPercent(Math.min(100, (end / video.duration) * 100));
-      }
-    };
-
-    video.onloadedmetadata = () => {
-      if (video.duration && isFinite(video.duration) && video.duration > 0) {
-        setDuration(video.duration);
-      }
-      updateNativeTracks();
-      checkResumeProgress(video);
-    };
-
-    video.ondurationchange = () => {
-      if (video.duration && isFinite(video.duration) && video.duration > 0) {
-        setDuration(video.duration);
-      }
-    };
-
-    video.ontimeupdate = () => {
-      if (!isDraggingTrack) {
-        setCurrentTime(video.currentTime);
-      }
-      if (video.duration && isFinite(video.duration) && video.duration > 0 && duration <= 0) {
-        setDuration(video.duration);
-      }
-      if (isIOS && !isFullscreen && !isMinimized && video.currentTime > 0.1) {
-        openDevicePlayer(video);
-      }
-
-      // Throttle save watch progress every 5s for movies & series
-      if (isMovieOrSeries && account?.id && video.currentTime > 10) {
-        const now = Date.now();
-        if (now - lastSaveTimeRef.current >= 4500) {
-          lastSaveTimeRef.current = now;
-          const dur = (video.duration && isFinite(video.duration) && video.duration > 0) ? video.duration : duration;
-          const pct = dur > 0 ? Math.min(100, Math.floor((video.currentTime / dur) * 100)) : 0;
-          if (pct >= 96) {
-            StorageService.removeHistoryItem(account.id, String(stream.streamId)).catch(() => {});
-          } else {
-            StorageService.saveWatchProgress(account.id, {
-              id: String(stream.streamId),
-              accountId: account.id,
-              type: stream.type === 'series' ? 'series' : 'vod',
-              title: stream.title || '',
-              subTitle: stream.subTitle,
-              poster: stream.poster,
-              currentTime: Math.floor(video.currentTime),
-              duration: Math.floor(dur),
-              percent: pct,
-              rawItem: stream.rawItem
-            }).catch(() => {});
-          }
-        }
-      }
-    };
-
-    video.onerror = () => {
-      console.warn('HTML5 Video Error:', video.error);
-      const code = video.error ? video.error.code : 'ignoto';
-
-      // Fallback 1: If direct stream failed on VOD/Movie, fallback to HLS remuxing
-      if (!targetUrl.includes('/api/hls/master.m3u8') && !targetUrl.includes('/api/transcode') && isMovieOrSeries) {
-        console.log(`Direct stream error (Code ${code}), falling back to HLS remuxing...`);
-        let hlsUrl = '';
-        if (targetUrl.includes('/api/proxy?url=')) {
-          hlsUrl = targetUrl.replace('/api/proxy?url=', '/api/hls/master.m3u8?url=');
-        } else {
-          hlsUrl = `/api/hls/master.m3u8?url=${encodeURIComponent(targetUrl)}`;
-        }
-        initWebPlayer(hlsUrl);
-        return;
-      }
-
-      // Fallback 2: If HLS failed, fallback to direct proxy stream
-      if (targetUrl.includes('/api/hls/master.m3u8') && retryCountRef.current === 0) {
-        retryCountRef.current = 1;
-        console.log('HLS pipeline error, falling back to direct proxy stream...');
-        const proxyUrl = targetUrl.replace('/api/hls/master.m3u8', '/api/proxy');
-        initWebPlayer(proxyUrl);
-        return;
-      }
-
-      setErrorMsg(`Impossibile riprodurre il contenuto (Codice ${code}). Verifica la connessione o il server IPTV.`);
-      setLoading(false);
-    };
-
-    // Exit fullscreen listener for Apple devices (when user taps 'Done' in native AVPlayer)
-    const handleWebkitEnd = () => {
-      setIsFullscreen(false);
-      video.controls = false;
-      handleClose();
-    };
-    video.addEventListener('webkitendfullscreen', handleWebkitEnd);
-
-    const handleFullscreenChange = () => {
-      const isFs = Boolean(document.fullscreenElement);
-      setIsFullscreen(isFs);
-      if (!isFs) {
-        video.controls = false;
-      }
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-
-    // Apple AVPlayer HLS Engine (iPhone / iPad / Safari)
-    if (isM3U8 && canNativeHls) {
-      video.src = targetUrl;
-      video.load();
-      video.play().then(() => {
-        openDevicePlayer(video);
-      }).catch((e) => {
-        console.log('Autoplay waiting for user touch:', e);
-      });
-    } else if (isM3U8 && HlsClass && HlsClass.isSupported()) {
-      // HLS.js for Chrome, Firefox, Edge, Android
-      const hls = new HlsClass({
-        enableWorker: true,
-        lowLatencyMode: isLive,
-        backBufferLength: isLive ? 30 : 120,
-        maxBufferLength: isLive ? 30 : 90,
-        maxMaxBufferLength: isLive ? 60 : 180
-      });
-      hlsRef.current = hls;
-
-      hls.loadSource(targetUrl);
-      hls.attachMedia(video);
-
-      hls.on(HlsClass.Events.AUDIO_TRACKS_UPDATED, (_event: any, data: any) => {
-        const rawTracks = data?.audioTracks || hls.audioTracks || [];
-        const tracks: MediaTrack[] = rawTracks.map((t: any, idx: number) => ({
-          id: idx,
-          label: t.name || t.lang || `Traccia ${idx + 1}`,
-          language: t.lang || '',
-          active: idx === hls.audioTrack
-        }));
-        if (tracks.length > 0) {
-          setAudioTracks(tracks);
-          setActiveAudioTrack(hls.audioTrack);
-        }
-      });
-
-      hls.on(HlsClass.Events.SUBTITLE_TRACKS_UPDATED, (_event: any, data: any) => {
-        const rawSubs = data?.subtitleTracks || hls.subtitleTracks || [];
-        const tracks: MediaTrack[] = rawSubs.map((t: any, idx: number) => ({
-          id: idx,
-          label: t.name || t.lang || `Sottotitolo ${idx + 1}`,
-          language: t.lang || '',
-          active: idx === hls.subtitleTrack
-        }));
-        if (tracks.length > 0) {
-          setSubtitleTracks(tracks);
-          setActiveSubtitleTrack(hls.subtitleTrack);
-        }
-      });
-
-      hls.on(HlsClass.Events.MANIFEST_PARSED, (_event: any, data: any) => {
-        setLoading(false);
-        if (data?.levels?.[0]?.details?.totalduration) {
-          setDuration(data.levels[0].details.totalduration);
-        }
-        if (hls.audioTracks && hls.audioTracks.length > 0) {
-          const tracks: MediaTrack[] = hls.audioTracks.map((t: any, idx: number) => ({
-            id: idx,
-            label: t.name || t.lang || `Traccia ${idx + 1}`,
-            language: t.lang || '',
-            active: idx === hls.audioTrack
-          }));
-          setAudioTracks(tracks);
-          setActiveAudioTrack(hls.audioTrack);
-        }
-        if (hls.subtitleTracks && hls.subtitleTracks.length > 0) {
-          const subTracks: MediaTrack[] = hls.subtitleTracks.map((t: any, idx: number) => ({
-            id: idx,
-            label: t.name || t.lang || `Sottotitolo ${idx + 1}`,
-            language: t.lang || '',
-            active: idx === hls.subtitleTrack
-          }));
-          setSubtitleTracks(subTracks);
-          setActiveSubtitleTrack(hls.subtitleTrack);
-        }
-        video.play().then(() => {
-          if (!isMinimized) {
-            openDevicePlayer(video);
-          }
-        }).catch(() => {});
-      });
-
-      hls.on(HlsClass.Events.LEVEL_LOADED, (_event: any, data: any) => {
-        if (data?.details?.totalduration && isFinite(data.details.totalduration)) {
-          setDuration(data.details.totalduration);
-        }
-      });
-
-      hls.on(HlsClass.Events.ERROR, (_event: any, data: any) => {
-        if (data.fatal) {
-          switch (data.type) {
-            case HlsClass.ErrorTypes.NETWORK_ERROR:
-              console.warn('HLS Network error, recovering...');
-              hls.startLoad();
-              break;
-            case HlsClass.ErrorTypes.MEDIA_ERROR:
-              console.warn('HLS Media error, recovering...');
-              hls.recoverMediaError();
-              break;
-            default:
-              console.error('Fatal HLS error:', data);
-              if (targetUrl.includes('/api/hls/master.m3u8')) {
-                const proxyUrl = targetUrl.replace('/api/hls/master.m3u8', '/api/proxy');
-                initWebPlayer(proxyUrl);
-                return;
-              }
-              setErrorMsg('Errore critico durante la riproduzione stream.');
-              setLoading(false);
-              cleanupWebPlayer();
-              break;
-          }
-        }
-      });
-    } else {
-      // Direct MP4 / MKV stream
-      video.src = targetUrl;
-      video.load();
-      video.play().then(() => {
-        openDevicePlayer(video);
-      }).catch(() => {});
-    }
-  };
-
-  const openDevicePlayer = useCallback((targetVid?: HTMLVideoElement) => {
-    if (isMinimized) return false;
-    if (Platform.OS === 'web') {
-      const vid = targetVid || webVideoRef.current;
-      if (vid) {
-        // Enable native controls when entering device player so audio & subtitle pickers are visible
-        vid.controls = true;
-        if (isIOS && typeof (vid as any).webkitEnterFullscreen === 'function') {
-          try {
-            (vid as any).webkitEnterFullscreen();
-            setIsFullscreen(true);
-            return true;
-          } catch (err) {
-            console.log('Apple fullscreen deferred until user touch:', err);
-          }
-        } else if (typeof (vid as any).requestFullscreen === 'function') {
-          try {
-            (vid as any).requestFullscreen();
-            setIsFullscreen(true);
-            return true;
-          } catch (e) {}
-        }
-      }
-    } else if (nativeVideoRef.current) {
-      try {
-        nativeVideoRef.current.presentFullscreenPlayer();
-        setIsFullscreen(true);
-        return true;
-      } catch (e) {}
-    }
-    return false;
-  }, [isIOS, isMinimized]);
-
-  // ── Play / Pause ──
-  const togglePlayPause = useCallback(() => {
-    resetControlsTimer();
-    openDevicePlayer();
-    if (Platform.OS === 'web' && webVideoRef.current) {
-      if (webVideoRef.current.paused) {
-        webVideoRef.current.play().catch(() => {});
-        setIsPlaying(true);
-      } else {
-        webVideoRef.current.pause();
-        setIsPlaying(false);
-      }
-    } else if (nativeVideoRef.current) {
-      if (isPlaying) {
-        nativeVideoRef.current.pauseAsync();
-        setIsPlaying(false);
-      } else {
-        nativeVideoRef.current.playAsync();
-        setIsPlaying(true);
-      }
-    }
-  }, [isPlaying, openDevicePlayer, resetControlsTimer]);
-
-  // ── Mute / Unmute ──
-  const toggleMute = useCallback(() => {
-    resetControlsTimer();
-    if (Platform.OS === 'web' && webVideoRef.current) {
-      const nextMuted = !webVideoRef.current.muted;
-      webVideoRef.current.muted = nextMuted;
-      setIsMuted(nextMuted);
-    } else if (nativeVideoRef.current) {
-      nativeVideoRef.current.setIsMutedAsync(!isMuted);
-      setIsMuted(!isMuted);
-    }
-  }, [isMuted, resetControlsTimer]);
-
-  // ── Volume Slider / Adjust ──
-  const adjustVolume = useCallback((delta: number) => {
-    resetControlsTimer();
-    if (Platform.OS === 'web' && webVideoRef.current) {
-      const newVol = Math.max(0, Math.min(1, webVideoRef.current.volume + delta));
-      webVideoRef.current.volume = newVol;
-      webVideoRef.current.muted = newVol === 0;
-      setVolume(newVol);
-      setIsMuted(newVol === 0);
-    }
-  }, [resetControlsTimer]);
-
-  // ── Direct Seek To Target Timestamp ──
-  const seekTo = useCallback((targetSecs: number) => {
-    resetControlsTimer();
-    const maxDur = duration > 0 && isFinite(duration) ? duration : (webVideoRef.current?.duration || 0);
-    if (maxDur <= 0) return;
-    const clamped = Math.max(0, Math.min(maxDur, targetSecs));
-
-    if (Platform.OS === 'web' && webVideoRef.current) {
-      webVideoRef.current.currentTime = clamped;
-      setCurrentTime(clamped);
-    } else if (nativeVideoRef.current && maxDur > 0) {
-      nativeVideoRef.current.setPositionAsync(clamped * 1000);
-      setCurrentTime(clamped);
-    }
-  }, [duration, resetControlsTimer]);
-
-  // ── Relative Seek with Ripple Feedback (±10s) ──
-  const seekRelative = useCallback((offsetSecs: number) => {
-    resetControlsTimer();
-    const cur = (Platform.OS === 'web' && webVideoRef.current)
-      ? (webVideoRef.current.currentTime || currentTime)
-      : currentTime;
-
-    const maxDur = duration > 0 && isFinite(duration) ? duration : (webVideoRef.current?.duration || 86400);
-    const target = Math.max(0, Math.min(maxDur, cur + offsetSecs));
-
-    if (Platform.OS === 'web' && webVideoRef.current) {
-      webVideoRef.current.currentTime = target;
-      setCurrentTime(target);
-    } else if (nativeVideoRef.current) {
-      nativeVideoRef.current.setPositionAsync(target * 1000);
-      setCurrentTime(target);
-    }
-
-    // Trigger visual ripple burst
-    setSeekFeedback({
-      direction: offsetSecs > 0 ? 'forward' : 'back',
-      key: Date.now()
+  // Animated close handler
+  const handleAnimatedClose = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(animFade, {
+        toValue: 0,
+        duration: 200,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: Platform.OS !== 'web'
+      }),
+      Animated.timing(animScale, {
+        toValue: 0.96,
+        duration: 200,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: Platform.OS !== 'web'
+      })
+    ]).start(() => {
+      handleCoreClose();
     });
-    setTimeout(() => {
-      setSeekFeedback(null);
-    }, 650);
-  }, [currentTime, duration, resetControlsTimer]);
+  }, [animFade, animScale, handleCoreClose]);
 
-  // ── Fullscreen Toggle ──
-  const toggleFullscreen = useCallback(() => {
-    resetControlsTimer();
-    if (Platform.OS === 'web') {
-      const video = webVideoRef.current;
-      if (openDevicePlayer(video || undefined)) {
-        return;
-      }
-      if (!document.fullscreenElement) {
-        const root = document.getElementById('root') || document.documentElement;
-        root.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {
-          video?.requestFullscreen?.().then(() => setIsFullscreen(true));
-        });
+  // Center double-tap skip vs single-tap toggle controls
+  const handleCenterTap = (e: any) => {
+    const now = Date.now();
+    const timeDiff = now - lastTapRef.current;
+    lastTapRef.current = now;
+
+    if (timeDiff < 300) {
+      // Double tap skip
+      const clickX = e.nativeEvent?.locationX ?? e.nativeEvent?.offsetX ?? (width / 2);
+      if (clickX < width / 2) {
+        seekRelative(-10);
       } else {
-        document.exitFullscreen?.().then(() => setIsFullscreen(false));
+        seekRelative(10);
       }
-    } else if (nativeVideoRef.current) {
-      nativeVideoRef.current.presentFullscreenPlayer();
+    } else {
+      // Single tap: toggle controls, or open native player on Apple/Android device
+      if (isIOS && !isFullscreen && !isMinimized && webVideoRef.current) {
+        openDevicePlayer();
+      }
+      if (showControls) {
+        Animated.timing(controlsAnim, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: Platform.OS !== 'web'
+        }).start(() => setShowControls(false));
+      } else {
+        resetControlsTimer();
+      }
     }
-  }, [openDevicePlayer, resetControlsTimer]);
-
-  // ── Open in VLC (Desktop) ──
-  const handleOpenInVlc = () => {
-    if (!stream?.streamUrl) return;
-    let target = stream.streamUrl;
-    if (target.includes('/api/proxy?url=')) {
-      target = decodeURIComponent(target.split('/api/proxy?url=')[1]);
-    } else if (target.includes('/api/hls/master.m3u8?url=')) {
-      const parts = target.split('/api/hls/master.m3u8?url=')[1];
-      target = decodeURIComponent(parts.split('&')[0]);
-    }
-    fetch(`/api/open_vlc?url=${encodeURIComponent(target)}`)
-      .then(res => res.json())
-      .catch(() => {});
   };
 
-  // ── Time Formatting (H:MM:SS or M:SS) ──
-  const formatTime = (seconds: number) => {
-    if (!isFinite(seconds) || isNaN(seconds) || seconds <= 0) return '0:00';
-    const totalSecs = Math.floor(seconds);
-    const hrs = Math.floor(totalSecs / 3600);
-    const mins = Math.floor((totalSecs % 3600) / 60);
-    const secs = totalSecs % 60;
-    if (hrs > 0) {
-      return `${hrs}:${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
-    }
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
-
-  // ── Interactive Timeline Scrubbing (Drag & Click) ──
+  // Scrubber Calculations
   const calculateScrubPosition = (clientX: number) => {
     if (!trackRef.current || duration <= 0) return 0;
     const rect = trackRef.current.getBoundingClientRect ? trackRef.current.getBoundingClientRect() : null;
-    if (!rect) return 0;
+    if (!rect || rect.width <= 0) return 0;
     const offsetX = Math.max(0, Math.min(rect.width, clientX - rect.left));
     const ratio = offsetX / rect.width;
     return ratio * duration;
@@ -1076,7 +275,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const handleTimelineTouchStart = (e: any) => {
     if (duration <= 0) return;
-    const touch = e.nativeEvent.touches[0];
+    const touch = e.nativeEvent.touches?.[0];
     if (!touch) return;
     const target = calculateScrubPosition(touch.clientX);
     setIsDraggingTrack(true);
@@ -1085,7 +284,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const handleTimelineTouchMove = (e: any) => {
     if (!isDraggingTrack || duration <= 0) return;
-    const touch = e.nativeEvent.touches[0];
+    const touch = e.nativeEvent.touches?.[0];
     if (!touch) return;
     const target = calculateScrubPosition(touch.clientX);
     setDragTime(target);
@@ -1100,33 +299,59 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
     setDragTime(null);
   };
 
-  // ── Double Tap Center to Skip / Single Tap to Toggle Controls ──
-  const handleCenterTap = (e: any) => {
-    const now = Date.now();
-    const timeDiff = now - lastTapRef.current;
-    lastTapRef.current = now;
+  const handleTimelineMouseMove = (e: any) => {
+    if (duration <= 0 || !trackRef.current) return;
+    const rect = trackRef.current.getBoundingClientRect ? trackRef.current.getBoundingClientRect() : null;
+    if (!rect) return;
+    const clientX = e.clientX ?? 0;
+    const offsetX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    setHoverSeekPos(offsetX);
+    setHoverSeekTime((offsetX / rect.width) * duration);
+  };
 
-    if (timeDiff < 300) {
-      // Double tap detected
-      const clickX = e.nativeEvent?.locationX ?? e.nativeEvent?.offsetX ?? (width / 2);
-      if (clickX < width / 2) {
-        seekRelative(-10);
-      } else {
-        seekRelative(10);
-      }
-    } else {
-      // Single tap: toggle controls, and launch device player on touch
-      openDevicePlayer();
-      if (showControls) {
-        Animated.timing(controlsAnim, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true
-        }).start(() => setShowControls(false));
-      } else {
-        resetControlsTimer();
-      }
+  const handleTimelineMouseLeave = () => {
+    setHoverSeekTime(null);
+  };
+
+  // Format time (H:MM:SS or M:SS)
+  const formatTime = (seconds: number) => {
+    if (!isFinite(seconds) || isNaN(seconds) || seconds <= 0) return '0:00';
+    const totalSecs = Math.floor(seconds);
+    const hrs = Math.floor(totalSecs / 3600);
+    const mins = Math.floor((totalSecs % 3600) / 60);
+    const secs = totalSecs % 60;
+    if (hrs > 0) {
+      return `${hrs}:${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
     }
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  // Resume handlers
+  const handleConfirmResume = () => {
+    if (resumePrompt) {
+      seekTo(resumePrompt.time);
+    }
+    setResumePrompt(null);
+  };
+
+  const handleRestartFromBeginning = () => {
+    seekTo(0);
+    setResumePrompt(null);
+  };
+
+  // Open VLC helper for desktop
+  const handleOpenInVlc = () => {
+    if (!stream?.streamUrl) return;
+    let target = stream.streamUrl;
+    if (target.includes('/api/proxy?url=')) {
+      target = decodeURIComponent(target.split('/api/proxy?url=')[1]);
+    } else if (target.includes('/api/hls/master.m3u8?url=')) {
+      const parts = target.split('/api/hls/master.m3u8?url=')[1];
+      target = decodeURIComponent(parts.split('&')[0]);
+    }
+    fetch(`/api/open_vlc?url=${encodeURIComponent(target)}`)
+      .then(res => res.json())
+      .catch(() => {});
   };
 
   if (!visible || !stream) return null;
@@ -1148,329 +373,369 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
       // @ts-ignore
       onMouseMove={!isMinimized ? resetControlsTimer : undefined}
     >
-        {/* Ambient Glow Backdrop from content poster */}
-        {stream.poster ? (
-          <Image
-            source={{ uri: stream.poster }}
-            style={styles.ambientBackdrop as any}
-            blurRadius={ Platform.OS === 'web' ? 40 : 25 }
-          />
-        ) : null}
+      {/* ── 1. Zero-Glitch Poster & Spinner Backdrop ── */}
+      <SeamlessPosterBackdrop
+        posterUri={stream.poster}
+        title={stream.title}
+        loading={loading}
+        statusText={loadingStatus}
+        firstFrameRendered={firstFrameRendered}
+      />
 
-        {/* Web HTML5 Video Engine (Plays native device AVPlayer on iOS when playsInline=false) */}
-        {Platform.OS === 'web' ? (
-          <video
-            // @ts-ignore
-            ref={webVideoRef}
-            style={{
-              width: '100%',
-              height: '100%',
-              backgroundColor: '#000',
-              objectFit: 'contain'
-            }}
-            {...(!isIOS ? { playsInline: true } : {})}
-            controls={false}
-            autoPlay
-          />
-        ) : (
-          /* Native ExoPlayer (Android) / AVPlayer (iOS) */
-          ExpoVideo ? (
-            <ExpoVideo
-              ref={nativeVideoRef}
-              style={styles.video}
-              source={{ uri: stream.streamUrl }}
-              useNativeControls={false}
-              resizeMode={ResizeModeEnum ? ResizeModeEnum.CONTAIN : 'contain'}
-              shouldPlay={true}
-              onPlaybackStatusUpdate={(status: any) => {
-                if (status.isLoaded) {
-                  setLoading(status.isBuffering);
-                  setIsPlaying(status.isPlaying);
-                  setIsMuted(status.isMuted);
-                  setCurrentTime((status.positionMillis || 0) / 1000);
-                  if (status.durationMillis && status.durationMillis > 0) {
-                    setDuration(status.durationMillis / 1000);
-                  }
-                } else if (status.error) {
-                  setErrorMsg('Errore riproduzione stream nativo.');
-                  setLoading(false);
+      {/* ── 2. Video Engine: Web HTML5 or Native Expo-AV ── */}
+      {Platform.OS === 'web' ? (
+        <video
+          // @ts-ignore
+          ref={webVideoRef}
+          style={{
+            width: '100%',
+            height: '100%',
+            backgroundColor: '#000',
+            objectFit: 'contain'
+          }}
+          playsInline={!isIOS}
+          crossOrigin="anonymous"
+          controls={false}
+          autoPlay
+        />
+      ) : (
+        ExpoVideo ? (
+          <ExpoVideo
+            ref={nativeVideoRef}
+            style={styles.video}
+            source={{ uri: stream.streamUrl }}
+            useNativeControls={false}
+            resizeMode={ResizeModeEnum ? ResizeModeEnum.CONTAIN : 'contain'}
+            shouldPlay={true}
+            onPlaybackStatusUpdate={(status: any) => {
+              if (status.isLoaded) {
+                if (status.positionMillis >= 0 && !status.isBuffering) {
+                  // Frame rendered
                 }
-              }}
-            />
-          ) : null
-        )}
+              }
+            }}
+          />
+        ) : null
+      )}
 
-        {/* ── Center Loading Spinner (Rotellina di Buffering Pulita) ── */}
-        {loading && (
-          <View style={styles.centerLoadingOverlay} pointerEvents="none">
-            <ActivityIndicator size="large" color={colors.primary} />
-            <Text style={styles.centerLoadingText}>{loadingStatus || 'Caricamento...'}</Text>
-          </View>
-        )}
+      {/* ── 3. Quick Skip Ripple Indicator (-10s / +10s) ── */}
+      {seekFeedback && (
+        <View
+          style={[
+            styles.seekRippleBadge,
+            seekFeedback.direction === 'back' ? styles.seekRippleLeft : styles.seekRippleRight
+          ]}
+          pointerEvents="none"
+        >
+          <Ionicons
+            name={seekFeedback.direction === 'back' ? 'arrow-undo' : 'arrow-redo'}
+            size={28}
+            color="#fff"
+          />
+          <Text style={styles.seekRippleText}>
+            {seekFeedback.direction === 'back' ? '-10s' : '+10s'}
+          </Text>
+        </View>
+      )}
 
-        {/* ── Visual Seek Ripple Indicator (-10s / +10s) ── */}
-        {seekFeedback && (
-          <View
-            style={[
-              styles.seekRippleBadge,
-              seekFeedback.direction === 'back' ? styles.seekRippleLeft : styles.seekRippleRight
-            ]}
-            pointerEvents="none"
-          >
-            <View style={styles.seekRippleInner}>
-              <Ionicons
-                name={seekFeedback.direction === 'back' ? 'arrow-undo' : 'arrow-redo'}
-                size={28}
-                color="#fff"
-              />
-              <Text style={styles.seekRippleText}>
-                {seekFeedback.direction === 'back' ? '-10s' : '+10s'}
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {/* ── Center Tap Layer for Controls & Double Tap ── */}
+      {/* ── 4. Center Tap Area for Play/Pause & Double-Tap Skip ── */}
+      {!isMinimized && (
         <TouchableOpacity
           style={styles.centerTapArea}
           activeOpacity={1}
           onPress={handleCenterTap}
         />
+      )}
 
-        {/* ── Error Display Modal ── */}
-        {errorMsg && (
-          <View style={styles.errorOverlay}>
-            <View style={styles.errorCard}>
-              <Ionicons name="alert-circle-outline" size={48} color={colors.accentRed} />
-              <Text style={styles.errorHeading}>Impossibile riprodurre lo stream</Text>
-              <Text style={styles.errorMessage}>{errorMsg}</Text>
+      {/* ── 5. Error Overlay Modal ── */}
+      {errorMsg && (
+        <View style={styles.errorOverlay}>
+          <View style={styles.errorCard}>
+            <Ionicons name="alert-circle-outline" size={48} color={colors.accentRed} />
+            <Text style={styles.errorHeading}>Impossibile riprodurre lo stream</Text>
+            <Text style={styles.errorMessage}>{errorMsg}</Text>
 
-              <View style={styles.errorActionsRow}>
+            <View style={styles.errorActionsRow}>
+              <TouchableOpacity
+                style={[styles.btnAction, styles.btnPrimary]}
+                onPress={() => {
+                  if (Platform.OS === 'web') {
+                    initWebPlayer(stream.streamUrl);
+                  } else if (nativeVideoRef.current) {
+                    nativeVideoRef.current.replayAsync?.();
+                  }
+                }}
+              >
+                <Ionicons name="refresh" size={18} color="#fff" />
+                <Text style={styles.btnActionText}>Riprova</Text>
+              </TouchableOpacity>
+
+              {Platform.OS === 'web' && (
                 <TouchableOpacity
-                  style={[styles.btnAction, styles.btnPrimary]}
-                  onPress={() => {
-                    setErrorMsg(null);
-                    setLoading(true);
-                    if (Platform.OS === 'web') {
-                      initWebPlayer(stream.streamUrl);
-                    } else if (nativeVideoRef.current) {
-                      nativeVideoRef.current.replayAsync();
-                    }
-                  }}
+                  style={[styles.btnAction, styles.btnSecondary]}
+                  onPress={handleOpenInVlc}
                 >
-                  <Ionicons name="refresh" size={18} color="#fff" />
-                  <Text style={styles.btnActionText}>Riprova</Text>
+                  <Ionicons name="play-outline" size={18} color="#fff" />
+                  <Text style={styles.btnActionText}>Apri in VLC</Text>
                 </TouchableOpacity>
+              )}
 
-                {Platform.OS === 'web' && (
-                  <TouchableOpacity
-                    style={[styles.btnAction, styles.btnSecondary]}
-                    onPress={handleOpenInVlc}
-                  >
-                    <Ionicons name="play-outline" size={18} color="#fff" />
-                    <Text style={styles.btnActionText}>Apri in VLC</Text>
-                  </TouchableOpacity>
-                )}
-
-                <TouchableOpacity
-                  style={[styles.btnAction, styles.btnDismiss]}
-                  onPress={handleClose}
-                >
-                  <Text style={styles.btnActionText}>Chiudi</Text>
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity
+                style={[styles.btnAction, styles.btnDismiss]}
+                onPress={handleAnimatedClose}
+              >
+                <Text style={styles.btnActionText}>Chiudi</Text>
+              </TouchableOpacity>
             </View>
           </View>
-        )}
+        </View>
+      )}
 
-        {/* ── Full Interactive Controls Overlay (Universal Desktop & Mobile) ── */}
-        {showControls && (
-          <Animated.View
-            style={[
-              styles.controlsOverlay,
-              { opacity: controlsAnim }
-            ]}
-            pointerEvents="box-none"
-          >
-            {/* Top Bar */}
-            <View style={styles.topBar}>
-              <View style={styles.topLeft}>
-                <TouchableOpacity
-                  style={styles.backButton}
-                  onPress={handleClose}
-                  accessibilityLabel="Chiudi player"
-                >
-                  <Ionicons name="chevron-back" size={22} color="#fff" />
-                  <Text style={styles.backButtonText}>Chiudi</Text>
-                </TouchableOpacity>
+      {/* ── 6. Full Interactive Controls Overlay ── */}
+      {!isMinimized && showControls && (
+        <Animated.View
+          style={[styles.controlsOverlay, { opacity: controlsAnim }]}
+          pointerEvents="box-none"
+        >
+          {/* Top Header Bar */}
+          <View style={styles.topBar}>
+            <View style={styles.topLeft}>
+              <TouchableOpacity
+                style={styles.backButton}
+                onPress={handleAnimatedClose}
+                accessibilityLabel="Chiudi player"
+              >
+                <Ionicons name="chevron-back" size={20} color="#fff" />
+                <Text style={styles.backButtonText}>Chiudi</Text>
+              </TouchableOpacity>
 
-                <View style={styles.titleContainer}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <View style={[styles.typeBadge, isLive ? styles.typeBadgeLive : styles.typeBadgeVod]}>
-                      {isLive && <View style={styles.livePulseDot} />}
-                      <Text style={styles.typeBadgeText}>
-                        {isLive ? 'LIVE' : stream.type === 'series' ? 'SERIE' : 'VOD'}
-                      </Text>
-                    </View>
-                    <Text style={styles.streamTitle} numberOfLines={1}>
-                      {stream.title}
+              <View style={styles.titleContainer}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={[styles.typeBadge, isLive ? styles.typeBadgeLive : styles.typeBadgeVod]}>
+                    {isLive && <View style={styles.livePulseDot} />}
+                    <Text style={styles.typeBadgeText}>
+                      {isLive ? 'LIVE' : stream.type === 'series' ? 'SERIE' : 'VOD'}
                     </Text>
                   </View>
-                  {stream.subTitle ? (
-                    <Text style={styles.streamSubtitle} numberOfLines={1}>
-                      {stream.subTitle}
-                    </Text>
-                  ) : null}
+                  <Text style={styles.streamTitle} numberOfLines={1}>
+                    {stream.title}
+                  </Text>
                 </View>
-              </View>
-
-              <View style={styles.topRight}>
-                {onToggleMinimize && (
-                  <TouchableOpacity
-                    style={styles.roundIconBtn}
-                    onPress={onToggleMinimize}
-                    accessibilityLabel="Riduci a Mini-Player"
-                  >
-                    <Ionicons name="contract-outline" size={18} color="#fff" />
-                  </TouchableOpacity>
-                )}
-
-                {isLive && onOpenEpg && (
-                  <TouchableOpacity style={styles.glassBtn} onPress={onOpenEpg}>
-                    <Ionicons name="calendar-outline" size={16} color="#fff" />
-                    <Text style={styles.glassBtnText}>Guida TV</Text>
-                  </TouchableOpacity>
-                )}
-
-                <TouchableOpacity style={styles.roundIconBtn} onPress={handleClose}>
-                  <Ionicons name="close" size={20} color="#fff" />
-                </TouchableOpacity>
+                {stream.subTitle ? (
+                  <Text style={styles.streamSubtitle} numberOfLines={1}>
+                    {stream.subTitle}
+                  </Text>
+                ) : null}
               </View>
             </View>
 
-            {/* Center Big Play/Pause Trigger */}
-            {!loading && (
-              <View style={styles.centerControlArea} pointerEvents="box-none">
+            <View style={styles.topRight}>
+              {onToggleMinimize && (
                 <TouchableOpacity
-                  style={styles.bigPlayButton}
-                  activeOpacity={0.8}
-                  onPress={togglePlayPause}
-                  accessibilityLabel={isPlaying ? 'Pausa' : 'Riproduci'}
+                  style={styles.roundIconBtn}
+                  onPress={onToggleMinimize}
+                  accessibilityLabel="Riduci a Mini-Player"
                 >
-                  <Ionicons name={isPlaying ? 'pause' : 'play'} size={38} color="#fff" />
+                  <Ionicons name="contract-outline" size={18} color="#fff" />
                 </TouchableOpacity>
+              )}
+
+              {isLive && onOpenEpg && (
+                <TouchableOpacity style={styles.glassBtn} onPress={onOpenEpg}>
+                  <Ionicons name="calendar-outline" size={16} color="#fff" />
+                  <Text style={styles.glassBtnText}>Guida TV</Text>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity
+                style={styles.roundIconBtn}
+                onPress={handleAnimatedClose}
+                accessibilityLabel="Chiudi"
+              >
+                <Ionicons name="close" size={20} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Center Play/Pause Indicator (when paused) */}
+          {!isPlaying && !loading && (
+            <View style={styles.centerControlArea} pointerEvents="box-none">
+              <TouchableOpacity
+                style={styles.bigPlayButton}
+                activeOpacity={0.8}
+                onPress={togglePlayPause}
+                accessibilityLabel="Riproduci"
+              >
+                <Ionicons name="play" size={40} color="#fff" style={{ marginLeft: 4 }} />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Bottom Bar: Timeline Scrubber + Controls */}
+          <View style={styles.bottomBar} pointerEvents="auto">
+            {/* Scrubber Timeline (for Movies and Series) */}
+            {!isLive && (
+              <View
+                // @ts-ignore
+                ref={trackRef}
+                style={styles.timelineHitArea}
+                // @ts-ignore
+                onMouseDown={handleTimelineMouseDown}
+                onTouchStart={handleTimelineTouchStart}
+                onTouchMove={handleTimelineTouchMove}
+                onTouchEnd={handleTimelineTouchEnd}
+                // @ts-ignore
+                onMouseMove={handleTimelineMouseMove}
+                // @ts-ignore
+                onMouseLeave={handleTimelineMouseLeave}
+              >
+                <View style={styles.timelineBarBackground}>
+                  {/* Buffer Ahead Bar */}
+                  <View style={[styles.timelineBuffer, { width: `${bufferPercent}%` }]} />
+                  {/* Played Progress Bar */}
+                  <View style={[styles.timelinePlayed, { width: `${progressPercent}%` }]} />
+                  {/* Scrubber Handle Thumb */}
+                  <View style={[styles.timelineThumb, { left: `${progressPercent}%` }]} />
+                </View>
+
+                {/* Hover / Drag Preview Timestamp Tooltip */}
+                {(hoverSeekTime !== null || (isDraggingTrack && dragTime !== null)) && (
+                  <View
+                    style={[
+                      styles.scrubTooltip,
+                      {
+                        left: isDraggingTrack && dragTime !== null
+                          ? `${progressPercent}%`
+                          : `${(hoverSeekPos / (trackRef.current?.getBoundingClientRect?.()?.width || 1)) * 100}%`
+                      }
+                    ]}
+                  >
+                    <Text style={styles.scrubTooltipText}>
+                      {formatTime(isDraggingTrack && dragTime !== null ? dragTime : (hoverSeekTime || 0))}
+                    </Text>
+                  </View>
+                )}
               </View>
             )}
 
-            {/* Bottom Controls Bar */}
-            <View style={styles.bottomBar} pointerEvents="auto">
-              {/* Scrubber Timeline (For Movies and Series) */}
-              {!isLive && (
-                <View
-                  // @ts-ignore
-                  ref={trackRef}
-                  style={styles.timelineHitArea}
-                  // @ts-ignore
-                  onMouseDown={handleTimelineMouseDown}
-                  onTouchStart={handleTimelineTouchStart}
-                  onTouchMove={handleTimelineTouchMove}
-                  onTouchEnd={handleTimelineTouchEnd}
-                  onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+            {/* Bottom Controls Row */}
+            <View style={styles.controlsRow}>
+              {/* Left Group */}
+              <View style={styles.leftControlsGroup}>
+                <TouchableOpacity
+                  style={styles.ctrlIconBtn}
+                  onPress={togglePlayPause}
+                  accessibilityLabel={isPlaying ? 'Pausa' : 'Riproduci'}
                 >
-                  <View style={styles.timelineBarBackground}>
-                    {/* Buffer Bar */}
-                    <View style={[styles.timelineBuffer, { width: `${bufferPercent}%` }]} />
-                    {/* Played Bar */}
-                    <View style={[styles.timelinePlayed, { width: `${progressPercent}%` }]} />
-                    {/* Scrubber Handle Thumb */}
-                    <View style={[styles.timelineThumb, { left: `${progressPercent}%` }]} />
-                  </View>
+                  <Ionicons name={isPlaying ? 'pause' : 'play'} size={22} color="#fff" />
+                </TouchableOpacity>
 
-                  {/* Scrubber Hover / Drag Tooltip */}
-                  {isDraggingTrack && dragTime !== null && (
-                    <View style={[styles.scrubTooltip, { left: `${progressPercent}%` }]}>
-                      <Text style={styles.scrubTooltipText}>{formatTime(dragTime)}</Text>
-                    </View>
-                  )}
-                </View>
-              )}
-
-              {/* Controls Row */}
-              <View style={styles.controlsRow}>
-                {/* Left Controls: Play/Pause, -10s, +10s, Time */}
-                <View style={styles.leftControlsGroup}>
-                  <TouchableOpacity style={styles.ctrlIconBtn} onPress={togglePlayPause}>
-                    <Ionicons name={isPlaying ? 'pause' : 'play'} size={22} color="#fff" />
-                  </TouchableOpacity>
-
-                  {!isLive && (
-                    <>
-                      <TouchableOpacity
-                        style={styles.ctrlIconBtn}
-                        onPress={() => seekRelative(-10)}
-                        accessibilityLabel="Indietro di 10 secondi"
-                      >
-                        <Ionicons name="arrow-undo" size={20} color="#fff" />
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={styles.ctrlIconBtn}
-                        onPress={() => seekRelative(10)}
-                        accessibilityLabel="Avanti di 10 secondi"
-                      >
-                        <Ionicons name="arrow-redo" size={20} color="#fff" />
-                      </TouchableOpacity>
-                    </>
-                  )}
-
-                  {isLive ? (
-                    <View style={styles.liveStatusBadge}>
-                      <View style={styles.livePulseDot} />
-                      <Text style={styles.liveStatusText}>DIRETTA</Text>
-                    </View>
-                  ) : (
-                    <TouchableOpacity
-                      onPress={() => setShowTimeRemaining(!showTimeRemaining)}
-                      style={styles.timeDisplay}
-                    >
-                      <Text style={styles.timeCurrent}>{formatTime(currentTime)}</Text>
-                      <Text style={styles.timeSeparator}>/</Text>
-                      <Text style={styles.timeTotal}>
-                        {showTimeRemaining && duration > 0
-                          ? `-${formatTime(Math.max(0, duration - currentTime))}`
-                          : formatTime(duration)}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-
-                {/* Right Controls: Audio/Subs, PiP, Volume, Fullscreen */}
-                <View style={styles.rightControlsGroup}>
-                  {/* Audio & Subtitles Selector Button */}
-                  <TouchableOpacity
-                    style={styles.ctrlIconBtn}
-                    onPress={() => setTrackModalVisible(true)}
-                    accessibilityLabel="Audio e Sottotitoli"
-                  >
-                    <Ionicons
-                      name="chatbubble-ellipses-outline"
-                      size={20}
-                      color={activeSubtitleTrack !== -1 ? colors.primary : '#fff'}
-                    />
-                  </TouchableOpacity>
-
-                  {/* Native Picture-in-Picture Button */}
-                  {Platform.OS === 'web' && (
+                {!isLive && (
+                  <>
                     <TouchableOpacity
                       style={styles.ctrlIconBtn}
-                      onPress={togglePictureInPicture}
-                      accessibilityLabel="Picture-in-Picture"
+                      onPress={() => seekRelative(-10)}
+                      accessibilityLabel="Indietro di 10 secondi"
                     >
-                      <Ionicons name="albums-outline" size={20} color="#fff" />
+                      <Ionicons name="arrow-undo" size={20} color="#fff" />
                     </TouchableOpacity>
-                  )}
 
-                  {/* Volume Button */}
+                    <TouchableOpacity
+                      style={styles.ctrlIconBtn}
+                      onPress={() => seekRelative(10)}
+                      accessibilityLabel="Avanti di 10 secondi"
+                    >
+                      <Ionicons name="arrow-redo" size={20} color="#fff" />
+                    </TouchableOpacity>
+                  </>
+                )}
+
+                {isLive ? (
+                  <View style={styles.liveStatusBadge}>
+                    <View style={styles.livePulseDot} />
+                    <Text style={styles.liveStatusText}>DIRETTA</Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    onPress={() => setShowTimeRemaining(!showTimeRemaining)}
+                    style={styles.timeDisplay}
+                  >
+                    <Text style={styles.timeCurrent}>{formatTime(currentTime)}</Text>
+                    <Text style={styles.timeSeparator}>/</Text>
+                    <Text style={styles.timeTotal}>
+                      {showTimeRemaining && duration > 0
+                        ? `-${formatTime(Math.max(0, duration - currentTime))}`
+                        : formatTime(duration)}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Right Group */}
+              <View style={styles.rightControlsGroup}>
+                {/* Audio & Subtitle Selector */}
+                <TouchableOpacity
+                  style={[
+                    styles.ctrlIconBtn,
+                    (activeSubtitleTrack !== -1 || audioTracks.length > 1) && styles.ctrlIconBtnActive
+                  ]}
+                  onPress={() => setTrackModalVisible(true)}
+                  accessibilityLabel="Tracce Audio e Sottotitoli"
+                >
+                  <Ionicons
+                    name="chatbubble-ellipses-outline"
+                    size={20}
+                    color={activeSubtitleTrack !== -1 ? colors.primary : '#fff'}
+                  />
+                </TouchableOpacity>
+
+                {/* Quality & ABR Selector (if multiple quality levels found) */}
+                {qualityLevels.length > 0 && (
+                  <TouchableOpacity
+                    style={[styles.ctrlIconBtn, activeQualityLevel !== -1 && styles.ctrlIconBtnActive]}
+                    onPress={() => setQualityModalVisible(true)}
+                    accessibilityLabel="Qualità Video"
+                  >
+                    <Ionicons
+                      name="speedometer-outline"
+                      size={20}
+                      color={activeQualityLevel !== -1 ? colors.primary : '#fff'}
+                    />
+                  </TouchableOpacity>
+                )}
+
+                {/* Playback Speed (Movies and Series) */}
+                {!isLive && (
+                  <TouchableOpacity
+                    style={[styles.ctrlIconBtn, playbackSpeed !== 1.0 && styles.ctrlIconBtnActive]}
+                    onPress={() => setSpeedModalVisible(true)}
+                    accessibilityLabel="Velocità di riproduzione"
+                  >
+                    <Text style={styles.speedBtnText}>
+                      {playbackSpeed === 1.0 ? '1x' : `${playbackSpeed}x`}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
+                {/* Picture in Picture */}
+                {Platform.OS === 'web' && (
+                  <TouchableOpacity
+                    style={styles.ctrlIconBtn}
+                    onPress={togglePictureInPicture}
+                    accessibilityLabel="Picture-in-Picture"
+                  >
+                    <Ionicons name="albums-outline" size={20} color="#fff" />
+                  </TouchableOpacity>
+                )}
+
+                {/* Desktop Volume Slider on Hover */}
+                <View
+                  style={styles.volumeContainer}
+                  // @ts-ignore
+                  onMouseEnter={() => setVolumeHovered(true)}
+                  // @ts-ignore
+                  onMouseLeave={() => setVolumeHovered(false)}
+                >
                   <TouchableOpacity style={styles.ctrlIconBtn} onPress={toggleMute}>
                     <Ionicons
                       name={isMuted || volume === 0 ? 'volume-mute' : volume < 0.5 ? 'volume-low' : 'volume-high'}
@@ -1479,261 +744,158 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
                     />
                   </TouchableOpacity>
 
-                  {/* Fullscreen Button */}
-                  <TouchableOpacity
-                    style={styles.ctrlIconBtn}
-                    onPress={toggleFullscreen}
-                    accessibilityLabel="Schermo intero"
-                  >
-                    <Ionicons
-                      name={isFullscreen ? 'contract' : 'expand'}
-                      size={20}
-                      color="#fff"
-                    />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          </Animated.View>
-        )}
-
-        {/* ── Resume Playback Glass Prompt ── */}
-        {resumePrompt && !isMinimized && (
-          <View style={styles.resumePromptContainer} pointerEvents="box-none">
-            <View style={styles.resumePromptCard}>
-              <View style={styles.resumeIconWrap}>
-                <Ionicons name="time" size={20} color={colors.primary} />
-              </View>
-              <View style={styles.resumeTextWrap}>
-                <Text style={styles.resumePromptTitle}>Riprendere la visione?</Text>
-                <Text style={styles.resumePromptSub}>
-                  Eri arrivato a {formatTime(resumePrompt.time)}
-                </Text>
-              </View>
-              <View style={styles.resumeBtnGroup}>
-                <TouchableOpacity
-                  style={styles.resumeBtnPrimary}
-                  onPress={handleConfirmResume}
-                >
-                  <Ionicons name="play" size={14} color="#fff" style={{ marginRight: 4 }} />
-                  <Text style={styles.resumeBtnText}>Riprendi</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.resumeBtnSecondary}
-                  onPress={handleRestartFromBeginning}
-                >
-                  <Text style={styles.resumeBtnTextSecondary}>Dall'inizio</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.resumeBtnClose}
-                  onPress={() => setResumePrompt(null)}
-                >
-                  <Ionicons name="close" size={16} color="rgba(255,255,255,0.7)" />
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* ── Audio & Subtitles Glass Modal ── */}
-        {trackModalVisible && !isMinimized && (
-          <View style={styles.trackModalOverlay}>
-            <View style={styles.trackModalCard}>
-              <View style={styles.trackModalHeader}>
-                <Text style={styles.trackModalTitle}>Audio & Sottotitoli</Text>
-                <TouchableOpacity
-                  style={styles.trackModalCloseBtn}
-                  onPress={() => setTrackModalVisible(false)}
-                >
-                  <Ionicons name="close" size={20} color="#fff" />
-                </TouchableOpacity>
-              </View>
-
-              {/* Tabs */}
-              <View style={styles.trackModalTabs}>
-                <TouchableOpacity
-                  style={[
-                    styles.trackTabBtn,
-                    trackModalTab === 'audio' && styles.trackTabBtnActive
-                  ]}
-                  onPress={() => setTrackModalTab('audio')}
-                >
-                  <Ionicons
-                    name="volume-medium-outline"
-                    size={16}
-                    color={trackModalTab === 'audio' ? '#fff' : colors.textMuted}
-                  />
-                  <Text
-                    style={[
-                      styles.trackTabText,
-                      trackModalTab === 'audio' && styles.trackTabTextActive
-                    ]}
-                  >
-                    Audio {audioTracks.length > 0 ? `(${audioTracks.length})` : ''}
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.trackTabBtn,
-                    trackModalTab === 'subtitles' && styles.trackTabBtnActive
-                  ]}
-                  onPress={() => setTrackModalTab('subtitles')}
-                >
-                  <Ionicons
-                    name="chatbox-outline"
-                    size={16}
-                    color={trackModalTab === 'subtitles' ? '#fff' : colors.textMuted}
-                  />
-                  <Text
-                    style={[
-                      styles.trackTabText,
-                      trackModalTab === 'subtitles' && styles.trackTabTextActive
-                    ]}
-                  >
-                    Sottotitoli {subtitleTracks.length > 0 ? `(${subtitleTracks.length})` : ''}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Tab Content */}
-              <View style={styles.trackListContainer}>
-                {trackModalTab === 'audio' ? (
-                  audioTracks.length === 0 ? (
-                    <View style={styles.trackEmptyRow}>
-                      <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
-                      <Text style={styles.trackLabelActive}>Traccia audio predefinita (Stereo/Originale)</Text>
-                    </View>
-                  ) : (
-                    audioTracks.map((tr) => (
-                      <TouchableOpacity
-                        key={`audio_tr_${tr.id}`}
-                        style={[
-                          styles.trackRow,
-                          tr.active && styles.trackRowActive
-                        ]}
-                        onPress={() => handleSelectAudioTrack(tr.id)}
-                      >
-                        <Ionicons
-                          name={tr.active ? 'radio-button-on' : 'radio-button-off'}
-                          size={18}
-                          color={tr.active ? colors.primary : colors.textMuted}
-                        />
-                        <Text style={[styles.trackLabel, tr.active && styles.trackLabelActive]}>
-                          {tr.label} {tr.language ? `(${tr.language.toUpperCase()})` : ''}
-                        </Text>
-                      </TouchableOpacity>
-                    ))
-                  )
-                ) : (
-                  <>
-                    <TouchableOpacity
-                      style={[
-                        styles.trackRow,
-                        activeSubtitleTrack === -1 && styles.trackRowActive
-                      ]}
-                      onPress={() => handleSelectSubtitleTrack(-1)}
-                    >
-                      <Ionicons
-                        name={activeSubtitleTrack === -1 ? 'radio-button-on' : 'radio-button-off'}
-                        size={18}
-                        color={activeSubtitleTrack === -1 ? colors.primary : colors.textMuted}
+                  {Platform.OS === 'web' && volumeHovered && (
+                    <View style={styles.volumeSliderTrack}>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={isMuted ? 0 : volume}
+                        onChange={(e) => changeVolume(parseFloat(e.target.value))}
+                        style={{
+                          width: 80,
+                          height: 4,
+                          cursor: 'pointer',
+                          accentColor: '#3b82f6'
+                        }}
                       />
-                      <Text
-                        style={[
-                          styles.trackLabel,
-                          activeSubtitleTrack === -1 && styles.trackLabelActive
-                        ]}
-                      >
-                        Disattivati (Nessuno)
-                      </Text>
-                    </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
 
-                    {subtitleTracks.map((sub) => (
-                      <TouchableOpacity
-                        key={`sub_tr_${sub.id}`}
-                        style={[
-                          styles.trackRow,
-                          sub.active && styles.trackRowActive
-                        ]}
-                        onPress={() => handleSelectSubtitleTrack(sub.id)}
-                      >
-                        <Ionicons
-                          name={sub.active ? 'radio-button-on' : 'radio-button-off'}
-                          size={18}
-                          color={sub.active ? colors.primary : colors.textMuted}
-                        />
-                        <Text style={[styles.trackLabel, sub.active && styles.trackLabelActive]}>
-                          {sub.label} {sub.language ? `(${sub.language.toUpperCase()})` : ''}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </>
-                )}
+                {/* Fullscreen Button */}
+                <TouchableOpacity
+                  style={styles.ctrlIconBtn}
+                  onPress={toggleFullscreen}
+                  accessibilityLabel="Schermo intero"
+                >
+                  <Ionicons
+                    name={isFullscreen ? 'contract' : 'expand'}
+                    size={20}
+                    color="#fff"
+                  />
+                </TouchableOpacity>
               </View>
             </View>
           </View>
-        )}
+        </Animated.View>
+      )}
 
-        {/* ── Mini-Player Floating Card Controls Overlay ── */}
-        {isMinimized && (
-          <View
-            style={styles.miniOverlay}
-            // @ts-ignore
-            onMouseEnter={() => setIsHoveredMini(true)}
-            // @ts-ignore
-            onMouseLeave={() => setIsHoveredMini(false)}
-          >
-            {/* Top Bar on Mini Player */}
-            <View style={styles.miniTopBar}>
-              <Text style={styles.miniTitle} numberOfLines={1}>
-                {stream.title}
-              </Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <TouchableOpacity
-                  style={styles.miniIconBtn}
-                  onPress={onToggleMinimize}
-                  accessibilityLabel="Espandi"
-                >
-                  <Ionicons name="expand" size={15} color="#fff" />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.miniIconBtn}
-                  onPress={handleClose}
-                  accessibilityLabel="Chiudi"
-                >
-                  <Ionicons name="close" size={16} color="#fff" />
-                </TouchableOpacity>
-              </View>
+      {/* ── 7. Resume Playback Banner ── */}
+      {resumePrompt && !isMinimized && (
+        <View style={styles.resumePromptContainer} pointerEvents="box-none">
+          <View style={styles.resumePromptCard}>
+            <View style={styles.resumeIconWrap}>
+              <Ionicons name="time" size={20} color={colors.primary} />
             </View>
+            <View style={styles.resumeTextWrap}>
+              <Text style={styles.resumePromptTitle}>Riprendere la visione?</Text>
+              <Text style={styles.resumePromptSub}>
+                Eri arrivato a {formatTime(resumePrompt.time)}
+              </Text>
+            </View>
+            <View style={styles.resumeBtnGroup}>
+              <TouchableOpacity style={styles.resumeBtnPrimary} onPress={handleConfirmResume}>
+                <Ionicons name="play" size={14} color="#fff" style={{ marginRight: 4 }} />
+                <Text style={styles.resumeBtnText}>Riprendi</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.resumeBtnSecondary} onPress={handleRestartFromBeginning}>
+                <Text style={styles.resumeBtnTextSecondary}>Dall'inizio</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.resumeBtnClose} onPress={() => setResumePrompt(null)}>
+                <Ionicons name="close" size={16} color="rgba(255,255,255,0.7)" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
 
-            {/* Center Play/Pause Overlay */}
-            <TouchableOpacity
-              style={styles.miniCenterTap}
-              activeOpacity={0.8}
-              onPress={togglePlayPause}
-            >
-              {(!isPlaying || isHoveredMini) && (
-                <View style={styles.miniPlayCircle}>
-                  <Ionicons name={isPlaying ? 'pause' : 'play'} size={20} color="#fff" />
-                </View>
-              )}
-            </TouchableOpacity>
+      {/* ── 8. Mini-Player Floating Card Controls ── */}
+      {isMinimized && (
+        <View
+          style={styles.miniOverlay}
+          // @ts-ignore
+          onMouseEnter={() => setIsHoveredMini(true)}
+          // @ts-ignore
+          onMouseLeave={() => setIsHoveredMini(false)}
+        >
+          <View style={styles.miniTopBar}>
+            <Text style={styles.miniTitle} numberOfLines={1}>
+              {stream.title}
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <TouchableOpacity
+                style={styles.miniIconBtn}
+                onPress={onToggleMinimize}
+                accessibilityLabel="Espandi"
+              >
+                <Ionicons name="expand" size={14} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.miniIconBtn}
+                onPress={handleAnimatedClose}
+                accessibilityLabel="Chiudi"
+              >
+                <Ionicons name="close" size={15} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          </View>
 
-            {/* Bottom Mini Progress Bar */}
-            {!isLive && duration > 0 && (
-              <View style={styles.miniProgressTrack}>
-                <View
-                  style={[
-                    styles.miniProgressFill,
-                    { width: `${Math.min(100, Math.max(0, (currentTime / duration) * 100))}%` }
-                  ]}
-                />
+          <TouchableOpacity
+            style={styles.miniCenterTap}
+            activeOpacity={0.8}
+            onPress={togglePlayPause}
+          >
+            {(!isPlaying || isHoveredMini) && (
+              <View style={styles.miniPlayCircle}>
+                <Ionicons name={isPlaying ? 'pause' : 'play'} size={20} color="#fff" />
               </View>
             )}
-          </View>
-        )}
-      </Animated.View>
+          </TouchableOpacity>
+
+          {!isLive && duration > 0 && (
+            <View style={styles.miniProgressTrack}>
+              <View
+                style={[
+                  styles.miniProgressFill,
+                  { width: `${Math.min(100, Math.max(0, (currentTime / duration) * 100))}%` }
+                ]}
+              />
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* ── 9. Track Selection Modal (Audio & Subtitles) ── */}
+      <TrackSelectionModal
+        visible={trackModalVisible}
+        audioTracks={audioTracks}
+        subtitleTracks={subtitleTracks}
+        activeAudioTrack={activeAudioTrack}
+        activeSubtitleTrack={activeSubtitleTrack}
+        onSelectAudioTrack={handleSelectAudioTrack}
+        onSelectSubtitleTrack={handleSelectSubtitleTrack}
+        onClose={() => setTrackModalVisible(false)}
+      />
+
+      {/* ── 10. Quality Selection Modal (ABR) ── */}
+      <QualitySelectionModal
+        visible={qualityModalVisible}
+        qualityLevels={qualityLevels}
+        activeQualityLevel={activeQualityLevel}
+        onSelectQualityLevel={handleSelectQualityLevel}
+        onClose={() => setQualityModalVisible(false)}
+      />
+
+      {/* ── 11. Playback Speed Modal ── */}
+      <SpeedSelectionModal
+        visible={speedModalVisible}
+        activeSpeed={playbackSpeed}
+        onSelectSpeed={handleSelectPlaybackSpeed}
+        onClose={() => setSpeedModalVisible(false)}
+      />
+    </Animated.View>
   );
 
   if (Platform.OS === 'web') {
@@ -1741,7 +903,7 @@ export const UniversalVideoPlayer: React.FC<VideoPlayerProps> = ({
   }
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={handleClose}>
+    <Modal visible={visible} transparent animationType="none" onRequestClose={handleAnimatedClose}>
       {playerContent}
     </Modal>
   );
@@ -1786,56 +948,31 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: '#000'
   },
-  ambientBackdrop: {
+
+  // Center Tap Area
+  centerTapArea: {
     position: 'absolute',
-    top: 0,
+    top: 70,
     left: 0,
     right: 0,
-    bottom: 0,
-    width: '100%',
-    height: '100%',
-    opacity: 0.18,
-    // @ts-ignore
-    filter: Platform.OS === 'web' ? 'blur(60px)' : undefined
+    bottom: 90,
+    zIndex: 15
   },
 
-  // ── Center Loading Spinner (Rotellina di Buffering Pulita) ──
-  centerLoadingOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10
-  },
-  centerLoadingText: {
-    marginTop: 14,
-    color: 'rgba(255, 255, 255, 0.75)',
-    fontSize: 14,
-    fontWeight: '500',
-    letterSpacing: 0.3,
-    textShadowColor: 'rgba(0, 0, 0, 0.8)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4
-  },
-
-  // ── Seek Ripple Burst Feedback ──
+  // Seek Ripple
   seekRippleBadge: {
     position: 'absolute',
     top: '45%',
     zIndex: 25,
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1.5,
     borderColor: 'rgba(255, 255, 255, 0.25)',
-    // @ts-ignore
-    backdropFilter: Platform.OS === 'web' ? 'blur(10px)' : undefined
+    gap: 4
   },
   seekRippleLeft: {
     left: '15%'
@@ -1843,17 +980,455 @@ const styles = StyleSheet.create({
   seekRippleRight: {
     right: '15%'
   },
-  seekRippleInner: {
-    alignItems: 'center',
-    gap: 4
-  },
   seekRippleText: {
     fontSize: 13,
     fontWeight: '700',
     color: '#fff'
   },
 
-  // ── Error Overlay ──
+  // Controls Overlay
+  controlsOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'space-between',
+    zIndex: 20
+  },
+
+  // Top Bar
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'ios' ? 48 : 18,
+    paddingBottom: 24,
+    backgroundColor: 'transparent',
+    // @ts-ignore
+    background: Platform.OS === 'web'
+      ? 'linear-gradient(to bottom, rgba(3, 5, 8, 0.94) 0%, rgba(3, 5, 8, 0.45) 65%, transparent 100%)'
+      : undefined
+  },
+  topLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    flex: 1,
+    marginRight: 16
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8
+  },
+  backButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600'
+  },
+  titleContainer: {
+    flex: 1
+  },
+  streamTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: -0.2
+  },
+  streamSubtitle: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginTop: 2
+  },
+  topRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  glassBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8
+  },
+  glassBtnText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  roundIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+
+  // Badges
+  typeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 4
+  },
+  typeBadgeVod: {
+    backgroundColor: 'rgba(59, 130, 246, 0.25)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.5)'
+  },
+  typeBadgeLive: {
+    backgroundColor: 'rgba(239, 68, 68, 0.25)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.5)',
+    gap: 5
+  },
+  typeBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#fff',
+    letterSpacing: 0.5
+  },
+  livePulseDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#ef4444'
+  },
+
+  // Center Big Play Button
+  centerControlArea: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  bigPlayButton: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: 'rgba(15, 20, 30, 0.82)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20
+  },
+
+  // Bottom Controls Bar
+  bottomBar: {
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 18,
+    paddingTop: 16,
+    backgroundColor: 'transparent',
+    // @ts-ignore
+    background: Platform.OS === 'web'
+      ? 'linear-gradient(to top, rgba(3, 5, 8, 0.96) 0%, rgba(3, 5, 8, 0.55) 65%, transparent 100%)'
+      : undefined
+  },
+
+  // Timeline Scrubber
+  timelineHitArea: {
+    height: 32,
+    justifyContent: 'center',
+    position: 'relative',
+    // @ts-ignore
+    cursor: Platform.OS === 'web' ? 'pointer' : undefined
+  },
+  timelineBarBackground: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    position: 'relative'
+  },
+  timelineBuffer: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.38)'
+  },
+  timelinePlayed: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: 3,
+    backgroundColor: '#3b82f6'
+  },
+  timelineThumb: {
+    position: 'absolute',
+    top: -5,
+    width: 15,
+    height: 15,
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    marginLeft: -7.5,
+    borderWidth: 2,
+    borderColor: '#3b82f6',
+    shadowColor: '#3b82f6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 6
+  },
+  scrubTooltip: {
+    position: 'absolute',
+    top: -28,
+    marginLeft: -26,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)'
+  },
+  scrubTooltipText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+
+  // Controls Row
+  controlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6
+  },
+  leftControlsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12
+  },
+  rightControlsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10
+  },
+  ctrlIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)'
+  },
+  ctrlIconBtnActive: {
+    backgroundColor: 'rgba(59, 130, 246, 0.25)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.5)'
+  },
+  speedBtnText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700'
+  },
+
+  // Volume with Hover Slider
+  volumeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6
+  },
+  volumeSliderTrack: {
+    paddingHorizontal: 6,
+    justifyContent: 'center'
+  },
+
+  // Time Display
+  timeDisplay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 6
+  },
+  timeCurrent: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums']
+  },
+  timeSeparator: {
+    color: colors.textMuted,
+    fontSize: 13
+  },
+  timeTotal: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
+    fontVariant: ['tabular-nums']
+  },
+
+  // Live Status Badge
+  liveStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 6
+  },
+  liveStatusText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5
+  },
+
+  // Resume Playback Prompt
+  resumePromptContainer: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 70 : 40,
+    left: 20,
+    right: 20,
+    alignItems: 'center',
+    zIndex: 40
+  },
+  resumePromptCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(15, 22, 35, 0.94)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.4)',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.6,
+    shadowRadius: 20,
+    maxWidth: 500,
+    width: '100%'
+  },
+  resumeIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primaryMuted,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  resumeTextWrap: {
+    flex: 1
+  },
+  resumePromptTitle: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700'
+  },
+  resumePromptSub: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    marginTop: 2
+  },
+  resumeBtnGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  resumeBtnPrimary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8
+  },
+  resumeBtnSecondary: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8
+  },
+  resumeBtnClose: {
+    padding: 6
+  },
+  resumeBtnText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  resumeBtnTextSecondary: {
+    color: '#cbd5e1',
+    fontSize: 12,
+    fontWeight: '500'
+  },
+
+  // Mini-Player Styles
+  miniOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    zIndex: 10
+  },
+  miniTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)'
+  },
+  miniTitle: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+    flex: 1,
+    marginRight: 6
+  },
+  miniIconBtn: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  miniCenterTap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  miniPlayCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(59, 130, 246, 0.85)',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  miniProgressTrack: {
+    width: '100%',
+    height: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)'
+  },
+  miniProgressFill: {
+    height: '100%',
+    backgroundColor: colors.primary
+  },
+
+  // Error Overlay
   errorOverlay: {
     position: 'absolute',
     top: 0,
@@ -1926,550 +1501,5 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 13,
     fontWeight: '600'
-  },
-
-  // ── Controls Overlay ──
-  controlsOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'space-between',
-    zIndex: 20
-  },
-  centerTapArea: {
-    position: 'absolute',
-    top: 70,
-    left: 0,
-    right: 0,
-    bottom: 90,
-    zIndex: 15
-  },
-
-  // ── Top Bar ──
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'ios' ? 48 : 18,
-    paddingBottom: 24,
-    backgroundColor: 'transparent',
-    // @ts-ignore
-    background: Platform.OS === 'web'
-      ? 'linear-gradient(to bottom, rgba(3, 5, 8, 0.92) 0%, rgba(3, 5, 8, 0.4) 65%, transparent 100%)'
-      : undefined
-  },
-  topLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    flex: 1,
-    marginRight: 16
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8,
-    // @ts-ignore
-    backdropFilter: Platform.OS === 'web' ? 'blur(12px)' : undefined
-  },
-  backButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600'
-  },
-  titleContainer: {
-    flex: 1
-  },
-  streamTitle: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-    letterSpacing: -0.2
-  },
-  streamSubtitle: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    marginTop: 2
-  },
-  topRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8
-  },
-  glassBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8,
-    // @ts-ignore
-    backdropFilter: Platform.OS === 'web' ? 'blur(12px)' : undefined
-  },
-  glassBtnText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '600'
-  },
-  roundIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    // @ts-ignore
-    backdropFilter: Platform.OS === 'web' ? 'blur(12px)' : undefined
-  },
-
-  // ── Badges ──
-  typeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 4
-  },
-  typeBadgeVod: {
-    backgroundColor: 'rgba(59, 130, 246, 0.25)',
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.5)'
-  },
-  typeBadgeLive: {
-    backgroundColor: 'rgba(239, 68, 68, 0.25)',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.5)',
-    gap: 5
-  },
-  typeBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#fff',
-    letterSpacing: 0.5
-  },
-  livePulseDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#ef4444'
-  },
-
-  // ── Center Big Play Button ──
-  centerControlArea: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  bigPlayButton: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: 'rgba(15, 20, 30, 0.78)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
-    shadowRadius: 16,
-    // @ts-ignore
-    backdropFilter: Platform.OS === 'web' ? 'blur(16px)' : undefined
-  },
-
-  // ── Bottom Controls Bar ──
-  bottomBar: {
-    paddingHorizontal: 20,
-    paddingBottom: Platform.OS === 'ios' ? 36 : 18,
-    paddingTop: 16,
-    backgroundColor: 'transparent',
-    // @ts-ignore
-    background: Platform.OS === 'web'
-      ? 'linear-gradient(to top, rgba(3, 5, 8, 0.94) 0%, rgba(3, 5, 8, 0.5) 65%, transparent 100%)'
-      : undefined
-  },
-
-  // ── Timeline Scrubber ──
-  timelineHitArea: {
-    height: 32,
-    justifyContent: 'center',
-    position: 'relative',
-    // @ts-ignore
-    cursor: Platform.OS === 'web' ? 'pointer' : undefined
-  },
-  timelineBarBackground: {
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255, 255, 255, 0.18)',
-    position: 'relative'
-  },
-  timelineBuffer: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255, 255, 255, 0.35)'
-  },
-  timelinePlayed: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    borderRadius: 3,
-    backgroundColor: '#3b82f6'
-  },
-  timelineThumb: {
-    position: 'absolute',
-    top: -5,
-    width: 15,
-    height: 15,
-    borderRadius: 8,
-    backgroundColor: '#fff',
-    marginLeft: -7.5,
-    borderWidth: 2,
-    borderColor: '#3b82f6',
-    shadowColor: '#3b82f6',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 6
-  },
-  scrubTooltip: {
-    position: 'absolute',
-    top: -28,
-    marginLeft: -26,
-    backgroundColor: 'rgba(0, 0, 0, 0.85)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)'
-  },
-  scrubTooltipText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '700'
-  },
-
-  // ── Controls Row ──
-  controlsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 6
-  },
-  leftControlsGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12
-  },
-  rightControlsGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10
-  },
-  ctrlIconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    // @ts-ignore
-    backdropFilter: Platform.OS === 'web' ? 'blur(8px)' : undefined
-  },
-
-  // ── Time Display ──
-  timeDisplay: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginLeft: 6
-  },
-  timeCurrent: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums']
-  },
-  timeSeparator: {
-    color: colors.textMuted,
-    fontSize: 13
-  },
-  timeTotal: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '500',
-    fontVariant: ['tabular-nums']
-  },
-
-  // ── Live Status Badge ──
-  liveStatusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(239, 68, 68, 0.2)',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.4)',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 6
-  },
-  liveStatusText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.5
-  },
-
-  // ── Mini Player Styles ──
-  miniOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    zIndex: 10
-  },
-  miniTopBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 8,
-    paddingTop: 8,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)'
-  },
-  miniTitle: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '700',
-    flex: 1,
-    marginRight: 6
-  },
-  miniIconBtn: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.18)',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  miniCenterTap: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  miniPlayCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(59, 130, 246, 0.85)',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  miniProgressTrack: {
-    width: '100%',
-    height: 3,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)'
-  },
-  miniProgressFill: {
-    height: '100%',
-    backgroundColor: colors.primary
-  },
-
-  // ── Resume Playback Prompt Styles ──
-  resumePromptContainer: {
-    position: 'absolute',
-    top: Platform.OS === 'ios' ? 70 : 40,
-    left: 20,
-    right: 20,
-    alignItems: 'center',
-    zIndex: 40
-  },
-  resumePromptCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 22, 35, 0.94)',
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.4)',
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.6,
-    shadowRadius: 20,
-    // @ts-ignore
-    backdropFilter: Platform.OS === 'web' ? 'blur(16px)' : undefined,
-    maxWidth: 500,
-    width: '100%'
-  },
-  resumeIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.primaryMuted,
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  resumeTextWrap: {
-    flex: 1
-  },
-  resumePromptTitle: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700'
-  },
-  resumePromptSub: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    marginTop: 2
-  },
-  resumeBtnGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8
-  },
-  resumeBtnPrimary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.primary,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8
-  },
-  resumeBtnSecondary: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 8
-  },
-  resumeBtnClose: {
-    padding: 6
-  },
-  resumeBtnText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700'
-  },
-  resumeBtnTextSecondary: {
-    color: '#cbd5e1',
-    fontSize: 12,
-    fontWeight: '500'
-  },
-
-  // ── Track Selector Modal Styles ──
-  trackModalOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(3, 5, 8, 0.75)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 50,
-    padding: 20
-  },
-  trackModalCard: {
-    width: '100%',
-    maxWidth: 420,
-    backgroundColor: '#121724',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 16 },
-    shadowOpacity: 0.6,
-    shadowRadius: 32
-  },
-  trackModalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.08)'
-  },
-  trackModalTitle: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700'
-  },
-  trackModalCloseBtn: {
-    padding: 4
-  },
-  trackModalTabs: {
-    flexDirection: 'row',
-    padding: 8,
-    gap: 8,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)'
-  },
-  trackTabBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 9,
-    borderRadius: 8
-  },
-  trackTabBtnActive: {
-    backgroundColor: 'rgba(59, 130, 246, 0.22)',
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.5)'
-  },
-  trackTabText: {
-    color: colors.textMuted,
-    fontSize: 12,
-    fontWeight: '600'
-  },
-  trackTabTextActive: {
-    color: '#fff',
-    fontWeight: '700'
-  },
-  trackListContainer: {
-    padding: 12,
-    maxHeight: 280
-  },
-  trackRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 10
-  },
-  trackRowActive: {
-    backgroundColor: 'rgba(59, 130, 246, 0.12)'
-  },
-  trackLabel: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '500'
-  },
-  trackLabelActive: {
-    color: '#fff',
-    fontWeight: '700'
-  },
-  trackEmptyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 16,
-    paddingHorizontal: 8
   }
 });

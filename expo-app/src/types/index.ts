@@ -163,3 +163,43 @@ export interface EPGChannelSchedule {
   next?: EPGProgram;
   listings: EPGProgram[];
 }
+
+export interface MediaTrack {
+  id: number;
+  label: string;
+  language: string;
+  active: boolean;
+  codec?: string;
+  kind?: 'audio' | 'subtitles';
+}
+
+export interface QualityLevel {
+  id: number;
+  label: string;
+  width?: number;
+  height?: number;
+  bitrate?: number;
+}
+
+export type PlaybackSpeed = 0.5 | 0.75 | 1.0 | 1.25 | 1.5 | 2.0;
+
+export interface PlayerPlaybackState {
+  isPlaying: boolean;
+  isBuffering: boolean;
+  currentTime: number;
+  duration: number;
+  bufferPercent: number;
+  volume: number;
+  isMuted: boolean;
+  playbackSpeed: PlaybackSpeed;
+  firstFrameRendered: boolean;
+  isFullscreen: boolean;
+  isMiniPlayer: boolean;
+  audioTracks: MediaTrack[];
+  subtitleTracks: MediaTrack[];
+  qualityLevels: QualityLevel[];
+  activeAudioTrack: number;
+  activeSubtitleTrack: number;
+  activeQualityLevel: number;
+  error: string | null;
+}

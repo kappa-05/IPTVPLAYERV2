@@ -291,36 +291,14 @@ class HLSStreamManager:
         dur = self.probe_stream(target_url, hint_duration)[0]
         return dur
 
-    def get_vod_master_m3u8(self, target_url, duration, seg_duration=6.0, is_hevc=False):
+    def get_vod_master_m3u8(self, target_url, duration, seg_duration=6.0, is_hevc=False, audio_tracks=None, subtitle_tracks=None):
         sid = hashlib.md5(target_url.encode('utf-8')).hexdigest()[:12]
         sdir = os.path.join(self.temp_root, sid)
         os.makedirs(sdir, exist_ok=True)
 
         num_segments = max(1, int(math.ceil(duration / seg_duration)))
-
-        # HLS Version 7 with Fragmented MP4 (fMP4) and init.mp4
-        # Fully compliant with Apple HLS authoring specs and supports 4K HEVC hardware playback
-        lines = [
-            "#EXTM3U",
-            "#EXT-X-VERSION:7",
-            f"#EXT-X-TARGETDURATION:{int(seg_duration) + 1}",
-            "#EXT-X-MEDIA-SEQUENCE:0",
-            "#EXT-X-PLAYLIST-TYPE:VOD",
-            f'#EXT-X-MAP:URI="/api/hls/{sid}/init.mp4"'
-        ]
-
-        for i in range(num_segments):
-            if i == num_segments - 1:
-                last_dur = duration - (i * seg_duration)
-                if last_dur <= 0:
-                    last_dur = seg_duration
-                lines.append(f"#EXTINF:{last_dur:.6f},")
-            else:
-                lines.append(f"#EXTINF:{seg_duration:.6f},")
-            lines.append(f"/api/hls/{sid}/seg_{i:04d}.m4s")
-
-        lines.append("#EXT-X-ENDLIST")
-        m3u8_bytes = ("\n".join(lines) + "\n").encode('utf-8')
+        audio_tracks = audio_tracks or []
+        subtitle_tracks = subtitle_tracks or []
 
         with self.lock:
             if sid not in self.sessions:
@@ -333,30 +311,162 @@ class HLSStreamManager:
                     'last_seen': time.time(),
                     'proc': None,
                     'current_start_seg': 0,
-                    'is_hevc': is_hevc
+                    'current_audio_track': 0,
+                    'is_hevc': is_hevc,
+                    'audio_tracks': audio_tracks,
+                    'subtitle_tracks': subtitle_tracks
                 }
             else:
                 self.sessions[sid]['last_seen'] = time.time()
                 self.sessions[sid]['duration'] = duration
                 self.sessions[sid]['is_hevc'] = is_hevc
+                self.sessions[sid]['audio_tracks'] = audio_tracks
+                self.sessions[sid]['subtitle_tracks'] = subtitle_tracks
 
-        # Start continuous sequential background worker from segment 0
-        self._ensure_background_worker(sid, target_url, sdir, start_seg=0)
+        # RFC 8216 Compliant Master Multivariant Playlist
+        # Enables Apple AVPlayer, Safari, and Android ExoPlayer to expose native Audio & Subtitle menus
+        lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:7",
+            "#EXT-X-INDEPENDENT-SEGMENTS"
+        ]
 
+        # 1. Subtitles Renditions
+        has_subs = bool(subtitle_tracks)
+        if has_subs:
+            for s in subtitle_tracks:
+                s_idx = s.get('stream_index', 0)
+                s_title = (s.get('title') or f"Sottotitolo {s_idx + 1}").replace('"', '')
+                s_lang = s.get('language') or 'und'
+                lines.append(
+                    f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="{s_title}",DEFAULT=NO,AUTOSELECT=YES,FORCED=NO,LANGUAGE="{s_lang}",URI="/api/hls/{sid}/subs_{s_idx}.m3u8"'
+                )
+
+        # 2. Audio Renditions
+        has_multi_audio = len(audio_tracks) > 1
+        if has_multi_audio:
+            for a in audio_tracks:
+                a_idx = a.get('stream_index', 0)
+                a_title = (a.get('title') or f"Audio {a_idx + 1}").replace('"', '')
+                a_lang = a.get('language') or 'und'
+                is_def = "YES" if a_idx == 0 else "NO"
+                lines.append(
+                    f'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="{a_title}",DEFAULT={is_def},AUTOSELECT=YES,LANGUAGE="{a_lang}",URI="/api/hls/{sid}/index.m3u8?audio_track={a_idx}"'
+                )
+
+        codecs = 'codecs="hvc1.1.6.L93.B0,mp4a.40.2"' if is_hevc else 'codecs="avc1.640028,mp4a.40.2"'
+        stream_inf = [
+            '#EXT-X-STREAM-INF:BANDWIDTH=8000000',
+            'AVERAGE-BANDWIDTH=5000000',
+            'RESOLUTION=1920x1080',
+            codecs
+        ]
+        if has_multi_audio:
+            stream_inf.append('AUDIO="audio"')
+        if has_subs:
+            stream_inf.append('SUBTITLES="subs"')
+
+        lines.append(','.join(stream_inf))
+        lines.append(f"/api/hls/{sid}/index.m3u8")
+
+        m3u8_bytes = ("\n".join(lines) + "\n").encode('utf-8')
         return sid, m3u8_bytes
 
-    def _ensure_background_worker(self, sid, target_url, sdir, start_seg=0):
+    def get_vod_media_m3u8(self, sid, audio_track=0):
+        with self.lock:
+            sess = self.sessions.get(sid)
+            if not sess:
+                sdir = os.path.join(self.temp_root, sid)
+                if not os.path.isdir(sdir):
+                    return None
+                sess = {
+                    'dir': sdir,
+                    'last_seen': time.time(),
+                    'target_url': None,
+                    'duration': 7200.0,
+                    'seg_duration': 6.0,
+                    'num_segments': 1200,
+                    'proc': None,
+                    'current_start_seg': 0,
+                    'current_audio_track': audio_track,
+                    'is_hevc': False,
+                    'audio_tracks': [],
+                    'subtitle_tracks': []
+                }
+                self.sessions[sid] = sess
+            sess['last_seen'] = time.time()
+            duration = sess.get('duration', 7200.0)
+            seg_duration = sess.get('seg_duration', 6.0)
+            num_segments = sess.get('num_segments', max(1, int(math.ceil(duration / seg_duration))))
+            target_url = sess.get('target_url')
+            sdir = sess.get('dir')
+
+        lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:7",
+            f"#EXT-X-TARGETDURATION:{int(seg_duration) + 1}",
+            "#EXT-X-MEDIA-SEQUENCE:0",
+            "#EXT-X-PLAYLIST-TYPE:VOD",
+            f'#EXT-X-MAP:URI="/api/hls/{sid}/init.mp4?audio_track={audio_track}"'
+        ]
+
+        for i in range(num_segments):
+            if i == num_segments - 1:
+                last_dur = duration - (i * seg_duration)
+                if last_dur <= 0:
+                    last_dur = seg_duration
+                lines.append(f"#EXTINF:{last_dur:.6f},")
+            else:
+                lines.append(f"#EXTINF:{seg_duration:.6f},")
+            lines.append(f"/api/hls/{sid}/seg_{i:04d}.m4s?audio_track={audio_track}")
+
+        lines.append("#EXT-X-ENDLIST")
+        m3u8_bytes = ("\n".join(lines) + "\n").encode('utf-8')
+
+        if target_url and sdir:
+            self._ensure_background_worker(sid, target_url, sdir, start_seg=0, audio_track=audio_track)
+
+        return m3u8_bytes
+
+    def get_subs_m3u8(self, sid, track_index=0):
+        with self.lock:
+            sess = self.sessions.get(sid)
+            if not sess:
+                return None
+            sess['last_seen'] = time.time()
+            duration = sess.get('duration', 7200.0)
+            target_url = sess.get('target_url')
+
+        if not target_url:
+            return None
+
+        lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:3",
+            f"#EXT-X-TARGETDURATION:{int(duration) + 1}",
+            "#EXT-X-MEDIA-SEQUENCE:0",
+            "#EXT-X-PLAYLIST-TYPE:VOD",
+            f"#EXTINF:{duration:.6f},",
+            f"/api/subtitles?url={urllib.parse.quote(target_url, safe='')}&track_index={track_index}",
+            "#EXT-X-ENDLIST"
+        ]
+        return ("\n".join(lines) + "\n").encode('utf-8')
+
+    def _ensure_background_worker(self, sid, target_url, sdir, start_seg=0, audio_track=0):
         with self.lock:
             sess = self.sessions.get(sid)
             if not sess:
                 return
             proc = sess.get('proc')
             cur_start = sess.get('current_start_seg', 0)
-            # If a worker is already running from or near this position, let it continue
-            if proc and proc.poll() is None:
+            cur_audio = sess.get('current_audio_track', 0)
+
+            # If worker is already running near this position and same audio track, let it continue
+            if proc and proc.poll() is None and cur_audio == audio_track:
                 if 0 <= (start_seg - cur_start) <= 5:
                     return
-                # Otherwise terminate old worker before seeking to new position to avoid duplicate connections!
+
+            if proc:
                 try:
                     proc.terminate()
                     proc.wait(timeout=1)
@@ -404,10 +514,9 @@ class HLSStreamManager:
             cmd.extend([
                 "-i", target_url,
                 "-map", "0:v:0",
-                "-map", "0:a?",
+                "-map", f"0:a:{audio_track}?" if audio_track >= 0 else "0:a?",
                 "-c:v", "copy",
             ])
-            # For HEVC/H.265, Apple AVPlayer and Safari strictly require the hvc1 tag
             if is_hevc:
                 cmd.extend(["-tag:v", "hvc1"])
 
@@ -424,15 +533,16 @@ class HLSStreamManager:
                 "-hls_flags", "independent_segments",
                 "-start_number", str(start_seg),
                 "-hls_segment_filename", os.path.join(sdir, "seg_%04d.m4s"),
-                os.path.join(sdir, f"internal_{start_seg}.m3u8")
+                os.path.join(sdir, f"internal_{audio_track}_{start_seg}.m3u8")
             ])
             try:
                 sess['proc'] = subprocess.Popen(cmd, env=clean_env)
                 sess['current_start_seg'] = start_seg
+                sess['current_audio_track'] = audio_track
             except Exception as e:
                 print(f"[Worker Error] {e}")
 
-    def get_or_create_segment(self, sid, seg_name):
+    def get_or_create_segment(self, sid, seg_name, audio_track=0):
         with self.lock:
             sess = self.sessions.get(sid)
             if not sess:
@@ -447,6 +557,7 @@ class HLSStreamManager:
                     'seg_duration': 6.0,
                     'proc': None,
                     'current_start_seg': 0,
+                    'current_audio_track': audio_track,
                     'is_hevc': False
                 }
                 self.sessions[sid] = sess
@@ -468,7 +579,7 @@ class HLSStreamManager:
         if seg_name == "init.mp4":
             proc = sess.get('proc')
             if not proc or proc.poll() is not None:
-                self._ensure_background_worker(sid, target_url, sdir, start_seg=0)
+                self._ensure_background_worker(sid, target_url, sdir, start_seg=0, audio_track=audio_track)
             start_wait = time.time()
             while time.time() - start_wait < 25.0:
                 if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
@@ -476,7 +587,7 @@ class HLSStreamManager:
                 time.sleep(0.1)
                 proc = sess.get('proc')
                 if proc and proc.poll() is not None and (not os.path.exists(seg_path) or os.path.getsize(seg_path) == 0):
-                    self._ensure_background_worker(sid, target_url, sdir, start_seg=0)
+                    self._ensure_background_worker(sid, target_url, sdir, start_seg=0, audio_track=audio_track)
             if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
                 return seg_path
             return None
@@ -490,23 +601,22 @@ class HLSStreamManager:
         proc = sess.get('proc')
         worker_alive = proc is not None and proc.poll() is None
         cur_start = sess.get('current_start_seg', 0)
+        cur_audio = sess.get('current_audio_track', 0)
 
-        # If worker is not running, or if requested segment is far away from worker position (seek ahead > 8 segments), restart worker!
-        if not worker_alive or (seg_idx < cur_start) or (seg_idx > cur_start + 12):
-            self._ensure_background_worker(sid, target_url, sdir, start_seg=seg_idx)
+        # If worker is not running, or if requested segment is far away or audio track differs, restart worker
+        if not worker_alive or (cur_audio != audio_track) or (seg_idx < cur_start) or (seg_idx > cur_start + 12):
+            self._ensure_background_worker(sid, target_url, sdir, start_seg=seg_idx, audio_track=audio_track)
 
-        # 2. Smart Wait: wait up to 35 seconds for the single background worker to produce this segment!
-        # This completely avoids running multiple simultaneous FFmpeg instances that choke the IPTV server and trigger stream timeouts!
+        # 2. Smart Wait: wait up to 35 seconds for worker
         start_wait = time.time()
         while time.time() - start_wait < 35.0:
             if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
                 return seg_path
             time.sleep(0.15)
-            # If worker terminated unexpectedly, try to restart it once
             proc = sess.get('proc')
             if proc and proc.poll() is not None:
                 if not os.path.exists(seg_path) or os.path.getsize(seg_path) == 0:
-                    self._ensure_background_worker(sid, target_url, sdir, start_seg=seg_idx)
+                    self._ensure_background_worker(sid, target_url, sdir, start_seg=seg_idx, audio_track=audio_track)
 
         if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
             return seg_path
@@ -1220,7 +1330,6 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 if target_url.startswith(('http%3A', 'https%3A')) or '%2F' in target_url:
                     target_url = urllib.parse.unquote(target_url)
 
-                # If target is already an HLS m3u8 playlist, redirect to proxy
                 if '.m3u8' in target_url.lower():
                     self.send_response(302)
                     self.send_header('Location', f'/api/proxy?url={urllib.parse.quote(target_url, safe="")}')
@@ -1236,7 +1345,10 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                         hint_dur = 0.0
 
                 duration, is_hevc, audio_tracks, subtitle_tracks = HLS_STREAM_MGR.probe_stream(target_url, hint_dur)
-                sid, m3u8_bytes = HLS_STREAM_MGR.get_vod_master_m3u8(target_url, duration, seg_duration=6.0, is_hevc=is_hevc)
+                sid, m3u8_bytes = HLS_STREAM_MGR.get_vod_master_m3u8(
+                    target_url, duration, seg_duration=6.0, is_hevc=is_hevc,
+                    audio_tracks=audio_tracks, subtitle_tracks=subtitle_tracks
+                )
 
                 self.send_response(200)
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -1248,20 +1360,59 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 self.wfile.write(m3u8_bytes)
                 return
 
-        # Serve HLS Segment chunks: /api/hls/{sid}/{segment.m4s or init.mp4 or .ts}
+        # Serve HLS Media Playlists, Subtitles, and Segment chunks: /api/hls/{sid}/{name}
         if path.startswith('/api/hls/'):
             parts = [p for p in path.split('/') if p]
             if len(parts) >= 4:
                 sid = parts[2]
-                seg_name = parts[3]
-                seg_path = HLS_STREAM_MGR.get_or_create_segment(sid, seg_name)
+                res_name = parts[3]
+                audio_track = 0
+                try:
+                    audio_track = int(query.get('audio_track', ['0'])[0])
+                except Exception:
+                    audio_track = 0
+
+                # 1. Media Playlist: /api/hls/{sid}/index.m3u8 or playlist.m3u8
+                if res_name in ('index.m3u8', 'playlist.m3u8'):
+                    media_bytes = HLS_STREAM_MGR.get_vod_media_m3u8(sid, audio_track=audio_track)
+                    if media_bytes:
+                        self.send_response(200)
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+                        self.send_header('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8')
+                        self.send_header('Content-Length', str(len(media_bytes)))
+                        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                        self.end_headers()
+                        self.wfile.write(media_bytes)
+                        return
+
+                # 2. Subtitle Playlist: /api/hls/{sid}/subs_{idx}.m3u8
+                if res_name.startswith('subs_') and res_name.endswith('.m3u8'):
+                    try:
+                        t_idx = int(res_name.replace('subs_', '').replace('.m3u8', ''))
+                    except Exception:
+                        t_idx = 0
+                    sub_bytes = HLS_STREAM_MGR.get_subs_m3u8(sid, track_index=t_idx)
+                    if sub_bytes:
+                        self.send_response(200)
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+                        self.send_header('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8')
+                        self.send_header('Content-Length', str(len(sub_bytes)))
+                        self.send_header('Cache-Control', 'public, max-age=7200')
+                        self.end_headers()
+                        self.wfile.write(sub_bytes)
+                        return
+
+                # 3. Media Segments / Init Fragment: /api/hls/{sid}/{init.mp4 or seg_XXXX.m4s or .ts}
+                seg_path = HLS_STREAM_MGR.get_or_create_segment(sid, res_name, audio_track=audio_track)
                 if seg_path and os.path.exists(seg_path):
                     try:
                         file_size = os.path.getsize(seg_path)
                         self.send_response(200)
                         self.send_header('Access-Control-Allow-Origin', '*')
                         self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
-                        ct = 'video/mp2t' if seg_name.endswith('.ts') else 'video/mp4'
+                        ct = 'video/mp2t' if res_name.endswith('.ts') else 'video/mp4'
                         self.send_header('Content-Type', ct)
                         self.send_header('Content-Length', str(file_size))
                         self.send_header('Accept-Ranges', 'bytes')
