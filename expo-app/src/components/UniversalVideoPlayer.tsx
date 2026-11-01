@@ -107,7 +107,12 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
     handleSelectQualityLevel,
     handleSelectPlaybackSpeed,
     handleClose: handleCoreClose,
-    initWebPlayer
+    initWebPlayer,
+    requiresUserUnmute,
+    requiresUserGesture,
+    handleDismissUnmute,
+    handleUserGesturePlay,
+    handleNativePlaybackStatusUpdate
   } = usePlayerCore({
     visible,
     stream,
@@ -208,6 +213,15 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
 
   // Center double-tap skip vs single-tap toggle controls
   const handleCenterTap = (e: any) => {
+    // If browser muted autoplay, any tap un-mutes automatically
+    if (requiresUserUnmute) {
+      handleDismissUnmute();
+    }
+    if (requiresUserGesture) {
+      handleUserGesturePlay();
+      return;
+    }
+
     const now = Date.now();
     const timeDiff = now - lastTapRef.current;
     lastTapRef.current = now;
@@ -221,10 +235,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
         seekRelative(10);
       }
     } else {
-      // Single tap: toggle controls, or open native player on Apple/Android device
-      if (isIOS && !isFullscreen && !isMinimized && webVideoRef.current) {
-        openDevicePlayer();
-      }
+      // Single tap: toggle controls smoothly without hijacking into fullscreen
       if (showControls) {
         Animated.timing(controlsAnim, {
           toValue: 0,
@@ -350,8 +361,14 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
 
   const playerContent = (
     <Animated.View
+      // @ts-ignore
+      nativeID="iptv-universal-player"
+      id="iptv-universal-player"
       style={[
-        isMinimized ? styles.miniContainer : styles.container,
+        isMinimized ? [
+          styles.miniContainer,
+          width < 600 ? { width: Math.min(270, width * 0.75), height: Math.round(Math.min(270, width * 0.75) * 9 / 16) } : null
+        ] : styles.container,
         {
           opacity: animFade,
           transform: [{ scale: animScale }]
@@ -383,8 +400,10 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
             objectFit: 'contain'
           }}
           playsInline
+          // @ts-ignore
+          webkit-playsinline="true"
           crossOrigin="anonymous"
-          controls={isIOS && isFullscreen}
+          controls={false}
           autoPlay
         />
       ) : (
@@ -396,15 +415,43 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
             useNativeControls={false}
             resizeMode={ResizeModeEnum ? ResizeModeEnum.CONTAIN : 'contain'}
             shouldPlay={true}
-            onPlaybackStatusUpdate={(status: any) => {
-              if (status.isLoaded) {
-                if (status.positionMillis >= 0 && !status.isBuffering) {
-                  // Frame rendered
-                }
-              }
-            }}
+            onPlaybackStatusUpdate={handleNativePlaybackStatusUpdate}
           />
         ) : null
+      )}
+
+      {/* ── 2b. Browser Autoplay Muted Floating Banner ── */}
+      {requiresUserUnmute && !isMinimized && (
+        <TouchableOpacity
+          style={styles.unmuteBanner}
+          activeOpacity={0.85}
+          onPress={handleDismissUnmute}
+        >
+          <View style={styles.unmutePulseIcon}>
+            <Ionicons name="volume-mute" size={16} color="#fff" />
+          </View>
+          <Text style={styles.unmuteBannerText}>
+            Audio disattivato dal browser • Tocca per attivare l'audio
+          </Text>
+          <Ionicons name="volume-high" size={18} color={colors.primary} />
+        </TouchableOpacity>
+      )}
+
+      {/* ── 2c. Browser Autoplay Gesture Required Overlay ── */}
+      {requiresUserGesture && !isMinimized && (
+        <View style={styles.gestureOverlay} pointerEvents="box-none">
+          <TouchableOpacity
+            style={styles.gesturePlayCard}
+            activeOpacity={0.85}
+            onPress={handleUserGesturePlay}
+          >
+            <View style={styles.gesturePlayCircle}>
+              <Ionicons name="play" size={38} color="#fff" style={{ marginLeft: 4 }} />
+            </View>
+            <Text style={styles.gesturePlayTitle}>Tocca per riprodurre</Text>
+            <Text style={styles.gesturePlaySub}>Premi qui per avviare lo stream</Text>
+          </TouchableOpacity>
+        </View>
       )}
 
       {/* ── 3. Quick Skip Ripple Indicator (-10s / +10s) ── */}
@@ -1482,5 +1529,92 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 13,
     fontWeight: '600'
+  },
+
+  // Floating Unmute Banner
+  unmuteBanner: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 56 : 28,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(15, 23, 42, 0.94)',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 24,
+    borderWidth: 1.5,
+    borderColor: 'rgba(59, 130, 246, 0.6)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.7,
+    shadowRadius: 16,
+    elevation: 20,
+    zIndex: 35
+  },
+  unmutePulseIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(239, 68, 68, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  unmuteBannerText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: -0.1
+  },
+
+  // Gesture Required Play Overlay
+  gestureOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(3, 5, 8, 0.65)',
+    zIndex: 25
+  },
+  gesturePlayCard: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+    paddingHorizontal: 28,
+    paddingVertical: 22,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: 'rgba(59, 130, 246, 0.5)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.8,
+    shadowRadius: 24,
+    elevation: 24
+  },
+  gesturePlayCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#3b82f6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
+    shadowColor: '#3b82f6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 18,
+    elevation: 12
+  },
+  gesturePlayTitle: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '700',
+    marginBottom: 4
+  },
+  gesturePlaySub: {
+    color: colors.textSecondary,
+    fontSize: 13
   }
 });

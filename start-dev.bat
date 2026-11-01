@@ -1,4 +1,5 @@
 @echo off
+set PATH=C:\Program Files\nodejs;%PATH%
 title IPTV Player V2 - Dev Server (Expo Go & Metro)
 echo =======================================================
 echo   IPTV Player V2 - Dev Server (Expo Go & Metro)

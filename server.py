@@ -81,9 +81,15 @@ def find_ffprobe():
         return p
     ff = find_ffmpeg()
     if ff:
-        cand = ff.replace("ffmpeg.exe", "ffprobe.exe").replace("ffmpeg", "ffprobe")
+        dir_name = os.path.dirname(ff)
+        cand = os.path.join(dir_name, "ffprobe.exe" if sys.platform == "win32" else "ffprobe")
         if os.path.exists(cand):
             return cand
+    winget_dir = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages")
+    if os.path.isdir(winget_dir):
+        for root, dirs, files in os.walk(winget_dir):
+            if "ffprobe.exe" in files:
+                return os.path.join(root, "ffprobe.exe")
     return None
 
 
@@ -824,9 +830,11 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
 
             # For regular streams (TS, MP4, MKV)
             # Ensure correct MIME type for video media streams so Safari & mobile browsers won't reject with MediaError Code 4
-            if is_media_stream or '/movie/' in lower_url or '/series/' in lower_url:
+            if is_media_stream or '/movie/' in lower_url or '/series/' in lower_url or '/live/' in lower_url:
                 if is_m3u8:
                     content_type = 'application/vnd.apple.mpegurl'
+                elif lower_url.endswith('.ts') or '.ts?' in lower_url or '.ts&' in lower_url:
+                    content_type = 'video/mp2t'
                 elif not is_api_request:
                     content_type = 'video/mp4'
 
@@ -960,6 +968,14 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                         return
                     except Exception:
                         pass
+
+                if is_media_stream or '/movie/' in lower_url or '/series/' in lower_url or '/live/' in lower_url:
+                    if is_m3u8:
+                        content_type = 'application/vnd.apple.mpegurl'
+                    elif lower_url.endswith('.ts') or '.ts?' in lower_url or '.ts&' in lower_url:
+                        content_type = 'video/mp2t'
+                    elif not is_api_request:
+                        content_type = 'video/mp4'
 
                 self.send_response(status_code)
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -1530,6 +1546,20 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
 
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except Exception:
+            return '127.0.0.1'
+
+
 def run_server():
     try:
         if hasattr(sys.stdout, 'reconfigure'):
@@ -1542,10 +1572,12 @@ def run_server():
     try:
         mode_str = "React Native (Expo Web)" if "expo-app" in PUBLIC_DIR else "Vanilla JS (Classico)"
         httpd = ThreadingHTTPServer(server_address, IPTVRequestHandler)
+        local_ip = get_local_ip()
         print("=" * 60)
         print(f"[IPTV Player V2] Server Attivo! Modo: {mode_str}")
         print(f">> Directory servita: {PUBLIC_DIR}")
-        print(f">> Browser: http://localhost:{PORT}")
+        print(f">> Browser PC: http://localhost:{PORT}")
+        print(f">> Smartphone / Tablet (stesso Wi-Fi): http://{local_ip}:{PORT}")
         print(f">> Proxy CORS: http://localhost:{PORT}/api/proxy?url=...")
         print("=" * 60)
         httpd.serve_forever()

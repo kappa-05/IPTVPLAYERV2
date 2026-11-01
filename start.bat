@@ -1,4 +1,5 @@
 @echo off
+set PATH=C:\Program Files\nodejs;%PATH%
 title IPTV Player V2
 echo =======================================================
 echo   IPTV Player V2 (React Native / Web)
@@ -8,7 +9,7 @@ echo  Accesso da questo PC:
 echo    http://localhost:8080
 echo.
 echo  Accesso da Smartphone / Tablet (stesso Wi-Fi):
-echo    http://160.97.168.195:8080
+echo    http://192.168.1.166:8080
 echo.
 echo =======================================================
 echo.

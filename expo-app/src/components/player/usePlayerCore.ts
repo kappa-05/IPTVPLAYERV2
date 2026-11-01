@@ -103,6 +103,8 @@ export function usePlayerCore({
   const [playbackSpeed, setPlaybackSpeed] = useState<PlaybackSpeed>(1.0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [requiresUserUnmute, setRequiresUserUnmute] = useState(false);
+  const [requiresUserGesture, setRequiresUserGesture] = useState(false);
 
   // Tracks & Quality States
   const [audioTracks, setAudioTracks] = useState<MediaTrack[]>([]);
@@ -310,13 +312,103 @@ export function usePlayerCore({
     }
   }, [duration, isMovieOrSeries, account, stream]);
 
+  // Safe Play pipeline: handles modern browser autoplay restrictions seamlessly
+  const safePlay = useCallback(async (vid?: HTMLVideoElement | null) => {
+    const target = vid || webVideoRef.current;
+    if (!target) return;
+    try {
+      setIsPlaying(true);
+      await target.play();
+      setRequiresUserUnmute(false);
+      setRequiresUserGesture(false);
+    } catch (err: any) {
+      console.warn('Playback play() with audio blocked by browser policy:', err);
+      // Fallback 1: Try playing muted so video and frames render immediately
+      try {
+        target.muted = true;
+        setIsMuted(true);
+        await target.play();
+        setRequiresUserUnmute(true);
+        setRequiresUserGesture(false);
+        setIsPlaying(true);
+      } catch (muteErr) {
+        console.warn('Muted autoplay also blocked, user gesture required:', muteErr);
+        setRequiresUserGesture(true);
+        setIsPlaying(false);
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  const handleDismissUnmute = useCallback(() => {
+    if (webVideoRef.current) {
+      webVideoRef.current.muted = false;
+      setIsMuted(false);
+      webVideoRef.current.play().catch(() => {});
+    }
+    setRequiresUserUnmute(false);
+  }, []);
+
+  const handleUserGesturePlay = useCallback(() => {
+    if (webVideoRef.current) {
+      const v = webVideoRef.current;
+      v.play().then(() => {
+        setIsPlaying(true);
+        setRequiresUserGesture(false);
+        setRequiresUserUnmute(false);
+      }).catch(() => {
+        v.muted = true;
+        setIsMuted(true);
+        v.play().then(() => {
+          setIsPlaying(true);
+          setRequiresUserGesture(false);
+          setRequiresUserUnmute(true);
+        }).catch(() => {});
+      });
+    } else if (nativeVideoRef.current) {
+      nativeVideoRef.current.playAsync?.().catch(() => {});
+      setIsPlaying(true);
+      setRequiresUserGesture(false);
+    }
+  }, []);
+
+  // Update native Expo mobile player state (Android/iOS Expo Go)
+  const handleNativePlaybackStatusUpdate = useCallback((status: any) => {
+    if (!status) return;
+    if (status.isLoaded) {
+      setIsPlaying(status.isPlaying);
+      setLoading(status.isBuffering);
+      if (status.isBuffering) {
+        setLoadingStatus('Buffering...');
+      }
+      if (status.positionMillis !== undefined) {
+        const sec = status.positionMillis / 1000;
+        if (!isDraggingTrack) {
+          setCurrentTime(sec);
+        }
+        if (sec > 0 || status.isPlaying) {
+          setFirstFrameRendered(true);
+          setLoading(false);
+        }
+      }
+      if (status.durationMillis !== undefined && status.durationMillis > 0) {
+        setDuration(status.durationMillis / 1000);
+      }
+      if (status.playableDurationMillis !== undefined && status.durationMillis > 0) {
+        setBufferPercent(Math.min(100, (status.playableDurationMillis / status.durationMillis) * 100));
+      }
+    } else if (status.error) {
+      setErrorMsg(status.error);
+      setLoading(false);
+    }
+  }, [isDraggingTrack]);
+
   // Open native player on Apple / Android
   const openDevicePlayer = useCallback((targetVid?: HTMLVideoElement) => {
     if (isMinimized) return false;
     if (Platform.OS === 'web') {
       const vid = targetVid || webVideoRef.current;
       if (vid) {
-        vid.controls = true;
         if (isIOS && typeof (vid as any).webkitEnterFullscreen === 'function') {
           try {
             (vid as any).webkitEnterFullscreen();
@@ -325,12 +417,6 @@ export function usePlayerCore({
           } catch (err) {
             console.log('Apple fullscreen deferred until user touch:', err);
           }
-        } else if (typeof (vid as any).requestFullscreen === 'function') {
-          try {
-            (vid as any).requestFullscreen();
-            setIsFullscreen(true);
-            return true;
-          } catch (e) {}
         }
       }
     } else if (nativeVideoRef.current) {
@@ -356,9 +442,16 @@ export function usePlayerCore({
     // Cross-origin attribute is mandatory for WebVTT subtitle tracks and Safari AVPlayer
     video.crossOrigin = 'anonymous';
 
+    const cleanUrl = cleanTargetUrl || targetUrl;
+    const cleanLower = cleanUrl.toLowerCase();
     const urlLower = targetUrl.toLowerCase();
-    const isM3U8 = urlLower.includes('.m3u8') || targetUrl.includes('/api/hls/') || (isLive && !targetUrl.includes('/movie/') && !targetUrl.includes('/series/'));
-    const isMpegTs = !isM3U8 && isLive && (urlLower.endsWith('.ts') || urlLower.includes('.ts?') || stream.extension === 'ts');
+
+    // High-precision format detection across all protocols & wrappers
+    const isExplicitM3U8 = urlLower.includes('.m3u8') || cleanLower.includes('.m3u8') || targetUrl.includes('/api/hls/');
+    const isExplicitTs = cleanLower.endsWith('.ts') || cleanLower.includes('.ts?') || cleanLower.includes('.ts&') || stream?.extension === 'ts';
+    const isLiveTs = isLive && (isExplicitTs || (!isExplicitM3U8 && stream?.extension === 'ts'));
+    const isLiveHls = isLive && !isLiveTs;
+    const isHls = isExplicitM3U8 || isLiveHls;
     const canNativeHls = typeof video.canPlayType === 'function' && Boolean(video.canPlayType('application/vnd.apple.mpegurl'));
 
     // Video Element Standard Events
@@ -375,7 +468,6 @@ export function usePlayerCore({
     };
 
     video.oncanplay = () => {
-      // Do not mark firstFrameRendered here; wait strictly for playing event to eliminate black flash
       setLoading(false);
     };
 
@@ -456,7 +548,7 @@ export function usePlayerCore({
       }
     } catch {}
 
-    // Resilient Multi-Tier Error Recovery Pipeline (Fixes Media Error Code 4 / Code 3 on 4K & MKV/HEVC/AC3 streams)
+    // Resilient Multi-Tier Error Recovery Pipeline (Fixes Media Error Code 4 / Code 3 on all platforms)
     video.onerror = () => {
       const err = video.error;
       const code = err ? err.code : 0;
@@ -465,10 +557,37 @@ export function usePlayerCore({
       const cleanTarget = cleanTargetUrl || targetUrl;
       const encodedTarget = encodeURIComponent(cleanTarget);
 
-      // Do NOT show error for Code 4 / Code 3: perform automatic multi-tier fallback through server.py FFmpeg remuxing
-      // Tier 1: Real-time FFmpeg pipe remuxer via server.py (/api/transcode)
-      if (fallbackTierRef.current === 0 && !targetUrl.includes('/api/transcode')) {
+      // Tier 1 for Live streams: try alternative extension (.ts <-> .m3u8)
+      if (isLive && fallbackTierRef.current === 0) {
         fallbackTierRef.current = 1;
+        if (cleanTarget.includes('.ts')) {
+          const altM3u8 = cleanTarget.replace(/\.ts(\?.*)?$/i, '.m3u8$1');
+          if (altM3u8 !== cleanTarget) {
+            setErrorMsg(null);
+            setLoading(true);
+            setLoadingStatus('Tentativo formato alternativo (HLS)...');
+            setTimeout(() => {
+              initWebPlayer(XtreamAPI.getProxyUrl(altM3u8, true));
+            }, 100);
+            return;
+          }
+        } else if (cleanTarget.includes('.m3u8')) {
+          const altTs = cleanTarget.replace(/\.m3u8(\?.*)?$/i, '.ts$1');
+          if (altTs !== cleanTarget) {
+            setErrorMsg(null);
+            setLoading(true);
+            setLoadingStatus('Tentativo formato alternativo (TS)...');
+            setTimeout(() => {
+              initWebPlayer(XtreamAPI.getProxyUrl(altTs, true));
+            }, 100);
+            return;
+          }
+        }
+      }
+
+      // Tier 2: Real-time FFmpeg pipe remuxer via server.py (/api/transcode)
+      if (fallbackTierRef.current <= 1 && !targetUrl.includes('/api/transcode')) {
+        fallbackTierRef.current = 2;
         setErrorMsg(null);
         setLoading(true);
         setLoadingStatus('Remuxing compatibile (FFmpeg)...');
@@ -479,9 +598,9 @@ export function usePlayerCore({
         return;
       }
 
-      // Tier 2: Switch to HLS Master Playlist remuxer (/api/hls/master.m3u8)
-      if (fallbackTierRef.current <= 1 && !targetUrl.includes('/api/hls/master.m3u8')) {
-        fallbackTierRef.current = 2;
+      // Tier 3: Switch to HLS Master Playlist remuxer (/api/hls/master.m3u8)
+      if (fallbackTierRef.current <= 2 && !targetUrl.includes('/api/hls/master.m3u8')) {
+        fallbackTierRef.current = 3;
         setErrorMsg(null);
         setLoading(true);
         setLoadingStatus('Ottimizzazione formato stream (HLS)...');
@@ -492,9 +611,9 @@ export function usePlayerCore({
         return;
       }
 
-      // Tier 3: Try proxy with remux=1
-      if (fallbackTierRef.current <= 2 && !targetUrl.includes('remux=1')) {
-        fallbackTierRef.current = 3;
+      // Tier 4: Try proxy with remux=1
+      if (fallbackTierRef.current <= 3 && !targetUrl.includes('remux=1')) {
+        fallbackTierRef.current = 4;
         setErrorMsg(null);
         setLoading(true);
         setLoadingStatus('Tentativo proxy remux...');
@@ -505,21 +624,6 @@ export function usePlayerCore({
         return;
       }
 
-      // Tier 4: Try alternative extension (.m3u8) if supported by Xtream Codes server
-      if (fallbackTierRef.current <= 3 && (cleanTarget.includes('/movie/') || cleanTarget.includes('/series/') || cleanTarget.includes('/live/'))) {
-        fallbackTierRef.current = 4;
-        const altUrl = cleanTarget.replace(/\.(mkv|avi|mp4)(\?.*)?$/i, '.m3u8$2');
-        if (altUrl !== cleanTarget) {
-          setErrorMsg(null);
-          setLoading(true);
-          setLoadingStatus('Tentativo stream alternativo (.m3u8)...');
-          setTimeout(() => {
-            initWebPlayer(XtreamAPI.getProxyUrl(altUrl, true));
-          }, 100);
-          return;
-        }
-      }
-
       setErrorMsg(`Impossibile riprodurre il flusso multimediale (Codice ${code || 'sorgente non supportata'}).`);
       setLoading(false);
     };
@@ -528,34 +632,36 @@ export function usePlayerCore({
     const handleWebkitEnd = () => {
       setIsFullscreen(false);
       video.controls = false;
-      handleClose();
+      // Do NOT call handleClose() here so exiting iOS fullscreen does not kill the stream!
     };
     video.addEventListener('webkitendfullscreen', handleWebkitEnd);
 
     const handleFullscreenChange = () => {
-      const isFs = Boolean(document.fullscreenElement);
+      const isFs = Boolean(
+        document.fullscreenElement ||
+        (document as any).webkitFullscreenElement ||
+        (document as any).mozFullScreenElement
+      );
       setIsFullscreen(isFs);
       if (!isFs) {
         video.controls = false;
       }
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
 
     // ─────────────────────────────────────────────────────────────
     // ENGINE SELECTION PIPELINE
     // ─────────────────────────────────────────────────────────────
 
     // Engine 1: Apple Native HLS (Safari on iOS / iPadOS / macOS)
-    // Uses native <video> with controls to expose Apple AVPlayer native Audio and Subtitle tracks
-    if (isM3U8 && canNativeHls && isIOS) {
+    if (isHls && canNativeHls && isIOS) {
       video.src = targetUrl;
       video.load();
-      video.play().catch(e => {
-        console.log('Apple autoplay deferred until user touch:', e);
-      });
+      safePlay(video);
     }
-    // Engine 2: mpegts.js for MPEG-TS Live Streams
-    else if (isMpegTs && mpegts && mpegts.isSupported()) {
+    // Engine 2: mpegts.js for MPEG-TS Live Streams (Chrome, Edge, Firefox, Android Web)
+    else if (isLiveTs && mpegts && mpegts.isSupported()) {
       try {
         const player = mpegts.createPlayer({
           type: 'mse',
@@ -572,37 +678,58 @@ export function usePlayerCore({
         mpegtsRef.current = player;
         player.attachMediaElement(video);
         player.load();
-        player.play().catch((e: any) => console.log('mpegts autoplay pending user gesture:', e));
+        player.play().catch((e: any) => {
+          console.log('mpegts autoplay pending user gesture:', e);
+          safePlay(video);
+        });
 
         player.on(mpegts.Events.ERROR, (errType: any, errDetail: any) => {
           console.warn('mpegts error:', errType, errDetail);
-          // Fallback to HLS
-          if (!targetUrl.includes('/api/hls/master.m3u8')) {
+          const altM3u8 = cleanUrl.replace(/\.ts(\?.*)?$/i, '.m3u8$1');
+          if (altM3u8 !== cleanUrl) {
+            initWebPlayer(XtreamAPI.getProxyUrl(altM3u8, true));
+          } else if (!targetUrl.includes('/api/hls/master.m3u8')) {
             const encoded = encodeURIComponent(cleanTargetUrl || targetUrl);
             initWebPlayer(`/api/hls/master.m3u8?url=${encoded}`);
           }
         });
       } catch (err) {
         console.warn('mpegts init failed, falling back to HLS:', err);
+        const altM3u8 = cleanUrl.replace(/\.ts(\?.*)?$/i, '.m3u8$1');
+        if (altM3u8 !== cleanUrl) {
+          initWebPlayer(XtreamAPI.getProxyUrl(altM3u8, true));
+        } else {
+          const encoded = encodeURIComponent(cleanTargetUrl || targetUrl);
+          initWebPlayer(`/api/hls/master.m3u8?url=${encoded}`);
+        }
+      }
+    }
+    // Engine 2b: Fallback for Live TS on iOS Safari where mpegts (MSE) is not supported
+    else if (isLiveTs && isIOS) {
+      const altM3u8 = cleanUrl.replace(/\.ts(\?.*)?$/i, '.m3u8$1');
+      if (altM3u8 !== cleanUrl) {
+        video.src = XtreamAPI.getProxyUrl(altM3u8, true);
+        video.load();
+        safePlay(video);
+      } else {
         const encoded = encodeURIComponent(cleanTargetUrl || targetUrl);
         initWebPlayer(`/api/hls/master.m3u8?url=${encoded}`);
       }
     }
     // Engine 3: HLS.js (Chrome, Firefox, Edge, Android Web)
-    // Calibrated for ZERO buffering: maxBufferLength 60s, maxMaxBufferLength 120s, backBufferLength 30s
-    else if (isM3U8 && HlsClass && HlsClass.isSupported()) {
+    else if (isHls && HlsClass && HlsClass.isSupported()) {
       const hls = new HlsClass({
         enableWorker: true,
-        lowLatencyMode: false, // Prevents aggressive stalls on IPTV streams
+        lowLatencyMode: false,
         backBufferLength: 30,
         maxBufferLength: 60,
         maxMaxBufferLength: 120,
-        maxBufferSize: 90 * 1024 * 1024, // 90 MB
+        maxBufferSize: 90 * 1024 * 1024,
         maxBufferHole: 0.5,
         highBufferWatchdogPeriod: 2,
         nudgeOffset: 0.2,
         nudgeMaxRetry: 5,
-        startLevel: -1, // Auto ABR
+        startLevel: -1,
         abrEwmaFastLive: 3.0,
         abrEwmaSlowLive: 9.0,
         abrEwmaFastVoD: 2.0,
@@ -666,7 +793,6 @@ export function usePlayerCore({
           setDuration(data.levels[0].details.totalduration);
         }
 
-        // Quality levels
         if (hls.levels && hls.levels.length > 0) {
           const qList: QualityLevel[] = hls.levels.map((lvl: any, idx: number) => ({
             id: idx,
@@ -678,7 +804,7 @@ export function usePlayerCore({
           setQualityLevels(qList);
         }
 
-        video.play().catch(() => {});
+        safePlay(video);
       });
 
       hls.on(HlsClass.Events.LEVEL_LOADED, (_event: any, data: any) => {
@@ -718,7 +844,7 @@ export function usePlayerCore({
     else {
       video.src = targetUrl;
       video.load();
-      video.play().catch(() => {});
+      safePlay(video);
     }
   }, [
     cleanupWebPlayer,
@@ -731,9 +857,9 @@ export function usePlayerCore({
     isMovieOrSeries,
     account,
     saveCurrentProgress,
-    handleClose,
     isIOS,
-    cleanTargetUrl
+    cleanTargetUrl,
+    safePlay
   ]);
 
   // Initial Boot & Media Probe
@@ -850,10 +976,18 @@ export function usePlayerCore({
 
   // Play / Pause
   const togglePlayPause = useCallback(() => {
+    if (requiresUserUnmute && webVideoRef.current) {
+      webVideoRef.current.muted = false;
+      setIsMuted(false);
+      setRequiresUserUnmute(false);
+    }
+    if (requiresUserGesture) {
+      handleUserGesturePlay();
+      return;
+    }
     if (Platform.OS === 'web' && webVideoRef.current) {
       if (webVideoRef.current.paused) {
-        webVideoRef.current.play().catch(() => {});
-        setIsPlaying(true);
+        safePlay(webVideoRef.current);
       } else {
         webVideoRef.current.pause();
         setIsPlaying(false);
@@ -867,7 +1001,7 @@ export function usePlayerCore({
         setIsPlaying(true);
       }
     }
-  }, [isPlaying]);
+  }, [isPlaying, requiresUserUnmute, requiresUserGesture, handleUserGesturePlay, safePlay]);
 
   // Mute / Unmute
   const toggleMute = useCallback(() => {
@@ -937,21 +1071,64 @@ export function usePlayerCore({
   const toggleFullscreen = useCallback(() => {
     if (Platform.OS === 'web') {
       const video = webVideoRef.current;
-      if (openDevicePlayer(video || undefined)) {
+      const isCurrentlyFs = Boolean(
+        document.fullscreenElement ||
+        (document as any).webkitFullscreenElement ||
+        (document as any).mozFullScreenElement
+      );
+
+      if (isCurrentlyFs) {
+        if (document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        } else if ((document as any).webkitExitFullscreen) {
+          (document as any).webkitExitFullscreen();
+        }
+        setIsFullscreen(false);
+        try {
+          if (screen.orientation && (screen.orientation as any).unlock) {
+            (screen.orientation as any).unlock();
+          }
+        } catch {}
         return;
       }
-      if (!document.fullscreenElement) {
-        const root = document.getElementById('root') || document.documentElement;
-        root.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {
-          video?.requestFullscreen?.().then(() => setIsFullscreen(true));
+
+      // Enter fullscreen:
+      // On iPhone (where standard element.requestFullscreen is not supported by Apple Safari):
+      if (isIOS && typeof (video as any)?.webkitEnterFullscreen === 'function' && !document.fullscreenEnabled) {
+        try {
+          (video as any).webkitEnterFullscreen();
+          setIsFullscreen(true);
+          return;
+        } catch (e) {
+          console.warn('iOS webkitEnterFullscreen error:', e);
+        }
+      }
+
+      // On Desktop, iPad, Android:
+      // Request fullscreen on player container element so all custom controls, titles, and menus remain interactive
+      const playerEl = document.getElementById('iptv-universal-player') || document.documentElement;
+      const reqFs = playerEl.requestFullscreen ||
+        (playerEl as any).webkitRequestFullscreen ||
+        (playerEl as any).mozRequestFullScreen ||
+        (playerEl as any).msRequestFullscreen;
+
+      if (reqFs) {
+        reqFs.call(playerEl).then(() => {
+          setIsFullscreen(true);
+          try {
+            if (screen.orientation && (screen.orientation as any).lock) {
+              (screen.orientation as any).lock('landscape').catch(() => {});
+            }
+          } catch {}
+        }).catch(() => {
+          video?.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {});
         });
-      } else {
-        document.exitFullscreen?.().then(() => setIsFullscreen(false));
       }
     } else if (nativeVideoRef.current) {
       nativeVideoRef.current.presentFullscreenPlayer();
+      setIsFullscreen(true);
     }
-  }, [openDevicePlayer]);
+  }, [isIOS]);
 
   // Select Audio Track
   const handleSelectAudioTrack = useCallback((idx: number) => {
@@ -1153,6 +1330,11 @@ export function usePlayerCore({
     handleSelectPlaybackSpeed,
     handleClose,
     initWebPlayer,
-    saveCurrentProgress
+    saveCurrentProgress,
+    requiresUserUnmute,
+    requiresUserGesture,
+    handleDismissUnmute,
+    handleUserGesturePlay,
+    handleNativePlaybackStatusUpdate
   };
 }
