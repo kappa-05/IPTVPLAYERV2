@@ -546,10 +546,12 @@ class HLSStreamManager:
                         "-pix_fmt", "yuv420p",
                         "-s", "1920x1080",
                         "-preset", "p1",
-                        "-tune", "ull",
                         "-b:v", "6000k",
                         "-maxrate", "8000k",
-                        "-bufsize", "12000k"
+                        "-bufsize", "12000k",
+                        "-g", "48",
+                        "-keyint_min", "48",
+                        "-no-scenecut", "1"
                     ])
                 else:
                     cmd.extend([
@@ -559,7 +561,10 @@ class HLSStreamManager:
                         "-preset", "ultrafast",
                         "-tune", "zerolatency",
                         "-threads", "0",
-                        "-crf", "22"
+                        "-crf", "22",
+                        "-g", "48",
+                        "-keyint_min", "48",
+                        "-sc_threshold", "0"
                     ])
             else:
                 cmd.extend(["-c:v", "copy"])
@@ -569,7 +574,8 @@ class HLSStreamManager:
                 "-b:a", "192k",
                 "-ac", "2",
                 "-ar", "48000",
-                "-af", "aresample=matrix_encoding=dplii,volume=1.25",
+                "-af", "aresample=async=1000:first_pts=0,volume=1.25",
+                "-max_muxing_queue_size", "2048",
                 "-avoid_negative_ts", "make_zero",
                 "-f", "hls",
                 "-hls_time", str(int(seg_duration)),
