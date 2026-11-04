@@ -106,6 +106,11 @@ export function usePlayerCore({
   const [requiresUserUnmute, setRequiresUserUnmute] = useState(false);
   const [requiresUserGesture, setRequiresUserGesture] = useState(false);
 
+  // Keep ref in sync with state for use inside event handler closures
+  useEffect(() => {
+    requiresUserGestureRef.current = requiresUserGesture;
+  }, [requiresUserGesture]);
+
   // Tracks & Quality States
   const [audioTracks, setAudioTracks] = useState<MediaTrack[]>([]);
   const [subtitleTracks, setSubtitleTracks] = useState<MediaTrack[]>([]);
@@ -134,6 +139,7 @@ export function usePlayerCore({
   const resumeTimerRef = useRef<any>(null);
   const fallbackTierRef = useRef<number>(0);
   const isClosingRef = useRef(false);
+  const requiresUserGestureRef = useRef(false);
   const appStateRef = useRef<AppStateStatus>((AppState.currentState as AppStateStatus) || 'active');
 
   // Extract clean target URL from proxy, HLS wrapper, or transcode wrapper for probes & fallbacks
@@ -488,19 +494,30 @@ export function usePlayerCore({
       setLoadingStatus('Buffering...');
     };
 
+    // Auto-recover when the stream stalls for too long (common with IPTV live TS streams)
+    let stalledTimer: any = null;
+    video.onstalled = () => {
+      if (stalledTimer) clearTimeout(stalledTimer);
+      stalledTimer = setTimeout(() => {
+        if (video.paused && !requiresUserGestureRef.current && video.readyState < 3) {
+          safePlay(video);
+        }
+      }, 3000);
+    };
+
     video.onloadeddata = () => {
       if (video.readyState >= 2) {
         setFirstFrameRendered(true);
       }
       syncNativeTracks();
-      if (video.paused && !requiresUserGesture) {
+      if (video.paused && !requiresUserGestureRef.current) {
         safePlay(video);
       }
     };
 
     video.oncanplay = () => {
       setLoading(false);
-      if (video.paused && !requiresUserGesture) {
+      if (video.paused && !requiresUserGestureRef.current) {
         safePlay(video);
       }
     };

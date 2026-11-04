@@ -439,7 +439,7 @@ export class XtreamAPI {
       const isHttpsPage = typeof window !== 'undefined' && window.location?.protocol === 'https:';
       const isHttpTarget = targetUrl.startsWith('http://');
 
-      if (useProxy || (isHttpsPage && isHttpTarget)) {
+      if (type === 'live' || useProxy || (isHttpsPage && isHttpTarget)) {
         return this.getProxyUrl(targetUrl, true);
       }
     }
