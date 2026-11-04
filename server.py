@@ -555,11 +555,11 @@ class HLSStreamManager:
                 "-hls_time", str(int(seg_duration)),
                 "-hls_list_size", "0",
                 "-hls_segment_type", "fmp4",
-                "-hls_fmp4_init_filename", os.path.join(sdir, "init.mp4"),
+                "-hls_fmp4_init_filename", "init.mp4",
                 "-hls_flags", "independent_segments",
                 "-start_number", str(start_seg),
-                "-hls_segment_filename", os.path.join(sdir, "seg_%04d.m4s"),
-                os.path.join(sdir, f"internal_{audio_track}_{start_seg}.m3u8")
+                "-hls_segment_filename", "seg_%04d.m4s",
+                f"internal_{audio_track}_{start_seg}.m3u8"
             ])
             try:
                 sess['proc'] = subprocess.Popen(
