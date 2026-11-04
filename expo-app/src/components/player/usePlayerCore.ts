@@ -118,6 +118,7 @@ export function usePlayerCore({
   const [trackModalVisible, setTrackModalVisible] = useState(false);
   const [qualityModalVisible, setQualityModalVisible] = useState(false);
   const [speedModalVisible, setSpeedModalVisible] = useState(false);
+  const [shortcutsModalVisible, setShortcutsModalVisible] = useState(false);
 
   // Scrubber dragging state
   const [isDraggingTrack, setIsDraggingTrack] = useState(false);
@@ -585,26 +586,26 @@ export function usePlayerCore({
         }
       }
 
-      // Tier 2: Real-time FFmpeg pipe remuxer via server.py (/api/transcode)
+      // Tier 2: Real-time FFmpeg pipe remuxer via server.py (/api/transcode with H.264 fallback)
       if (fallbackTierRef.current <= 1 && !targetUrl.includes('/api/transcode')) {
         fallbackTierRef.current = 2;
         setErrorMsg(null);
         setLoading(true);
-        setLoadingStatus('Remuxing compatibile (FFmpeg)...');
-        const transcodeUrl = `/api/transcode?url=${encodedTarget}`;
+        setLoadingStatus('Transcodifica compatibile (FFmpeg)...');
+        const transcodeUrl = `/api/transcode?url=${encodedTarget}&h264=1`;
         setTimeout(() => {
           initWebPlayer(transcodeUrl);
         }, 100);
         return;
       }
 
-      // Tier 3: Switch to HLS Master Playlist remuxer (/api/hls/master.m3u8)
+      // Tier 3: Switch to HLS Master Playlist remuxer (/api/hls/master.m3u8 with H.264 fallback)
       if (fallbackTierRef.current <= 2 && !targetUrl.includes('/api/hls/master.m3u8')) {
         fallbackTierRef.current = 3;
         setErrorMsg(null);
         setLoading(true);
         setLoadingStatus('Ottimizzazione formato stream (HLS)...');
-        const fallbackHlsUrl = `/api/hls/master.m3u8?url=${encodedTarget}`;
+        const fallbackHlsUrl = `/api/hls/master.m3u8?url=${encodedTarget}&h264=1`;
         setTimeout(() => {
           initWebPlayer(fallbackHlsUrl);
         }, 100);
@@ -750,7 +751,8 @@ export function usePlayerCore({
         fragLoadingMaxRetryTimeout: 64000,
         renderTextTracksNatively: true,
         subtitleDisplay: true,
-        autoStartLoad: true
+        autoStartLoad: true,
+        progressive: true
       });
       hlsRef.current = hls;
 
@@ -815,21 +817,54 @@ export function usePlayerCore({
 
       hls.on(HlsClass.Events.ERROR, (_event: any, data: any) => {
         if (data.fatal) {
+          const clean = cleanTargetUrl || targetUrl;
+          const encoded = encodeURIComponent(clean);
+
           switch (data.type) {
             case HlsClass.ErrorTypes.NETWORK_ERROR:
-              console.warn('HLS Network error, executing backoff recovery...');
+              console.warn('HLS Network error, executing backoff recovery...', data);
+              // If manifest failed to load or parse on live stream, fallback to MPEG-TS
+              if (data.details === 'manifestLoadError' || data.details === 'manifestParsingError') {
+                if (isLive) {
+                  const altTs = clean.replace(/\.m3u8(\?.*)?$/i, '.ts$1');
+                  if (altTs !== clean) {
+                    cleanupWebPlayer();
+                    initWebPlayer(XtreamAPI.getProxyUrl(altTs, true));
+                    return;
+                  }
+                } else if (isMovieOrSeries) {
+                  cleanupWebPlayer();
+                  initWebPlayer(`/api/transcode?url=${encoded}&h264=1`);
+                  return;
+                }
+              }
               hls.startLoad();
               break;
+
             case HlsClass.ErrorTypes.MEDIA_ERROR:
-              console.warn('HLS Media error, executing buffer recovery...');
+              console.warn('HLS Media error, executing buffer recovery...', data.details);
+              if (data.details === 'bufferIncompatibleCodecsError' && isMovieOrSeries) {
+                // Incompatible video codec (e.g. HEVC in Chrome/Firefox on PC) -> fallback to H.264 transcode
+                cleanupWebPlayer();
+                initWebPlayer(`/api/transcode?url=${encoded}&h264=1`);
+                return;
+              }
               hls.recoverMediaError();
               break;
+
             default:
               console.error('Fatal HLS error:', data);
-              // Fallback to transcode or proxy
-              if (targetUrl.includes('/api/hls/master.m3u8')) {
-                const encoded = encodeURIComponent(cleanTargetUrl || targetUrl);
-                initWebPlayer(`/api/transcode?url=${encoded}`);
+              if (isLive) {
+                const altTs = clean.replace(/\.m3u8(\?.*)?$/i, '.ts$1');
+                if (altTs !== clean) {
+                  cleanupWebPlayer();
+                  initWebPlayer(XtreamAPI.getProxyUrl(altTs, true));
+                  return;
+                }
+              }
+              if (isMovieOrSeries) {
+                cleanupWebPlayer();
+                initWebPlayer(`/api/transcode?url=${encoded}&h264=1`);
                 return;
               }
               setErrorMsg('Errore durante la decodifica del flusso.');
@@ -1215,11 +1250,11 @@ export function usePlayerCore({
           break;
         case 'ArrowUp':
           e.preventDefault();
-          changeVolume(volume + 0.1);
+          changeVolume(Math.min(1, volume + 0.05));
           break;
         case 'ArrowDown':
           e.preventDefault();
-          changeVolume(volume - 0.1);
+          changeVolume(Math.max(0, volume - 0.05));
           break;
         case 'm':
         case 'M':
@@ -1230,6 +1265,17 @@ export function usePlayerCore({
         case 'F':
           e.preventDefault();
           toggleFullscreen();
+          break;
+        case 'p':
+        case 'P':
+          e.preventDefault();
+          togglePictureInPicture();
+          break;
+        case '?':
+        case 'h':
+        case 'H':
+          e.preventDefault();
+          setShortcutsModalVisible(prev => !prev);
           break;
         case 'c':
         case 'C':
@@ -1242,7 +1288,11 @@ export function usePlayerCore({
           break;
         case 'Escape':
           e.preventDefault();
-          handleClose();
+          if (document.fullscreenElement || (document as any).webkitFullscreenElement || isFullscreen) {
+            toggleFullscreen();
+          } else {
+            handleClose();
+          }
           break;
         default:
           // Numbers 0..9 seek to 0% .. 90%
@@ -1309,6 +1359,8 @@ export function usePlayerCore({
     setQualityModalVisible,
     speedModalVisible,
     setSpeedModalVisible,
+    shortcutsModalVisible,
+    setShortcutsModalVisible,
     isDraggingTrack,
     setIsDraggingTrack,
     dragTime,

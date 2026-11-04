@@ -284,7 +284,7 @@ class HLSStreamManager:
         dur = self.probe_stream(target_url, hint_duration)[0]
         return dur
 
-    def get_vod_master_m3u8(self, target_url, duration, seg_duration=6.0, is_hevc=False, audio_tracks=None, subtitle_tracks=None):
+    def get_vod_master_m3u8(self, target_url, duration, seg_duration=6.0, is_hevc=False, audio_tracks=None, subtitle_tracks=None, force_h264=False):
         sid = hashlib.md5(target_url.encode('utf-8')).hexdigest()[:12]
         sdir = os.path.join(self.temp_root, sid)
         os.makedirs(sdir, exist_ok=True)
@@ -306,6 +306,7 @@ class HLSStreamManager:
                     'current_start_seg': 0,
                     'current_audio_track': 0,
                     'is_hevc': is_hevc,
+                    'force_h264': force_h264,
                     'audio_tracks': audio_tracks,
                     'subtitle_tracks': subtitle_tracks
                 }
@@ -313,6 +314,7 @@ class HLSStreamManager:
                 self.sessions[sid]['last_seen'] = time.time()
                 self.sessions[sid]['duration'] = duration
                 self.sessions[sid]['is_hevc'] = is_hevc
+                self.sessions[sid]['force_h264'] = force_h264
                 self.sessions[sid]['audio_tracks'] = audio_tracks
                 self.sessions[sid]['subtitle_tracks'] = subtitle_tracks
 
@@ -347,7 +349,7 @@ class HLSStreamManager:
                     f'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="{a_title}",DEFAULT={is_def},AUTOSELECT=YES,LANGUAGE="{a_lang}",URI="/api/hls/{sid}/index.m3u8?audio_track={a_idx}"'
                 )
 
-        codecs = 'codecs="hvc1.1.6.L93.B0,mp4a.40.2"' if is_hevc else 'codecs="avc1.640028,mp4a.40.2"'
+        codecs = 'codecs="avc1.640028,mp4a.40.2"' if (force_h264 or not is_hevc) else 'codecs="hvc1.1.6.L93.B0,mp4a.40.2"'
         stream_inf = [
             '#EXT-X-STREAM-INF:BANDWIDTH=8000000',
             'AVERAGE-BANDWIDTH=5000000',
@@ -480,6 +482,7 @@ class HLSStreamManager:
 
             seg_duration = sess.get('seg_duration', 6.0)
             is_hevc = sess.get('is_hevc', False)
+            force_h264 = sess.get('force_h264', False)
 
             cmd = [
                 ffmpeg_path,
@@ -508,10 +511,19 @@ class HLSStreamManager:
                 "-i", target_url,
                 "-map", "0:v:0",
                 "-map", f"0:a:{audio_track}?" if audio_track >= 0 else "0:a?",
-                "-c:v", "copy",
             ])
-            if is_hevc:
-                cmd.extend(["-tag:v", "hvc1"])
+
+            if force_h264:
+                cmd.extend([
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-tune", "zerolatency",
+                    "-crf", "22"
+                ])
+            else:
+                cmd.extend(["-c:v", "copy"])
+                if is_hevc:
+                    cmd.extend(["-tag:v", "hvc1"])
 
             cmd.extend([
                 "-c:a", "aac",
@@ -1368,10 +1380,12 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                     except Exception:
                         hint_dur = 0.0
 
+                force_h264_req = query.get('h264', ['0'])[0] == '1' or query.get('force_h264', ['0'])[0] == '1'
                 duration, is_hevc, audio_tracks, subtitle_tracks = HLS_STREAM_MGR.probe_stream(target_url, hint_dur)
                 sid, m3u8_bytes = HLS_STREAM_MGR.get_vod_master_m3u8(
                     target_url, duration, seg_duration=6.0, is_hevc=is_hevc,
-                    audio_tracks=audio_tracks, subtitle_tracks=subtitle_tracks
+                    audio_tracks=audio_tracks, subtitle_tracks=subtitle_tracks,
+                    force_h264=force_h264_req
                 )
 
                 self.send_response(200)

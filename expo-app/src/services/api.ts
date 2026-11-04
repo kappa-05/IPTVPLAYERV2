@@ -78,7 +78,29 @@ export class XtreamAPI {
     return 0;
   }
 
-  static getHlsUrl(targetUrl: string, itemOrDuration?: any): string {
+  static canPlayHevc(): boolean {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return true;
+    try {
+      if (typeof MediaSource !== 'undefined' && typeof MediaSource.isTypeSupported === 'function') {
+        if (
+          MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L93.B0"') ||
+          MediaSource.isTypeSupported('video/mp4; codecs="hev1.1.6.L93.B0"')
+        ) {
+          return true;
+        }
+      }
+      const v = document.createElement('video');
+      if (typeof v.canPlayType === 'function') {
+        const res = v.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"');
+        if (res === 'probably' || res === 'maybe') {
+          return true;
+        }
+      }
+    } catch {}
+    return false;
+  }
+
+  static getHlsUrl(targetUrl: string, itemOrDuration?: any, forceH264?: boolean): string {
     const clean = (targetUrl || '').trim();
     let dur = 0;
     if (typeof itemOrDuration === 'number') {
@@ -87,10 +109,12 @@ export class XtreamAPI {
       dur = this.extractDuration(itemOrDuration);
     }
     const durParam = dur > 0 ? `&duration=${Math.floor(dur)}` : '';
+    const h264Param = (forceH264 || !this.canPlayHevc()) ? '&h264=1' : '';
+    const qs = `${encodeURIComponent(clean)}${durParam}${h264Param}`;
     if (typeof window !== 'undefined' && window.location) {
-      return `${window.location.origin}/api/hls/master.m3u8?url=${encodeURIComponent(clean)}${durParam}`;
+      return `${window.location.origin}/api/hls/master.m3u8?url=${qs}`;
     }
-    return `/api/hls/master.m3u8?url=${encodeURIComponent(clean)}${durParam}`;
+    return `/api/hls/master.m3u8?url=${qs}`;
   }
 
   static async fetchJSON<T = any>(url: string, useProxy: boolean = true, timeoutMs: number = 15000): Promise<T> {
@@ -405,7 +429,7 @@ export class XtreamAPI {
 
         // If 4K, HEVC, AC3, or non-MP4: route to on-the-fly HLS pipeline to avoid MediaError Code 4
         if (isTarget4k || !isMp4) {
-          return this.getHlsUrl(targetUrl, item);
+          return this.getHlsUrl(targetUrl, item, isTarget4k && !this.canPlayHevc());
         }
         return this.getProxyUrl(targetUrl, true);
       }

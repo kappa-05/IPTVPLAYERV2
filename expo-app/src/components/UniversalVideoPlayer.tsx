@@ -18,6 +18,7 @@ import { SeamlessPosterBackdrop } from './player/SeamlessPosterBackdrop';
 import { TrackSelectionModal } from './player/TrackSelectionModal';
 import { QualitySelectionModal } from './player/QualitySelectionModal';
 import { SpeedSelectionModal } from './player/SpeedSelectionModal';
+import { KeyboardShortcutsModal } from './player/KeyboardShortcutsModal';
 
 let ExpoVideo: any = null;
 let ResizeModeEnum: any = null;
@@ -87,6 +88,8 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
     setQualityModalVisible,
     speedModalVisible,
     setSpeedModalVisible,
+    shortcutsModalVisible,
+    setShortcutsModalVisible,
     isDraggingTrack,
     setIsDraggingTrack,
     dragTime,
@@ -129,6 +132,17 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
   const [isHoveredMini, setIsHoveredMini] = useState(false);
   const [hoverSeekTime, setHoverSeekTime] = useState<number | null>(null);
   const [hoverSeekPos, setHoverSeekPos] = useState<number>(0);
+
+  const [volumeFeedback, setVolumeFeedback] = useState<number | null>(null);
+  const volumeFeedbackTimeout = useRef<any>(null);
+
+  const showVolumeHud = useCallback((pct: number) => {
+    setVolumeFeedback(pct);
+    if (volumeFeedbackTimeout.current) clearTimeout(volumeFeedbackTimeout.current);
+    volumeFeedbackTimeout.current = setTimeout(() => {
+      setVolumeFeedback(null);
+    }, 1200);
+  }, []);
 
   const controlsAnim = useRef(new Animated.Value(1)).current;
   const animFade = useRef(new Animated.Value(0)).current;
@@ -191,6 +205,18 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
     }, 3000);
   }, [clearControlsTimer, controlsAnim, isPlaying, isDraggingTrack, trackModalVisible, qualityModalVisible, speedModalVisible]);
 
+  const handleWheel = useCallback((e: any) => {
+    if (Platform.OS !== 'web' || isTouchDevice) return;
+    const delta = e.deltaY ?? 0;
+    if (Math.abs(delta) < 2) return;
+    e.preventDefault?.();
+    const step = 0.05;
+    const newVol = delta < 0 ? Math.min(1, volume + step) : Math.max(0, volume - step);
+    changeVolume(newVol);
+    showVolumeHud(Math.round(newVol * 100));
+    resetControlsTimer();
+  }, [isTouchDevice, volume, changeVolume, showVolumeHud, resetControlsTimer]);
+
   // Animated close handler
   const handleAnimatedClose = useCallback(() => {
     Animated.parallel([
@@ -227,23 +253,34 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
     lastTapRef.current = now;
 
     if (timeDiff < 300) {
-      // Double tap skip
-      const clickX = e.nativeEvent?.locationX ?? e.nativeEvent?.offsetX ?? (width / 2);
-      if (clickX < width / 2) {
-        seekRelative(-10);
+      // Double tap / click
+      if (Platform.OS === 'web' && !isTouchDevice) {
+        // Desktop PC: Double click toggles fullscreen
+        toggleFullscreen();
       } else {
-        seekRelative(10);
+        const clickX = e.nativeEvent?.locationX ?? e.nativeEvent?.offsetX ?? (width / 2);
+        if (clickX < width / 2) {
+          seekRelative(-10);
+        } else {
+          seekRelative(10);
+        }
       }
     } else {
-      // Single tap: toggle controls smoothly without hijacking into fullscreen
-      if (showControls) {
-        Animated.timing(controlsAnim, {
-          toValue: 0,
-          duration: 180,
-          useNativeDriver: Platform.OS !== 'web'
-        }).start(() => setShowControls(false));
-      } else {
+      // Single tap / click
+      if (Platform.OS === 'web' && !isTouchDevice) {
+        // Desktop PC: Single click on video toggles play / pause immediately
+        togglePlayPause();
         resetControlsTimer();
+      } else {
+        if (showControls) {
+          Animated.timing(controlsAnim, {
+            toValue: 0,
+            duration: 180,
+            useNativeDriver: Platform.OS !== 'web'
+          }).start(() => setShowControls(false));
+        } else {
+          resetControlsTimer();
+        }
       }
     }
   };
@@ -372,10 +409,13 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
         {
           opacity: animFade,
           transform: [{ scale: animScale }]
-        }
+        },
+        Platform.OS === 'web' && !isMinimized && !showControls && isPlaying ? ({ cursor: 'none' } as any) : undefined
       ]}
       // @ts-ignore
       onMouseMove={!isMinimized ? resetControlsTimer : undefined}
+      // @ts-ignore
+      onWheel={!isMinimized ? handleWheel : undefined}
     >
       {/* ── 1. Zero-Glitch Poster & Spinner Backdrop ── */}
       <SeamlessPosterBackdrop
@@ -451,6 +491,18 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
             <Text style={styles.gesturePlayTitle}>Tocca per riprodurre</Text>
             <Text style={styles.gesturePlaySub}>Premi qui per avviare lo stream</Text>
           </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ── 3a. Desktop Volume Feedback HUD ── */}
+      {volumeFeedback !== null && (
+        <View style={styles.volumeFeedbackBadge} pointerEvents="none">
+          <Ionicons
+            name={volumeFeedback === 0 ? 'volume-mute' : volumeFeedback < 50 ? 'volume-low' : 'volume-high'}
+            size={28}
+            color="#fff"
+          />
+          <Text style={styles.volumeFeedbackText}>{volumeFeedback}%</Text>
         </View>
       )}
 
@@ -572,6 +624,16 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
                 <TouchableOpacity style={styles.glassBtn} onPress={onOpenEpg}>
                   <Ionicons name="calendar-outline" size={16} color="#fff" />
                   <Text style={styles.glassBtnText}>Guida TV</Text>
+                </TouchableOpacity>
+              )}
+
+              {Platform.OS === 'web' && !isTouchDevice && (
+                <TouchableOpacity
+                  style={styles.roundIconBtn}
+                  onPress={() => setShortcutsModalVisible(true)}
+                  accessibilityLabel="Scorciatoie da tastiera (?)"
+                >
+                  <Ionicons name="help-circle-outline" size={18} color="#fff" />
                 </TouchableOpacity>
               )}
 
@@ -923,6 +985,12 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
         onSelectSpeed={handleSelectPlaybackSpeed}
         onClose={() => setSpeedModalVisible(false)}
       />
+
+      {/* ── 12. Desktop Keyboard Shortcuts Modal ── */}
+      <KeyboardShortcutsModal
+        visible={shortcutsModalVisible}
+        onClose={() => setShortcutsModalVisible(false)}
+      />
     </Animated.View>
   );
 
@@ -1001,6 +1069,31 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: 'rgba(255, 255, 255, 0.25)',
     gap: 4
+  },
+  volumeFeedbackBadge: {
+    position: 'absolute',
+    top: '45%',
+    alignSelf: 'center',
+    zIndex: 35,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: 'rgba(12, 16, 26, 0.88)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(59, 130, 246, 0.5)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.8,
+    shadowRadius: 20
+  },
+  volumeFeedbackText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums']
   },
   seekRippleLeft: {
     left: '15%'
