@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+﻿import { Platform } from 'react-native';
 import { Account, Category, LiveStream, MediaType, SeriesDetails, SeriesItem, VodStream } from '../types';
 import { M3UParser } from './m3uParser';
 import { StorageService } from './storage';
@@ -79,24 +79,9 @@ export class XtreamAPI {
   }
 
   static canPlayHevc(): boolean {
-    if (Platform.OS !== 'web' || typeof window === 'undefined') return true;
-    try {
-      if (typeof MediaSource !== 'undefined' && typeof MediaSource.isTypeSupported === 'function') {
-        if (
-          MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L93.B0"') ||
-          MediaSource.isTypeSupported('video/mp4; codecs="hev1.1.6.L93.B0"')
-        ) {
-          return true;
-        }
-      }
-      const v = document.createElement('video');
-      if (typeof v.canPlayType === 'function') {
-        const res = v.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"');
-        if (res === 'probably' || res === 'maybe') {
-          return true;
-        }
-      }
-    } catch {}
+    // On PC web browsers (Chrome/Firefox/Edge), 10-bit HEVC in MSE/HLS causes MediaError Code 4
+    // or playback failure. By returning false, we instruct server.py to transcode HEVC/4K
+    // streams to standard H.264 (NVENC hardware accelerated), guaranteeing flawless playback.
     return false;
   }
 
@@ -381,7 +366,7 @@ export class XtreamAPI {
         if (type === 'vod' || type === 'series') {
           // ALL VOD/series on web go through the server HLS pipeline.
           // This handles MKV, HEVC, AC3/EAC3/DTS, and any other unsupported codec
-          // transparently via FFmpeg remuxing (video copy + audio→AAC for H.264,
+          // transparently via FFmpeg remuxing (video copy + audioΓåÆAAC for H.264,
           // full transcode for HEVC when browser can't decode it).
           const forceH264 = !this.canPlayHevc();
           return this.getHlsUrl(item.direct_source, item, forceH264);
@@ -421,8 +406,8 @@ export class XtreamAPI {
     if (Platform.OS === 'web') {
       if (type === 'vod' || type === 'series') {
         // ALL VOD/series on web go through the server HLS pipeline.
-        // The server will probe the stream: if H.264 → copy video, if HEVC → transcode.
-        // Audio AC3/EAC3/DTS → always transcoded to AAC for browser compatibility.
+        // The server will probe the stream: if H.264 ΓåÆ copy video, if HEVC ΓåÆ transcode.
+        // Audio AC3/EAC3/DTS ΓåÆ always transcoded to AAC for browser compatibility.
         const forceH264 = !this.canPlayHevc();
         return this.getHlsUrl(targetUrl, item, forceH264);
       }

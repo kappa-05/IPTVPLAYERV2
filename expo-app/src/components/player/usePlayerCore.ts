@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+﻿import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Platform } from 'react-native';
 import { PlayingStream, Account, MediaTrack, QualityLevel, PlaybackSpeed } from '../../types';
 import { XtreamAPI } from '../../services/api';
