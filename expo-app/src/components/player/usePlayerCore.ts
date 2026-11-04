@@ -323,6 +323,10 @@ export function usePlayerCore({
       setRequiresUserUnmute(false);
       setRequiresUserGesture(false);
     } catch (err: any) {
+      // Ignore AbortError: normal during loading, switching streams or rapid playback initiation
+      if (err?.name === 'AbortError') {
+        return;
+      }
       console.warn('Playback play() with audio blocked by browser policy:', err);
       // Fallback 1: Try playing muted so video and frames render immediately
       try {
@@ -332,11 +336,17 @@ export function usePlayerCore({
         setRequiresUserUnmute(true);
         setRequiresUserGesture(false);
         setIsPlaying(true);
-      } catch (muteErr) {
+      } catch (muteErr: any) {
+        if (muteErr?.name === 'AbortError') {
+          return;
+        }
         console.warn('Muted autoplay also blocked, user gesture required:', muteErr);
-        setRequiresUserGesture(true);
-        setIsPlaying(false);
-        setLoading(false);
+        // Only require user gesture if the video has loaded metadata or frames
+        if (target.readyState >= 1) {
+          setRequiresUserGesture(true);
+          setIsPlaying(false);
+          setLoading(false);
+        }
       }
     }
   }, []);
@@ -353,18 +363,35 @@ export function usePlayerCore({
   const handleUserGesturePlay = useCallback(() => {
     if (webVideoRef.current) {
       const v = webVideoRef.current;
+      if (mpegtsRef.current) {
+        try {
+          mpegtsRef.current.play();
+        } catch {}
+      }
+      if (hlsRef.current) {
+        try {
+          hlsRef.current.startLoad();
+        } catch {}
+      }
+      setLoading(true);
+      setLoadingStatus('Avvio riproduzione...');
       v.play().then(() => {
         setIsPlaying(true);
         setRequiresUserGesture(false);
         setRequiresUserUnmute(false);
-      }).catch(() => {
+        setLoading(false);
+      }).catch((e) => {
+        console.warn('User gesture play failed, trying muted:', e);
         v.muted = true;
         setIsMuted(true);
         v.play().then(() => {
           setIsPlaying(true);
           setRequiresUserGesture(false);
           setRequiresUserUnmute(true);
-        }).catch(() => {});
+          setLoading(false);
+        }).catch(() => {
+          setLoading(false);
+        });
       });
     } else if (nativeVideoRef.current) {
       nativeVideoRef.current.playAsync?.().catch(() => {});
@@ -466,10 +493,16 @@ export function usePlayerCore({
         setFirstFrameRendered(true);
       }
       syncNativeTracks();
+      if (video.paused && !requiresUserGesture) {
+        safePlay(video);
+      }
     };
 
     video.oncanplay = () => {
       setLoading(false);
+      if (video.paused && !requiresUserGesture) {
+        safePlay(video);
+      }
     };
 
     video.onplaying = () => {
@@ -679,10 +712,25 @@ export function usePlayerCore({
         mpegtsRef.current = player;
         player.attachMediaElement(video);
         player.load();
-        player.play().catch((e: any) => {
-          console.log('mpegts autoplay pending user gesture:', e);
-          safePlay(video);
+
+        player.on(mpegts.Events.MEDIA_INFO, () => {
+          setLoading(false);
+          setFirstFrameRendered(true);
+          setIsPlaying(true);
         });
+
+        const playPromise = player.play();
+        if (playPromise && typeof playPromise.then === 'function') {
+          playPromise.then(() => {
+            setIsPlaying(true);
+            setLoading(false);
+          }).catch((e: any) => {
+            console.log('mpegts autoplay pending user gesture:', e);
+            safePlay(video);
+          });
+        } else {
+          safePlay(video);
+        }
 
         player.on(mpegts.Events.ERROR, (errType: any, errDetail: any) => {
           console.warn('mpegts error:', errType, errDetail);

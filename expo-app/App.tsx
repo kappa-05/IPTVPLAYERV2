@@ -352,7 +352,9 @@ export default function App() {
     );
 
     const detectedType: MediaType = isVod ? 'vod' : (currentTab === 'live' ? 'live' : (activeTab === 'epg' ? 'live' : 'live'));
-    const extension = raw.container_extension || (detectedType === 'live' ? 'm3u8' : 'mp4');
+    const isApple = Platform.OS === 'ios' || Platform.OS === 'macos' || (Platform.OS === 'web' && typeof navigator !== 'undefined' && /Macintosh|iPhone|iPad|iPod/i.test(navigator.userAgent));
+    const defaultLiveExt = isApple ? 'm3u8' : 'ts';
+    const extension = raw.container_extension || (detectedType === 'live' ? defaultLiveExt : 'mp4');
 
     const streamUrl = XtreamAPI.buildStreamUrl(
       account,

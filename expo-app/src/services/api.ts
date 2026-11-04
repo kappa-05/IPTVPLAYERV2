@@ -411,7 +411,9 @@ export class XtreamAPI {
 
     let targetUrl = '';
     if (type === 'live') {
-      const extension = (ext || 'm3u8').replace(/^\./, '');
+      const isApple = Platform.OS === 'ios' || Platform.OS === 'macos' || (Platform.OS === 'web' && typeof navigator !== 'undefined' && /Macintosh|iPhone|iPad|iPod/i.test(navigator.userAgent));
+      const defaultExt = isApple ? 'm3u8' : 'ts';
+      const extension = (ext || defaultExt).replace(/^\./, '');
       targetUrl = `${cleanHost}/live/${username}/${pass}/${sid}.${extension}`;
     } else if (type === 'vod') {
       const extension = (item.container_extension || ext || 'mp4').replace(/^\./, '').toLowerCase();

@@ -27,6 +27,7 @@ import math
 import tempfile
 import atexit
 import hashlib
+import itertools
 
 # Unverified SSL context to prevent certificate validation errors on IPTV servers
 SSL_UNVERIFIED_CTX = ssl._create_unverified_context()
@@ -791,10 +792,40 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             )
 
             # Check if this is an M3U8 playlist to rewrite
-            if is_m3u8 and not is_head:
-                raw_text = resp.text
-                if raw_text.startswith('#EXTM3U') or is_m3u8:
+            stream_iter = None
+            first_chunk = None
+
+            if is_m3u8 and not is_head and 'video/' not in content_type.lower():
+                stream_iter = resp.iter_content(chunk_size=65536)
+                try:
+                    first_chunk = next(stream_iter)
+                except StopIteration:
+                    first_chunk = b''
+                except Exception:
+                    first_chunk = b''
+
+                # Check if the content is binary MPEG-TS (starts with 0x47 sync byte) or actual M3U8 text
+                is_ts_binary = bool(first_chunk and (first_chunk.startswith(b'\x47') or b'\x00' in first_chunk[:64]))
+                is_real_m3u8 = (
+                    not is_ts_binary and
+                    bool(first_chunk) and
+                    (first_chunk.startswith(b'#EXTM3U') or b'#EXT-X-' in first_chunk[:512] or b'#EXTINF' in first_chunk[:512])
+                )
+
+                if is_real_m3u8:
+                    chunks = [first_chunk]
+                    total_bytes = len(first_chunk)
                     try:
+                        for chunk in stream_iter:
+                            chunks.append(chunk)
+                            total_bytes += len(chunk)
+                            if total_bytes > 2 * 1024 * 1024:
+                                break
+                    except Exception:
+                        pass
+                    raw_bytes = b''.join(chunks)
+                    try:
+                        raw_text = raw_bytes.decode('utf-8', errors='replace')
                         rewritten_text = rewrite_m3u8(raw_text, actual_url)
                         rewritten_bytes = rewritten_text.encode('utf-8')
 
@@ -810,6 +841,10 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                         return
                     except Exception:
                         pass
+                elif is_ts_binary:
+                    # Upstream returned raw MPEG-TS despite .m3u8 in the URL
+                    content_type = 'video/mp2t'
+                    is_m3u8 = False
 
             # For JSON API requests, deliver decompressed content cleanly and cache in memory
             if is_api_request or 'application/json' in content_type.lower():
@@ -920,7 +955,14 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                         break
                 return
 
-            for chunk in resp.iter_content(chunk_size=65536):
+            if first_chunk:
+                try:
+                    self.wfile.write(first_chunk)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    return
+
+            iterator = stream_iter if stream_iter is not None else resp.iter_content(chunk_size=65536)
+            for chunk in iterator:
                 if not chunk:
                     break
                 try:
@@ -943,28 +985,28 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 accept_ranges = resp.headers.get('Accept-Ranges', 'bytes')
                 content_encoding = resp.headers.get('Content-Encoding', '').lower()
 
-                raw_data = resp.read()
-
-                # Decompress if gzipped
-                if content_encoding == 'gzip' or raw_data.startswith(b'\x1f\x8b'):
-                    try:
-                        raw_data = gzip.decompress(raw_data)
-                    except Exception:
-                        pass
-                elif content_encoding == 'deflate':
-                    try:
-                        raw_data = zlib.decompress(raw_data)
-                    except Exception:
-                        pass
-
                 is_m3u8 = (
                     '.m3u8' in target_url.lower() or
                     '.m3u8' in actual_url.lower() or
                     'mpegurl' in content_type.lower()
                 )
 
-                if is_m3u8 and not is_head:
-                    try:
+                if is_m3u8 and not is_head and 'video/' not in content_type.lower():
+                    first_chunk = resp.read(65536)
+                    is_ts_binary = bool(first_chunk and (first_chunk.startswith(b'\x47') or b'\x00' in first_chunk[:64]))
+                    is_real_m3u8 = (
+                        not is_ts_binary and
+                        bool(first_chunk) and
+                        (first_chunk.startswith(b'#EXTM3U') or b'#EXT-X-' in first_chunk[:512] or b'#EXTINF' in first_chunk[:512])
+                    )
+                    if is_real_m3u8:
+                        rest = resp.read(2 * 1024 * 1024)
+                        raw_data = first_chunk + rest
+                        if content_encoding == 'gzip' or raw_data.startswith(b'\x1f\x8b'):
+                            try:
+                                raw_data = gzip.decompress(raw_data)
+                            except Exception:
+                                pass
                         text = raw_data.decode('utf-8', errors='replace')
                         rewritten_text = rewrite_m3u8(text, actual_url)
                         rewritten_bytes = rewritten_text.encode('utf-8')
@@ -978,13 +1020,62 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                         self.end_headers()
                         self.wfile.write(rewritten_bytes)
                         return
-                    except Exception:
-                        pass
 
+                    # Not real M3U8: stream first_chunk followed by remaining chunks directly
+                    if is_ts_binary:
+                        content_type = 'video/mp2t'
+                    self.send_response(status_code)
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
+                    self.send_header('Access-Control-Allow-Headers', '*')
+                    self.send_header('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type')
+                    self.send_header('Content-Type', content_type)
+                    if content_length:
+                        self.send_header('Content-Length', content_length)
+                    if content_range:
+                        self.send_header('Content-Range', content_range)
+                    self.send_header('Accept-Ranges', accept_ranges or 'bytes')
+                    self.send_header('Cache-Control', 'public, max-age=3600')
+                    self.end_headers()
+                    if not is_head:
+                        if first_chunk:
+                            try:
+                                self.wfile.write(first_chunk)
+                            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                                return
+                        while True:
+                            chunk = resp.read(65536)
+                            if not chunk:
+                                break
+                            try:
+                                self.wfile.write(chunk)
+                            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                                break
+                    return
+
+                # If JSON API request, read up to 10MB cleanly
+                if is_api_request or 'application/json' in content_type.lower():
+                    raw_data = resp.read(10 * 1024 * 1024)
+                    if content_encoding == 'gzip' or raw_data.startswith(b'\x1f\x8b'):
+                        try:
+                            raw_data = gzip.decompress(raw_data)
+                        except Exception:
+                            pass
+                    self.send_response(status_code)
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD')
+                    self.send_header('Access-Control-Allow-Headers', '*')
+                    self.send_header('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type')
+                    self.send_header('Content-Type', content_type)
+                    self.send_header('Content-Length', str(len(raw_data)))
+                    self.end_headers()
+                    if not is_head:
+                        self.wfile.write(raw_data)
+                    return
+
+                # Otherwise media stream: chunked streaming!
                 if is_media_stream or '/movie/' in lower_url or '/series/' in lower_url or '/live/' in lower_url:
-                    if is_m3u8:
-                        content_type = 'application/vnd.apple.mpegurl'
-                    elif lower_url.endswith('.ts') or '.ts?' in lower_url or '.ts&' in lower_url:
+                    if lower_url.endswith('.ts') or '.ts?' in lower_url or content_type == 'video/mp2t':
                         content_type = 'video/mp2t'
                     elif not is_api_request:
                         content_type = 'video/mp4'
@@ -995,18 +1086,22 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 self.send_header('Access-Control-Allow-Headers', '*')
                 self.send_header('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type')
                 self.send_header('Content-Type', content_type)
-                self.send_header('Content-Length', str(len(raw_data)))
+                if content_length:
+                    self.send_header('Content-Length', content_length)
                 if content_range:
                     self.send_header('Content-Range', content_range)
-                if accept_ranges:
-                    self.send_header('Accept-Ranges', accept_ranges)
-                else:
-                    self.send_header('Accept-Ranges', 'bytes')
+                self.send_header('Accept-Ranges', accept_ranges or 'bytes')
                 self.send_header('Cache-Control', 'public, max-age=3600')
                 self.end_headers()
-
                 if not is_head:
-                    self.wfile.write(raw_data)
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        try:
+                            self.wfile.write(chunk)
+                        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                            break
                 return
 
             except urllib.error.HTTPError as e:
