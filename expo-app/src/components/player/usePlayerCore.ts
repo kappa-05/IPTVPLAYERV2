@@ -192,9 +192,13 @@ export function usePlayerCore({
         enableWorker: true,
         lowLatencyMode: false,
         backBufferLength: 30,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
         maxBufferHole: 0.5,
+        fragLoadingTimeOut: 30000,
+        fragLoadingMaxRetry: 6,
+        manifestLoadingTimeOut: 20000,
+        manifestLoadingMaxRetry: 4,
         autoStartLoad: true
       });
       hlsRef.current = hls;
@@ -252,6 +256,16 @@ export function usePlayerCore({
                   }, 200);
                   return;
                 }
+              }
+              // Fallback for VOD / Movies: if HLS failed and did not have &h264=1, retry with forced H264
+              if (!isLive && !isSwitchingRef.current && !targetUrl.includes('&h264=1')) {
+                isSwitchingRef.current = true;
+                const forceH264Url = targetUrl + '&h264=1';
+                setTimeout(() => {
+                  isSwitchingRef.current = false;
+                  loadStream(forceH264Url);
+                }, 200);
+                return;
               }
               setErrorMsg('Impossibile caricare il flusso multimediale.');
               setIsBuffering(false);
@@ -384,16 +398,43 @@ export function usePlayerCore({
     const onError = () => {
       const code = video.error ? video.error.code : 0;
       console.warn('HTML5 Video Error code:', code);
-      // If error occurs on live TS, attempt smooth HLS recovery
-      if (isLive && !isSwitchingRef.current && stream?.streamUrl) {
-        isSwitchingRef.current = true;
-        const clean = stream.streamUrl;
-        const altM3u8 = clean.includes('.ts') ? clean.replace(/\.ts(\?.*)?$/i, '.m3u8$1') : clean;
-        setTimeout(() => {
-          isSwitchingRef.current = false;
-          loadStream(altM3u8);
-        }, 300);
-        return;
+      if (!isSwitchingRef.current && stream?.streamUrl) {
+        if (isLive) {
+          isSwitchingRef.current = true;
+          const clean = stream.streamUrl;
+          const altM3u8 = clean.includes('.ts') ? clean.replace(/\.ts(\?.*)?$/i, '.m3u8$1') : clean;
+          if (altM3u8 !== clean) {
+            setTimeout(() => {
+              isSwitchingRef.current = false;
+              loadStream(altM3u8);
+            }, 300);
+            return;
+          }
+        } else {
+          // VOD / Movie / Series Error (Code 3: MEDIA_ERR_DECODE or Code 4: MEDIA_ERR_SRC_NOT_SUPPORTED)
+          const curUrl = stream.streamUrl;
+          // If the stream wasn't routed through HLS yet, switch to server HLS pipeline with forceH264
+          if (!curUrl.includes('/api/hls/')) {
+            isSwitchingRef.current = true;
+            console.log('[PlayerCore] Video error code', code, 'on movie/series. Falling back to server HLS remuxer...');
+            const fallbackUrl = XtreamAPI.getHlsUrl(curUrl, stream.rawItem, true);
+            setTimeout(() => {
+              isSwitchingRef.current = false;
+              loadStream(fallbackUrl);
+            }, 200);
+            return;
+          } else if (!curUrl.includes('&h264=1')) {
+            // If already on HLS but failed, force H.264 transcode
+            isSwitchingRef.current = true;
+            console.log('[PlayerCore] HLS error code', code, 'on movie/series. Retrying with forced H.264 transcode...');
+            const forceH264Url = curUrl + '&h264=1';
+            setTimeout(() => {
+              isSwitchingRef.current = false;
+              loadStream(forceH264Url);
+            }, 200);
+            return;
+          }
+        }
       }
       setErrorMsg('Impossibile riprodurre lo stream multimediale.');
       setIsBuffering(false);

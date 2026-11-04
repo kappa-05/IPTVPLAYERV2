@@ -376,20 +376,21 @@ export class XtreamAPI {
 
   static buildStreamUrl(account: Account, item: any, type: MediaType, ext?: string): string {
     // Check if item contains 4K, UHD, HEVC, AC3, EAC3 or DTS flags in title, name, or metadata
-    const itemMetaStr = `${item.name || ''} ${item.title || ''} ${item.container_extension || ''}`;
-    const is4kOrHevc = /(4k|uhd|hevc|h265|h\.265|hdr|10bit|ac3|eac3|dts)/i.test(itemMetaStr);
+    const itemMetaStr = `${item.name || ''} ${item.title || ''} ${item.container_extension || ''} ${item.category_name || ''}`;
+    const is4kOrHevc = /(4k|uhd|hevc|h265|h\.265|hdr|10bit|ac3|eac3|dts|2160)/i.test(itemMetaStr);
 
     // If the stream object already carries a direct_source (e.g. from M3U playlist)
     if (item.direct_source) {
       if (Platform.OS === 'web') {
         if (type === 'vod' || type === 'series') {
           const isMp4 = item.direct_source.toLowerCase().includes('.mp4');
-          const isDirect4k = is4kOrHevc || /(4k|uhd|hevc|h265|h\.265|hdr|10bit|ac3|eac3|dts)/i.test(item.direct_source);
+          const isDirect4k = is4kOrHevc || /(4k|uhd|hevc|h265|h\.265|hdr|10bit|ac3|eac3|dts|2160)/i.test(item.direct_source);
           // If 4K, HEVC, AC3, or non-MP4: route to HLS remuxing to avoid MediaError Code 4
           if (isMp4 && !isDirect4k) {
             return this.getProxyUrl(item.direct_source, true);
           }
-          return this.getHlsUrl(item.direct_source, item);
+          const forceH264 = !this.canPlayHevc();
+          return this.getHlsUrl(item.direct_source, item, forceH264);
         }
         if (account.useProxy) {
           return this.getProxyUrl(item.direct_source, true);
@@ -427,11 +428,12 @@ export class XtreamAPI {
       if (type === 'vod' || type === 'series') {
         const fileExt = (item.container_extension || ext || '').replace(/^\./, '').toLowerCase();
         const isMp4 = fileExt === 'mp4' || targetUrl.toLowerCase().endsWith('.mp4');
-        const isTarget4k = is4kOrHevc || /(4k|uhd|hevc|h265|h\.265|hdr|10bit|ac3|eac3|dts)/i.test(targetUrl);
+        const isTarget4k = is4kOrHevc || /(4k|uhd|hevc|h265|h\.265|hdr|10bit|ac3|eac3|dts|2160)/i.test(targetUrl);
 
         // If 4K, HEVC, AC3, or non-MP4: route to on-the-fly HLS pipeline to avoid MediaError Code 4
         if (isTarget4k || !isMp4) {
-          return this.getHlsUrl(targetUrl, item, isTarget4k && !this.canPlayHevc());
+          const forceH264 = !this.canPlayHevc();
+          return this.getHlsUrl(targetUrl, item, forceH264);
         }
         return this.getProxyUrl(targetUrl, true);
       }

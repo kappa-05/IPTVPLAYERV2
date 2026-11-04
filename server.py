@@ -163,6 +163,17 @@ class HLSStreamManager:
         self.duration_cache = {}
         self.seg_locks = {}
         self.lock = threading.Lock()
+        self.has_nvenc = False
+        ff = find_ffmpeg()
+        if ff:
+            try:
+                r = subprocess.run(
+                    [ff, '-y', '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=1', '-c:v', 'h264_nvenc', '-f', 'null', '-'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0
+                )
+                self.has_nvenc = (r.returncode == 0)
+            except Exception:
+                self.has_nvenc = False
         self._cleaner = threading.Thread(target=self._cleanup_loop, daemon=True)
         self._cleaner.start()
         atexit.register(self.shutdown_all)
@@ -221,60 +232,58 @@ class HLSStreamManager:
 
         ffprobe_path = find_ffprobe()
         if ffprobe_path:
-            for ua in ["IPTVSmartersPlayer", "VLC/3.0.20 LibVLC/3.0.20", "Mozilla/5.0"]:
-                try:
-                    cmd = [
-                        ffprobe_path,
-                        "-v", "error",
-                        "-user_agent", ua,
-                        "-headers", "Accept: */*\r\n",
-                        "-probesize", "2097152",
-                        "-analyzeduration", "3000000",
-                        "-show_entries", "format=duration:stream=index,codec_name,codec_type:stream_tags=language,title,handler_name",
-                        "-of", "json",
-                        target_url
-                    ]
-                    clean_env = os.environ.copy()
-                    clean_env.pop('http_proxy', None)
-                    clean_env.pop('https_proxy', None)
-                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=5.0, env=clean_env)
-                    if res.stdout:
-                        info = json.loads(res.stdout)
-                        dur_str = info.get('format', {}).get('duration')
-                        if dur_str:
-                            d = float(dur_str)
-                            if d > 0:
-                                duration = d
-                        for s in info.get('streams', []):
-                            ctype = s.get('codec_type')
-                            tags = s.get('tags') or {}
-                            lang = tags.get('language', '')
-                            title = tags.get('title') or tags.get('handler_name')
-                            if ctype == 'video':
-                                codec = s.get('codec_name', '').lower()
-                                if codec in ('hevc', 'h265'):
-                                    is_hevc = True
-                                elif codec in ('h264', 'avc'):
-                                    is_hevc = False
-                            elif ctype == 'audio':
-                                audio_tracks.append({
-                                    'index': s.get('index'),
-                                    'stream_index': len(audio_tracks),
-                                    'codec': s.get('codec_name', ''),
-                                    'language': lang,
-                                    'title': title or (f"Audio {lang.upper()}" if lang else f"Traccia {len(audio_tracks) + 1}")
-                                })
-                            elif ctype == 'subtitle':
-                                subtitle_tracks.append({
-                                    'index': s.get('index'),
-                                    'stream_index': len(subtitle_tracks),
-                                    'codec': s.get('codec_name', ''),
-                                    'language': lang,
-                                    'title': title or (f"Sottotitolo {lang.upper()}" if lang else f"Sottotitolo {len(subtitle_tracks) + 1}")
-                                })
-                        break
-                except Exception:
-                    pass
+            try:
+                cmd = [
+                    ffprobe_path,
+                    "-v", "error",
+                    "-user_agent", "IPTVSmartersPlayer",
+                    "-headers", "Accept: */*\r\n",
+                    "-probesize", "1048576",
+                    "-analyzeduration", "2000000",
+                    "-show_entries", "format=duration:stream=index,codec_name,codec_type:stream_tags=language,title,handler_name",
+                    "-of", "json",
+                    target_url
+                ]
+                clean_env = os.environ.copy()
+                clean_env.pop('http_proxy', None)
+                clean_env.pop('https_proxy', None)
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=4.0, env=clean_env)
+                if res.stdout:
+                    info = json.loads(res.stdout)
+                    dur_str = info.get('format', {}).get('duration')
+                    if dur_str:
+                        d = float(dur_str)
+                        if d > 0:
+                            duration = d
+                    for s in info.get('streams', []):
+                        ctype = s.get('codec_type')
+                        tags = s.get('tags') or {}
+                        lang = tags.get('language', '')
+                        title = tags.get('title') or tags.get('handler_name')
+                        if ctype == 'video':
+                            codec = s.get('codec_name', '').lower()
+                            if codec in ('hevc', 'h265'):
+                                is_hevc = True
+                            elif codec in ('h264', 'avc'):
+                                is_hevc = False
+                        elif ctype == 'audio':
+                            audio_tracks.append({
+                                'index': s.get('index'),
+                                'stream_index': len(audio_tracks),
+                                'codec': s.get('codec_name', ''),
+                                'language': lang,
+                                'title': title or (f"Audio {lang.upper()}" if lang else f"Traccia {len(audio_tracks) + 1}")
+                            })
+                        elif ctype == 'subtitle':
+                            subtitle_tracks.append({
+                                'index': s.get('index'),
+                                'stream_index': len(subtitle_tracks),
+                                'codec': s.get('codec_name', ''),
+                                'language': lang,
+                                'title': title or (f"Sottotitolo {lang.upper()}" if lang else f"Sottotitolo {len(subtitle_tracks) + 1}")
+                            })
+            except Exception:
+                pass
 
         res_tuple = (duration, is_hevc, audio_tracks, subtitle_tracks)
         self.stream_info_cache[target_url] = res_tuple
@@ -510,17 +519,28 @@ class HLSStreamManager:
 
             cmd.extend([
                 "-i", target_url,
-                "-map", "0:v:0",
+                "-map", "0:v:0?",
                 "-map", f"0:a:{audio_track}?" if audio_track >= 0 else "0:a?",
             ])
 
             if force_h264:
-                cmd.extend([
-                    "-c:v", "libx264",
-                    "-preset", "ultrafast",
-                    "-tune", "zerolatency",
-                    "-crf", "22"
-                ])
+                if getattr(self, 'has_nvenc', False):
+                    cmd.extend([
+                        "-c:v", "h264_nvenc",
+                        "-preset", "p1",
+                        "-tune", "ull",
+                        "-b:v", "8000k",
+                        "-maxrate", "12000k",
+                        "-bufsize", "16000k"
+                    ])
+                else:
+                    cmd.extend([
+                        "-c:v", "libx264",
+                        "-preset", "ultrafast",
+                        "-tune", "zerolatency",
+                        "-threads", "0",
+                        "-crf", "22"
+                    ])
             else:
                 cmd.extend(["-c:v", "copy"])
                 if is_hevc:
@@ -535,14 +555,21 @@ class HLSStreamManager:
                 "-hls_time", str(int(seg_duration)),
                 "-hls_list_size", "0",
                 "-hls_segment_type", "fmp4",
-                "-hls_fmp4_init_filename", "init.mp4",
+                "-hls_fmp4_init_filename", os.path.join(sdir, "init.mp4"),
                 "-hls_flags", "independent_segments",
                 "-start_number", str(start_seg),
                 "-hls_segment_filename", os.path.join(sdir, "seg_%04d.m4s"),
                 os.path.join(sdir, f"internal_{audio_track}_{start_seg}.m3u8")
             ])
             try:
-                sess['proc'] = subprocess.Popen(cmd, env=clean_env)
+                sess['proc'] = subprocess.Popen(
+                    cmd,
+                    cwd=sdir,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    env=clean_env
+                )
                 sess['current_start_seg'] = start_seg
                 sess['current_audio_track'] = audio_track
             except Exception as e:
@@ -593,6 +620,13 @@ class HLSStreamManager:
                 time.sleep(0.1)
                 proc = sess.get('proc')
                 if proc and proc.poll() is not None and (not os.path.exists(seg_path) or os.path.getsize(seg_path) == 0):
+                    err_txt = ""
+                    try:
+                        if proc.stderr:
+                            err_txt = proc.stderr.read().decode('utf-8', errors='ignore')
+                    except Exception:
+                        pass
+                    print(f"[HLS init.mp4 Error] FFmpeg exited {proc.returncode}: {err_txt[-200:]}")
                     self._ensure_background_worker(sid, target_url, sdir, start_seg=0, audio_track=audio_track)
             if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
                 return seg_path
@@ -618,10 +652,17 @@ class HLSStreamManager:
         while time.time() - start_wait < 35.0:
             if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
                 return seg_path
-            time.sleep(0.15)
+            time.sleep(0.12)
             proc = sess.get('proc')
             if proc and proc.poll() is not None:
                 if not os.path.exists(seg_path) or os.path.getsize(seg_path) == 0:
+                    err_txt = ""
+                    try:
+                        if proc.stderr:
+                            err_txt = proc.stderr.read().decode('utf-8', errors='ignore')
+                    except Exception:
+                        pass
+                    print(f"[HLS seg_{seg_idx} Error] FFmpeg exited {proc.returncode}: {err_txt[-200:]}")
                     self._ensure_background_worker(sid, target_url, sdir, start_seg=seg_idx, audio_track=audio_track)
 
         if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
@@ -1227,19 +1268,28 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             "-map", "0:a:0?",
         ])
 
-        if force_h264:
-            cmd.extend([
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-tune", "zerolatency",
-                "-crf", "23"
-            ])
+        if force_h264 or is_hevc:
+            if getattr(HLS_STREAM_MGR, 'has_nvenc', False):
+                cmd.extend([
+                    "-c:v", "h264_nvenc",
+                    "-preset", "p1",
+                    "-tune", "ull",
+                    "-b:v", "8000k",
+                    "-maxrate", "12000k",
+                    "-bufsize", "16000k"
+                ])
+            else:
+                cmd.extend([
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-tune", "zerolatency",
+                    "-threads", "0",
+                    "-crf", "22"
+                ])
         else:
             cmd.extend([
                 "-c:v", "copy"
             ])
-            if is_hevc:
-                cmd.extend(["-tag:v", "hvc1"])
 
         cmd.extend([
             "-c:a", "aac",
@@ -1568,6 +1618,13 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                     except Exception as e:
                         print(f"[HLS Segment Error]: {e}")
                         return
+                else:
+                    self.send_response(503)
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.send_header('Content-Type', 'text/plain')
+                    self.end_headers()
+                    self.wfile.write(b'Segment generation in progress or failed')
+                    return
 
             self.send_response(404)
             self.send_header('Access-Control-Allow-Origin', '*')
