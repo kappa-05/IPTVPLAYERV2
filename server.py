@@ -958,6 +958,7 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             if first_chunk:
                 try:
                     self.wfile.write(first_chunk)
+                    self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     return
 
@@ -967,6 +968,7 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                     break
                 try:
                     self.wfile.write(chunk)
+                    self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     break
             return
@@ -1041,6 +1043,7 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                         if first_chunk:
                             try:
                                 self.wfile.write(first_chunk)
+                                self.wfile.flush()
                             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                                 return
                         while True:
@@ -1049,6 +1052,7 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                                 break
                             try:
                                 self.wfile.write(chunk)
+                                self.wfile.flush()
                             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                                 break
                     return
@@ -1100,6 +1104,7 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                             break
                         try:
                             self.wfile.write(chunk)
+                            self.wfile.flush()
                         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                             break
                 return

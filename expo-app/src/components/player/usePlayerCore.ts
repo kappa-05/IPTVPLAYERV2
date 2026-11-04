@@ -494,15 +494,9 @@ export function usePlayerCore({
       setLoadingStatus('Buffering...');
     };
 
-    // Auto-recover when the stream stalls for too long (common with IPTV live TS streams)
-    let stalledTimer: any = null;
+    // Non-intrusive stalled event (IPTV network bursts trigger stalled normally)
     video.onstalled = () => {
-      if (stalledTimer) clearTimeout(stalledTimer);
-      stalledTimer = setTimeout(() => {
-        if (video.paused && !requiresUserGestureRef.current && video.readyState < 3) {
-          safePlay(video);
-        }
-      }, 3000);
+      // Do not restart or reload playback on brief stalled events
     };
 
     video.onloadeddata = () => {
@@ -721,10 +715,11 @@ export function usePlayerCore({
         }, {
           enableWorker: true,
           lazyLoad: false,
-          stashInitialSize: 128 * 1024,
-          liveBufferLatencyChasing: true,
-          liveBufferLatencyMaxLatency: 3.5,
-          liveBufferLatencyMinRemain: 1.0
+          stashInitialSize: 512 * 1024,
+          autoCleanupSourceBuffer: true,
+          autoCleanupMaxBackwardDuration: 60,
+          autoCleanupMinBackwardDuration: 30,
+          liveBufferLatencyChasing: false
         });
         mpegtsRef.current = player;
         player.attachMediaElement(video);
@@ -749,14 +744,19 @@ export function usePlayerCore({
           safePlay(video);
         }
 
+        let mpegtsErrorCount = 0;
         player.on(mpegts.Events.ERROR, (errType: any, errDetail: any) => {
           console.warn('mpegts error:', errType, errDetail);
-          const altM3u8 = cleanUrl.replace(/\.ts(\?.*)?$/i, '.m3u8$1');
-          if (altM3u8 !== cleanUrl) {
-            initWebPlayer(XtreamAPI.getProxyUrl(altM3u8, true));
-          } else if (!targetUrl.includes('/api/hls/master.m3u8')) {
-            const encoded = encodeURIComponent(cleanTargetUrl || targetUrl);
-            initWebPlayer(`/api/hls/master.m3u8?url=${encoded}`);
+          mpegtsErrorCount++;
+          // Only switch to HLS fallback if persistent fatal errors occur
+          if (mpegtsErrorCount >= 3) {
+            const altM3u8 = cleanUrl.replace(/\.ts(\?.*)?$/i, '.m3u8$1');
+            if (altM3u8 !== cleanUrl) {
+              initWebPlayer(XtreamAPI.getProxyUrl(altM3u8, true));
+            } else if (!targetUrl.includes('/api/hls/master.m3u8')) {
+              const encoded = encodeURIComponent(cleanTargetUrl || targetUrl);
+              initWebPlayer(`/api/hls/master.m3u8?url=${encoded}`);
+            }
           }
         });
       } catch (err) {

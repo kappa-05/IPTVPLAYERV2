@@ -32,26 +32,32 @@ export const SeamlessPosterBackdrop: React.FC<SeamlessPosterBackdropProps> = ({
 }) => {
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const [shouldRender, setShouldRender] = useState(true);
+  const hasRenderedRef = useRef(false);
 
-  // Synchronize fade-out strictly with actual video playback (playing event / active render)
-  // Eliminates black screen flash before player opens
-  const isVideoActivelyRendering = firstFrameRendered && (isPlaying || currentTime > 0);
-
+  // Once first frame has rendered, permanently dismiss the backdrop for this stream
+  // This prevents the poster from ever flashing or popping back over live video during playback/buffering
   useEffect(() => {
-    if (isVideoActivelyRendering) {
+    if (firstFrameRendered) {
+      hasRenderedRef.current = true;
       Animated.timing(fadeAnim, {
         toValue: 0,
-        duration: 200, // Rapid fade-out
+        duration: 250,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: Platform.OS !== 'web'
       }).start(() => {
         setShouldRender(false);
       });
-    } else {
+    }
+  }, [firstFrameRendered, fadeAnim]);
+
+  // Reset backdrop when a new stream or title is loaded
+  useEffect(() => {
+    if (!firstFrameRendered) {
+      hasRenderedRef.current = false;
       setShouldRender(true);
       fadeAnim.setValue(1);
     }
-  }, [isVideoActivelyRendering, fadeAnim]);
+  }, [posterUri, title]);
 
   if (!shouldRender) return null;
 

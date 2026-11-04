@@ -22,6 +22,7 @@ const SHORTCUTS = [
   { key: 'Rotella Mouse', desc: 'Regola volume rapidamente' },
   { key: 'Clic Video', desc: 'Riproduci / Pausa immediata' },
   { key: 'Doppio Clic / F', desc: 'Schermo intero' },
+  { key: 'Pulsante Formato', desc: 'Formato video (Adatta 16:9 / Riempi / Allunga)' },
   { key: 'M', desc: 'Attiva / Disattiva muto' },
   { key: 'P', desc: 'Picture-in-Picture (Finestra mobile)' },
   { key: 'C', desc: 'Cicla le tracce dei sottotitoli' },

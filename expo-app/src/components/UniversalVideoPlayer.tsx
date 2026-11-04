@@ -8,7 +8,8 @@ import {
   Platform,
   useWindowDimensions,
   Animated,
-  Easing
+  Easing,
+  ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
@@ -135,6 +136,34 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
 
   const [volumeFeedback, setVolumeFeedback] = useState<number | null>(null);
   const volumeFeedbackTimeout = useRef<any>(null);
+
+  type VideoFitMode = 'contain' | 'cover' | 'fill';
+  const [videoFitMode, setVideoFitMode] = useState<VideoFitMode>('contain');
+  const [fitFeedback, setFitFeedback] = useState<string | null>(null);
+  const fitFeedbackTimeout = useRef<any>(null);
+
+  const cycleVideoFit = useCallback(() => {
+    setVideoFitMode(prev => {
+      let next: VideoFitMode = 'contain';
+      let label = 'Originale (Adatta)';
+      if (prev === 'contain') {
+        next = 'cover';
+        label = 'Riempi (Zoom)';
+      } else if (prev === 'cover') {
+        next = 'fill';
+        label = 'Allunga (100%)';
+      } else {
+        next = 'contain';
+        label = 'Originale (Adatta)';
+      }
+      setFitFeedback(label);
+      if (fitFeedbackTimeout.current) clearTimeout(fitFeedbackTimeout.current);
+      fitFeedbackTimeout.current = setTimeout(() => {
+        setFitFeedback(null);
+      }, 1500);
+      return next;
+    });
+  }, []);
 
   const showVolumeHud = useCallback((pct: number) => {
     setVolumeFeedback(pct);
@@ -417,7 +446,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
       // @ts-ignore
       onWheel={!isMinimized ? handleWheel : undefined}
     >
-      {/* ── 1. Zero-Glitch Poster & Spinner Backdrop ── */}
+      {/* ── 1. Zero-Glitch Poster & Spinner Backdrop (initial load only) ── */}
       <SeamlessPosterBackdrop
         posterUri={stream.poster}
         title={stream.title}
@@ -428,6 +457,16 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
         currentTime={currentTime}
       />
 
+      {/* ── 1b. In-Playback Buffering Spinner (Never covers video with full poster card) ── */}
+      {loading && firstFrameRendered && (
+        <View style={styles.inPlaybackBuffering} pointerEvents="none">
+          <View style={styles.inPlaybackBufferingPill}>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text style={styles.inPlaybackBufferingText}>Buffering...</Text>
+          </View>
+        </View>
+      )}
+
       {/* ── 2. Video Engine: Web HTML5 or Native Expo-AV ── */}
       {Platform.OS === 'web' ? (
         <video
@@ -437,7 +476,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
             width: '100%',
             height: '100%',
             backgroundColor: '#000',
-            objectFit: 'contain'
+            objectFit: videoFitMode
           }}
           playsInline
           // @ts-ignore
@@ -491,6 +530,14 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
             <Text style={styles.gesturePlayTitle}>Tocca per riprodurre</Text>
             <Text style={styles.gesturePlaySub}>Premi qui per avviare lo stream</Text>
           </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ── 3a. Aspect Ratio HUD Badge ── */}
+      {fitFeedback !== null && (
+        <View style={styles.aspectFeedbackBadge} pointerEvents="none">
+          <Ionicons name="scan-outline" size={24} color="#fff" />
+          <Text style={styles.aspectFeedbackText}>{fitFeedback}</Text>
         </View>
       )}
 
@@ -854,6 +901,21 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
                   )}
                 </View>
 
+                {/* Aspect Ratio Toggle (Adatta 16:9 / Riempi / Allunga) */}
+                {Platform.OS === 'web' && (
+                  <TouchableOpacity
+                    style={[styles.ctrlIconBtn, videoFitMode !== 'contain' && styles.ctrlIconBtnActive]}
+                    onPress={cycleVideoFit}
+                    accessibilityLabel="Formato video: Adatta / Riempi / Allunga"
+                  >
+                    <Ionicons
+                      name={videoFitMode === 'cover' ? 'crop' : videoFitMode === 'fill' ? 'resize' : 'scan-outline'}
+                      size={20}
+                      color={videoFitMode !== 'contain' ? colors.primary : '#fff'}
+                    />
+                  </TouchableOpacity>
+                )}
+
                 {/* Fullscreen Button */}
                 <TouchableOpacity
                   style={styles.ctrlIconBtn}
@@ -1069,6 +1131,56 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: 'rgba(255, 255, 255, 0.25)',
     gap: 4
+  },
+  inPlaybackBuffering: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 22
+  },
+  inPlaybackBufferingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(12, 16, 26, 0.85)',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)'
+  },
+  inPlaybackBufferingText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600'
+  },
+  aspectFeedbackBadge: {
+    position: 'absolute',
+    top: '45%',
+    alignSelf: 'center',
+    zIndex: 35,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: 'rgba(12, 16, 26, 0.92)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(59, 130, 246, 0.5)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.8,
+    shadowRadius: 20
+  },
+  aspectFeedbackText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700'
   },
   volumeFeedbackBadge: {
     position: 'absolute',
