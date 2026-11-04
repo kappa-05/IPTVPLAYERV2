@@ -1,14 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Image,
-  ActivityIndicator,
-  Animated,
-  Easing,
-  Platform
-} from 'react-native';
+import React from 'react';
+import { View, Text, StyleSheet, Image, ActivityIndicator, Platform } from 'react-native';
 import { colors } from '../../theme/colors';
 
 interface SeamlessPosterBackdropProps {
@@ -17,8 +8,6 @@ interface SeamlessPosterBackdropProps {
   loading: boolean;
   statusText?: string;
   firstFrameRendered: boolean;
-  isPlaying?: boolean;
-  currentTime?: number;
 }
 
 export const SeamlessPosterBackdrop: React.FC<SeamlessPosterBackdropProps> = ({
@@ -26,52 +15,13 @@ export const SeamlessPosterBackdrop: React.FC<SeamlessPosterBackdropProps> = ({
   title,
   loading,
   statusText = 'Caricamento...',
-  firstFrameRendered,
-  isPlaying = false,
-  currentTime = 0
+  firstFrameRendered
 }) => {
-  const fadeAnim = useRef(new Animated.Value(1)).current;
-  const [shouldRender, setShouldRender] = useState(true);
-  const hasRenderedRef = useRef(false);
-
-  // Once first frame has rendered, permanently dismiss the backdrop for this stream
-  // This prevents the poster from ever flashing or popping back over live video during playback/buffering
-  useEffect(() => {
-    if (firstFrameRendered) {
-      hasRenderedRef.current = true;
-      Animated.timing(fadeAnim, {
-        toValue: 0,
-        duration: 250,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: Platform.OS !== 'web'
-      }).start(() => {
-        setShouldRender(false);
-      });
-    }
-  }, [firstFrameRendered, fadeAnim]);
-
-  // Reset backdrop when a new stream or title is loaded
-  useEffect(() => {
-    if (!firstFrameRendered) {
-      hasRenderedRef.current = false;
-      setShouldRender(true);
-      fadeAnim.setValue(1);
-    }
-  }, [posterUri, title]);
-
-  if (!shouldRender) return null;
+  // If the first video frame has rendered, never show the full-screen backdrop
+  if (firstFrameRendered) return null;
 
   return (
-    <Animated.View
-      style={[
-        styles.overlay,
-        {
-          opacity: fadeAnim
-        }
-      ]}
-      pointerEvents="none"
-    >
-      {/* 1. Ambient Blurred Backdrop matching dominant poster colors (cover mode for cinematic atmosphere) */}
+    <View style={styles.overlay} pointerEvents="none">
       {posterUri ? (
         <Image
           source={{ uri: posterUri }}
@@ -83,19 +33,13 @@ export const SeamlessPosterBackdrop: React.FC<SeamlessPosterBackdropProps> = ({
 
       <View style={styles.darkVignette} />
 
-      {/* 2. Responsive Foreground Container: resizeMode="contain" ensuring neither 2:3 nor 16:9 thumbnails are cut off */}
-      <View style={styles.centerContainer}>
+      <View style={styles.centerCard}>
         {posterUri ? (
-          <View style={styles.posterCard}>
-            <Image
-              source={{ uri: posterUri }}
-              style={[
-                styles.posterImage,
-                Platform.OS === 'web' ? ({ objectFit: 'contain' } as any) : null
-              ]}
-              resizeMode="contain"
-            />
-          </View>
+          <Image
+            source={{ uri: posterUri }}
+            style={[styles.posterImage, Platform.OS === 'web' ? ({ objectFit: 'contain' } as any) : null]}
+            resizeMode="contain"
+          />
         ) : null}
 
         {title ? (
@@ -111,7 +55,7 @@ export const SeamlessPosterBackdrop: React.FC<SeamlessPosterBackdropProps> = ({
           </View>
         )}
       </View>
-    </Animated.View>
+    </View>
   );
 };
 
@@ -145,56 +89,35 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: 'rgba(3, 5, 8, 0.78)'
   },
-  centerContainer: {
+  centerCard: {
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 20,
-    maxWidth: 520,
+    maxWidth: 480,
     width: '100%',
     zIndex: 2
   },
-  posterCard: {
-    width: 320,
-    height: 420,
-    maxWidth: '85%',
-    maxHeight: '65%',
-    borderRadius: 14,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.85,
-    shadowRadius: 24,
-    elevation: 16,
-    marginBottom: 20,
-    backgroundColor: 'rgba(12, 16, 26, 0.85)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 6
-  },
   posterImage: {
-    width: '100%',
-    height: '100%'
+    width: 220,
+    height: 140,
+    borderRadius: 12,
+    marginBottom: 16
   },
   titleText: {
     color: '#fff',
     fontSize: 18,
     fontWeight: '700',
     textAlign: 'center',
-    marginBottom: 16,
-    textShadowColor: 'rgba(0, 0, 0, 0.9)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 6
+    marginBottom: 16
   },
   spinnerRow: {
+    flexDirection: 'row',
     alignItems: 'center',
     gap: 12
   },
   statusText: {
-    color: 'rgba(255, 255, 255, 0.85)',
-    fontSize: 13,
-    fontWeight: '600',
-    letterSpacing: 0.3
+    color: colors.textSecondary,
+    fontSize: 14,
+    fontWeight: '500'
   }
 });

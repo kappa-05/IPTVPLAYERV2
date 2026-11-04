@@ -1,14 +1,12 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  Modal,
   TouchableOpacity,
   Platform,
   useWindowDimensions,
   Animated,
-  Easing,
   ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,18 +18,6 @@ import { TrackSelectionModal } from './player/TrackSelectionModal';
 import { QualitySelectionModal } from './player/QualitySelectionModal';
 import { SpeedSelectionModal } from './player/SpeedSelectionModal';
 import { KeyboardShortcutsModal } from './player/KeyboardShortcutsModal';
-
-let ExpoVideo: any = null;
-let ResizeModeEnum: any = null;
-if (Platform.OS !== 'web') {
-  try {
-    const expoAv = require('expo-av');
-    ExpoVideo = expoAv.Video;
-    ResizeModeEnum = expoAv.ResizeMode;
-  } catch (e) {
-    console.warn('expo-av not available on this platform');
-  }
-}
 
 interface UniversalVideoPlayerProps {
   visible: boolean;
@@ -56,27 +42,24 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
 }) => {
   const { width } = useWindowDimensions();
 
-  // Core Playback & Device Engine Hook
+  // Core Hook
   const {
-    isIOS,
-    isAndroid,
-    isTouchDevice,
-    isLive,
-    isMovieOrSeries,
     webVideoRef,
-    nativeVideoRef,
     isPlaying,
-    loading,
-    loadingStatus,
+    isBuffering,
     firstFrameRendered,
     currentTime,
     duration,
     bufferPercent,
     volume,
     isMuted,
+    videoFit,
+    fitFeedback,
+    volumeFeedback,
     playbackSpeed,
     isFullscreen,
-    errorMsg,
+    isLive,
+    isMovieOrSeries,
     audioTracks,
     subtitleTracks,
     qualityLevels,
@@ -91,11 +74,8 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
     setSpeedModalVisible,
     shortcutsModalVisible,
     setShortcutsModalVisible,
-    isDraggingTrack,
-    setIsDraggingTrack,
-    dragTime,
-    setDragTime,
-    seekFeedback,
+    showMutedBanner,
+    errorMsg,
     resumePrompt,
     setResumePrompt,
     togglePlayPause,
@@ -103,20 +83,16 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
     changeVolume,
     seekTo,
     seekRelative,
+    cycleVideoFit,
     toggleFullscreen,
     togglePictureInPicture,
-    openDevicePlayer,
     handleSelectAudioTrack,
     handleSelectSubtitleTrack,
     handleSelectQualityLevel,
     handleSelectPlaybackSpeed,
-    handleClose: handleCoreClose,
-    initWebPlayer,
-    requiresUserUnmute,
-    requiresUserGesture,
-    handleDismissUnmute,
-    handleUserGesturePlay,
-    handleNativePlaybackStatusUpdate
+    dismissMutedBanner,
+    handleClose,
+    retry
   } = usePlayerCore({
     visible,
     stream,
@@ -126,520 +102,366 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
     onWatchProgressUpdated
   });
 
-  // UI Controls Animation & Auto-Hide
+  // Controls Visibility
   const [showControls, setShowControls] = useState(true);
-  const [showTimeRemaining, setShowTimeRemaining] = useState(false);
-  const [volumeHovered, setVolumeHovered] = useState(false);
-  const [isHoveredMini, setIsHoveredMini] = useState(false);
-  const [hoverSeekTime, setHoverSeekTime] = useState<number | null>(null);
-  const [hoverSeekPos, setHoverSeekPos] = useState<number>(0);
-
-  const [volumeFeedback, setVolumeFeedback] = useState<number | null>(null);
-  const volumeFeedbackTimeout = useRef<any>(null);
-
-  type VideoFitMode = 'contain' | 'cover' | 'fill';
-  const [videoFitMode, setVideoFitMode] = useState<VideoFitMode>('contain');
-  const [fitFeedback, setFitFeedback] = useState<string | null>(null);
-  const fitFeedbackTimeout = useRef<any>(null);
-
-  const cycleVideoFit = useCallback(() => {
-    setVideoFitMode(prev => {
-      let next: VideoFitMode = 'contain';
-      let label = 'Originale (Adatta)';
-      if (prev === 'contain') {
-        next = 'cover';
-        label = 'Riempi (Zoom)';
-      } else if (prev === 'cover') {
-        next = 'fill';
-        label = 'Allunga (100%)';
-      } else {
-        next = 'contain';
-        label = 'Originale (Adatta)';
-      }
-      setFitFeedback(label);
-      if (fitFeedbackTimeout.current) clearTimeout(fitFeedbackTimeout.current);
-      fitFeedbackTimeout.current = setTimeout(() => {
-        setFitFeedback(null);
-      }, 1500);
-      return next;
-    });
-  }, []);
-
-  const showVolumeHud = useCallback((pct: number) => {
-    setVolumeFeedback(pct);
-    if (volumeFeedbackTimeout.current) clearTimeout(volumeFeedbackTimeout.current);
-    volumeFeedbackTimeout.current = setTimeout(() => {
-      setVolumeFeedback(null);
-    }, 1200);
-  }, []);
-
-  const controlsAnim = useRef(new Animated.Value(1)).current;
-  const animFade = useRef(new Animated.Value(0)).current;
-  const animScale = useRef(new Animated.Value(0.96)).current;
   const controlsTimeoutRef = useRef<any>(null);
   const lastTapRef = useRef<number>(0);
   const trackRef = useRef<any>(null);
 
-  // Smooth entrance animation
-  useEffect(() => {
-    if (visible && stream) {
-      animFade.setValue(0);
-      animScale.setValue(0.96);
-      Animated.parallel([
-        Animated.timing(animFade, {
-          toValue: 1,
-          duration: 250,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: Platform.OS !== 'web'
-        }),
-        Animated.timing(animScale, {
-          toValue: 1,
-          duration: 250,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: Platform.OS !== 'web'
-        })
-      ]).start();
-      resetControlsTimer();
-    }
-  }, [visible, stream]);
+  // Scrubber dragging
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragSec, setDragSec] = useState<number | null>(null);
+  const [hoverSec, setHoverSec] = useState<number | null>(null);
+  const [hoverX, setHoverX] = useState<number>(0);
 
-  // Controls auto-hide timer
-  const clearControlsTimer = useCallback(() => {
-    if (controlsTimeoutRef.current) {
-      clearTimeout(controlsTimeoutRef.current);
-      controlsTimeoutRef.current = null;
-    }
-  }, []);
-
+  // Auto-hide controls timer
   const resetControlsTimer = useCallback(() => {
-    clearControlsTimer();
     setShowControls(true);
-    Animated.timing(controlsAnim, {
-      toValue: 1,
-      duration: 150,
-      useNativeDriver: Platform.OS !== 'web'
-    }).start();
+    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    if (isPlaying && !isDragging && !trackModalVisible && !qualityModalVisible && !speedModalVisible && !shortcutsModalVisible) {
+      controlsTimeoutRef.current = setTimeout(() => {
+        setShowControls(false);
+      }, 2800);
+    }
+  }, [isPlaying, isDragging, trackModalVisible, qualityModalVisible, speedModalVisible, shortcutsModalVisible]);
 
-    // Auto-hide after 3.0s if video is playing
-    controlsTimeoutRef.current = setTimeout(() => {
-      if (isPlaying && !isDraggingTrack && !trackModalVisible && !qualityModalVisible && !speedModalVisible) {
-        Animated.timing(controlsAnim, {
-          toValue: 0,
-          duration: 250,
-          useNativeDriver: Platform.OS !== 'web'
-        }).start(() => {
-          setShowControls(false);
-        });
-      }
-    }, 3000);
-  }, [clearControlsTimer, controlsAnim, isPlaying, isDraggingTrack, trackModalVisible, qualityModalVisible, speedModalVisible]);
+  useEffect(() => {
+    resetControlsTimer();
+  }, [isPlaying, resetControlsTimer]);
 
+  // Mouse wheel volume on PC
   const handleWheel = useCallback((e: any) => {
-    if (Platform.OS !== 'web' || isTouchDevice) return;
+    if (Platform.OS !== 'web') return;
     const delta = e.deltaY ?? 0;
     if (Math.abs(delta) < 2) return;
     e.preventDefault?.();
     const step = 0.05;
-    const newVol = delta < 0 ? Math.min(1, volume + step) : Math.max(0, volume - step);
-    changeVolume(newVol);
-    showVolumeHud(Math.round(newVol * 100));
+    changeVolume(delta < 0 ? volume + step : volume - step);
     resetControlsTimer();
-  }, [isTouchDevice, volume, changeVolume, showVolumeHud, resetControlsTimer]);
+  }, [volume, changeVolume, resetControlsTimer]);
 
-  // Animated close handler
-  const handleAnimatedClose = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(animFade, {
-        toValue: 0,
-        duration: 200,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: Platform.OS !== 'web'
-      }),
-      Animated.timing(animScale, {
-        toValue: 0.96,
-        duration: 200,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: Platform.OS !== 'web'
-      })
-    ]).start(() => {
-      handleCoreClose();
-    });
-  }, [animFade, animScale, handleCoreClose]);
-
-  // Center double-tap skip vs single-tap toggle controls
-  const handleCenterTap = (e: any) => {
-    // If browser muted autoplay, any tap un-mutes automatically
-    if (requiresUserUnmute) {
-      handleDismissUnmute();
-    }
-    if (requiresUserGesture) {
-      handleUserGesturePlay();
-      return;
-    }
-
+  // Click on video: Single click = Play/Pause, Double click = Fullscreen
+  const handleVideoClick = useCallback(() => {
     const now = Date.now();
-    const timeDiff = now - lastTapRef.current;
+    const diff = now - lastTapRef.current;
     lastTapRef.current = now;
 
-    if (timeDiff < 300) {
-      // Double tap / click
-      if (Platform.OS === 'web' && !isTouchDevice) {
-        // Desktop PC: Double click toggles fullscreen
-        toggleFullscreen();
-      } else {
-        const clickX = e.nativeEvent?.locationX ?? e.nativeEvent?.offsetX ?? (width / 2);
-        if (clickX < width / 2) {
-          seekRelative(-10);
-        } else {
-          seekRelative(10);
-        }
-      }
+    if (diff < 280) {
+      // Double click
+      toggleFullscreen();
     } else {
-      // Single tap / click
-      if (Platform.OS === 'web' && !isTouchDevice) {
-        // Desktop PC: Single click on video toggles play / pause immediately
-        togglePlayPause();
-        resetControlsTimer();
-      } else {
-        if (showControls) {
-          Animated.timing(controlsAnim, {
-            toValue: 0,
-            duration: 180,
-            useNativeDriver: Platform.OS !== 'web'
-          }).start(() => setShowControls(false));
-        } else {
-          resetControlsTimer();
-        }
-      }
+      // Single click
+      togglePlayPause();
+      resetControlsTimer();
     }
-  };
+  }, [toggleFullscreen, togglePlayPause, resetControlsTimer]);
 
-  // Scrubber Calculations
-  const calculateScrubPosition = (clientX: number) => {
+  // Keyboard Shortcuts (PC)
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !visible) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      switch (e.key) {
+        case ' ':
+        case 'k':
+        case 'K':
+          e.preventDefault();
+          togglePlayPause();
+          break;
+        case 'f':
+        case 'F':
+          e.preventDefault();
+          toggleFullscreen();
+          break;
+        case 'm':
+        case 'M':
+          e.preventDefault();
+          toggleMute();
+          break;
+        case 'a':
+        case 'A':
+          e.preventDefault();
+          cycleVideoFit();
+          break;
+        case 'p':
+        case 'P':
+          e.preventDefault();
+          togglePictureInPicture();
+          break;
+        case 'ArrowLeft':
+        case 'j':
+        case 'J':
+          e.preventDefault();
+          seekRelative(-10);
+          break;
+        case 'ArrowRight':
+        case 'l':
+        case 'L':
+          e.preventDefault();
+          seekRelative(10);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          changeVolume(volume + 0.05);
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          changeVolume(volume - 0.05);
+          break;
+        case '?':
+        case 'h':
+        case 'H':
+          e.preventDefault();
+          setShortcutsModalVisible(prev => !prev);
+          break;
+        case 'Escape':
+          e.preventDefault();
+          if (document.fullscreenElement || (document as any).webkitFullscreenElement) {
+            toggleFullscreen();
+          } else {
+            handleClose();
+          }
+          break;
+        default:
+          if (e.key >= '0' && e.key <= '9' && duration > 0) {
+            e.preventDefault();
+            const pct = parseInt(e.key, 10) * 10;
+            seekTo((pct / 100) * duration);
+          }
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    visible,
+    togglePlayPause,
+    toggleFullscreen,
+    toggleMute,
+    cycleVideoFit,
+    togglePictureInPicture,
+    seekRelative,
+    changeVolume,
+    volume,
+    duration,
+    seekTo,
+    handleClose,
+    setShortcutsModalVisible
+  ]);
+
+  // Timeline scrubber calculation
+  const getScrubSec = (clientX: number) => {
     if (!trackRef.current || duration <= 0) return 0;
-    const rect = trackRef.current.getBoundingClientRect ? trackRef.current.getBoundingClientRect() : null;
+    const rect = trackRef.current.getBoundingClientRect();
     if (!rect || rect.width <= 0) return 0;
-    const offsetX = Math.max(0, Math.min(rect.width, clientX - rect.left));
-    const ratio = offsetX / rect.width;
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     return ratio * duration;
   };
 
-  const handleTimelineMouseDown = (e: any) => {
+  const handleScrubMouseDown = (e: any) => {
     if (duration <= 0) return;
     e.preventDefault?.();
-    const clientX = e.clientX ?? e.nativeEvent?.clientX ?? 0;
-    const target = calculateScrubPosition(clientX);
-    setIsDraggingTrack(true);
-    setDragTime(target);
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      const movedTarget = calculateScrubPosition(moveEvent.clientX);
-      setDragTime(movedTarget);
-    };
-
-    const onMouseUp = (upEvent: MouseEvent) => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-      const finalTarget = calculateScrubPosition(upEvent.clientX);
-      setIsDraggingTrack(false);
-      setDragTime(null);
-      seekTo(finalTarget);
-    };
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-  };
-
-  const handleTimelineTouchStart = (e: any) => {
-    if (duration <= 0) return;
-    const touch = e.nativeEvent.touches?.[0];
-    if (!touch) return;
-    const target = calculateScrubPosition(touch.clientX);
-    setIsDraggingTrack(true);
-    setDragTime(target);
-  };
-
-  const handleTimelineTouchMove = (e: any) => {
-    if (!isDraggingTrack || duration <= 0) return;
-    const touch = e.nativeEvent.touches?.[0];
-    if (!touch) return;
-    const target = calculateScrubPosition(touch.clientX);
-    setDragTime(target);
-  };
-
-  const handleTimelineTouchEnd = () => {
-    if (!isDraggingTrack || duration <= 0) return;
-    if (dragTime !== null) {
-      seekTo(dragTime);
-    }
-    setIsDraggingTrack(false);
-    setDragTime(null);
-  };
-
-  const handleTimelineMouseMove = (e: any) => {
-    if (duration <= 0 || !trackRef.current) return;
-    const rect = trackRef.current.getBoundingClientRect ? trackRef.current.getBoundingClientRect() : null;
-    if (!rect) return;
     const clientX = e.clientX ?? 0;
-    const offsetX = Math.max(0, Math.min(rect.width, clientX - rect.left));
-    setHoverSeekPos(offsetX);
-    setHoverSeekTime((offsetX / rect.width) * duration);
+    const target = getScrubSec(clientX);
+    setIsDragging(true);
+    setDragSec(target);
+
+    const onMove = (moveEvt: MouseEvent) => {
+      setDragSec(getScrubSec(moveEvt.clientX));
+    };
+
+    const onUp = (upEvt: MouseEvent) => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      const finalSec = getScrubSec(upEvt.clientX);
+      setIsDragging(false);
+      setDragSec(null);
+      seekTo(finalSec);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   };
 
-  const handleTimelineMouseLeave = () => {
-    setHoverSeekTime(null);
+  const handleScrubMouseMove = (e: any) => {
+    if (duration <= 0 || !trackRef.current) return;
+    const rect = trackRef.current.getBoundingClientRect();
+    if (!rect) return;
+    const x = Math.max(0, Math.min(rect.width, (e.clientX ?? 0) - rect.left));
+    setHoverX(x);
+    setHoverSec((x / rect.width) * duration);
   };
 
   // Format time (H:MM:SS or M:SS)
-  const formatTime = (seconds: number) => {
-    if (!isFinite(seconds) || isNaN(seconds) || seconds <= 0) return '0:00';
-    const totalSecs = Math.floor(seconds);
-    const hrs = Math.floor(totalSecs / 3600);
-    const mins = Math.floor((totalSecs % 3600) / 60);
-    const secs = totalSecs % 60;
-    if (hrs > 0) {
-      return `${hrs}:${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
-    }
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  const formatTime = (secs: number) => {
+    if (!isFinite(secs) || isNaN(secs) || secs <= 0) return '0:00';
+    const total = Math.floor(secs);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return `${h}:${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
-
-  // Resume handlers
-  const handleConfirmResume = () => {
-    if (resumePrompt) {
-      seekTo(resumePrompt.time);
-    }
-    setResumePrompt(null);
-  };
-
-  const handleRestartFromBeginning = () => {
-    seekTo(0);
-    setResumePrompt(null);
-  };
-
-
 
   if (!visible || !stream) return null;
 
-  const displayTime = isDraggingTrack && dragTime !== null ? dragTime : currentTime;
-  const progressPercent = duration > 0 && isFinite(duration)
-    ? Math.min(100, Math.max(0, (displayTime / duration) * 100))
-    : 0;
+  // Mini player mode
+  if (isMinimized) {
+    return (
+      <View style={styles.miniPlayerContainer}>
+        <video
+          // @ts-ignore
+          ref={webVideoRef}
+          style={{ width: '100%', height: '100%', objectFit: videoFit, backgroundColor: '#000' }}
+          autoPlay
+          playsInline
+        />
+        <View style={styles.miniControls}>
+          <TouchableOpacity style={styles.miniBtn} onPress={togglePlayPause}>
+            <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color="#fff" />
+          </TouchableOpacity>
+          {onToggleMinimize && (
+            <TouchableOpacity style={styles.miniBtn} onPress={onToggleMinimize}>
+              <Ionicons name="expand-outline" size={18} color="#fff" />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.miniBtn} onPress={handleClose}>
+            <Ionicons name="close" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
-  const playerContent = (
-    <Animated.View
+  const curSec = isDragging && dragSec !== null ? dragSec : currentTime;
+  const progressPct = duration > 0 ? Math.min(100, Math.max(0, (curSec / duration) * 100)) : 0;
+
+  return (
+    <View
       // @ts-ignore
       nativeID="iptv-universal-player"
       id="iptv-universal-player"
       style={[
-        isMinimized ? [
-          styles.miniContainer,
-          width < 600 ? { width: Math.min(270, width * 0.75), height: Math.round(Math.min(270, width * 0.75) * 9 / 16) } : null
-        ] : styles.container,
-        {
-          opacity: animFade,
-          transform: [{ scale: animScale }]
-        },
-        Platform.OS === 'web' && !isMinimized && !showControls && isPlaying ? ({ cursor: 'none' } as any) : undefined
+        styles.fullPlayerContainer,
+        Platform.OS === 'web' && !showControls && isPlaying ? ({ cursor: 'none' } as any) : undefined
       ]}
       // @ts-ignore
-      onMouseMove={!isMinimized ? resetControlsTimer : undefined}
+      onMouseMove={resetControlsTimer}
       // @ts-ignore
-      onWheel={!isMinimized ? handleWheel : undefined}
+      onWheel={handleWheel}
     >
-      {/* ── 1. Zero-Glitch Poster & Spinner Backdrop (initial load only) ── */}
+      {/* ── 1. Initial Loading Screen (Gone forever after 1st frame) ── */}
       <SeamlessPosterBackdrop
         posterUri={stream.poster}
         title={stream.title}
-        loading={loading}
-        statusText={loadingStatus}
+        loading={isBuffering}
+        statusText="Connessione allo stream..."
         firstFrameRendered={firstFrameRendered}
-        isPlaying={isPlaying}
-        currentTime={currentTime}
       />
 
-      {/* ── 1b. In-Playback Buffering Spinner (Never covers video with full poster card) ── */}
-      {loading && firstFrameRendered && (
-        <View style={styles.inPlaybackBuffering} pointerEvents="none">
-          <View style={styles.inPlaybackBufferingPill}>
+      {/* ── 2. Video Element ── */}
+      <video
+        // @ts-ignore
+        ref={webVideoRef}
+        style={{
+          width: '100%',
+          height: '100%',
+          backgroundColor: '#000',
+          objectFit: videoFit
+        }}
+        autoPlay
+        playsInline
+        crossOrigin="anonymous"
+      />
+
+      {/* ── 3. Transparent Video Click Layer ── */}
+      <TouchableOpacity
+        style={styles.videoClickLayer}
+        activeOpacity={1}
+        onPress={handleVideoClick}
+      />
+
+      {/* ── 4. In-Playback Buffering Spinner (Never covers video with full poster) ── */}
+      {isBuffering && firstFrameRendered && (
+        <View style={styles.bufferingHud} pointerEvents="none">
+          <View style={styles.bufferingHudPill}>
             <ActivityIndicator size="small" color={colors.primary} />
-            <Text style={styles.inPlaybackBufferingText}>Buffering...</Text>
+            <Text style={styles.bufferingHudText}>Buffering...</Text>
           </View>
         </View>
       )}
 
-      {/* ── 2. Video Engine: Web HTML5 or Native Expo-AV ── */}
-      {Platform.OS === 'web' ? (
-        <video
-          // @ts-ignore
-          ref={webVideoRef}
-          style={{
-            width: '100%',
-            height: '100%',
-            backgroundColor: '#000',
-            objectFit: videoFitMode
-          }}
-          playsInline
-          // @ts-ignore
-          webkit-playsinline="true"
-          crossOrigin="anonymous"
-          controls={false}
-          autoPlay
-        />
-      ) : (
-        ExpoVideo ? (
-          <ExpoVideo
-            ref={nativeVideoRef}
-            style={styles.video}
-            source={{ uri: stream.streamUrl }}
-            useNativeControls={false}
-            resizeMode={ResizeModeEnum ? ResizeModeEnum.CONTAIN : 'contain'}
-            shouldPlay={true}
-            onPlaybackStatusUpdate={handleNativePlaybackStatusUpdate}
-          />
-        ) : null
+      {/* ── 5. Aspect Ratio HUD Feedback ── */}
+      {fitFeedback !== null && (
+        <View style={styles.hudBadge} pointerEvents="none">
+          <Ionicons name="scan-outline" size={24} color="#fff" />
+          <Text style={styles.hudBadgeText}>{fitFeedback}</Text>
+        </View>
       )}
 
-      {/* ── 2b. Browser Autoplay Muted Floating Banner ── */}
-      {requiresUserUnmute && !isMinimized && (
+      {/* ── 6. Volume HUD Feedback ── */}
+      {volumeFeedback !== null && (
+        <View style={styles.hudBadge} pointerEvents="none">
+          <Ionicons
+            name={volumeFeedback === 0 ? 'volume-mute' : volumeFeedback < 50 ? 'volume-low' : 'volume-high'}
+            size={26}
+            color="#fff"
+          />
+          <Text style={styles.hudBadgeText}>{volumeFeedback}%</Text>
+        </View>
+      )}
+
+      {/* ── 7. Muted Autoplay Warning Banner ── */}
+      {showMutedBanner && (
         <TouchableOpacity
           style={styles.unmuteBanner}
           activeOpacity={0.85}
-          onPress={handleDismissUnmute}
+          onPress={dismissMutedBanner}
         >
-          <View style={styles.unmutePulseIcon}>
-            <Ionicons name="volume-mute" size={16} color="#fff" />
-          </View>
-          <Text style={styles.unmuteBannerText}>
-            Audio disattivato dal browser • Tocca per attivare l'audio
-          </Text>
+          <Ionicons name="volume-mute" size={18} color="#fff" />
+          <Text style={styles.unmuteBannerText}>Audio disattivato dal browser — Clicca per attivare l'audio</Text>
           <Ionicons name="volume-high" size={18} color={colors.primary} />
         </TouchableOpacity>
       )}
 
-      {/* ── 2c. Browser Autoplay Gesture Required Overlay ── */}
-      {requiresUserGesture && !isMinimized && (
-        <View style={styles.gestureOverlay} pointerEvents="box-none">
-          <TouchableOpacity
-            style={styles.gesturePlayCard}
-            activeOpacity={0.85}
-            onPress={handleUserGesturePlay}
-          >
-            <View style={styles.gesturePlayCircle}>
-              <Ionicons name="play" size={38} color="#fff" style={{ marginLeft: 4 }} />
-            </View>
-            <Text style={styles.gesturePlayTitle}>Tocca per riprodurre</Text>
-            <Text style={styles.gesturePlaySub}>Premi qui per avviare lo stream</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* ── 3a. Aspect Ratio HUD Badge ── */}
-      {fitFeedback !== null && (
-        <View style={styles.aspectFeedbackBadge} pointerEvents="none">
-          <Ionicons name="scan-outline" size={24} color="#fff" />
-          <Text style={styles.aspectFeedbackText}>{fitFeedback}</Text>
-        </View>
-      )}
-
-      {/* ── 3a. Desktop Volume Feedback HUD ── */}
-      {volumeFeedback !== null && (
-        <View style={styles.volumeFeedbackBadge} pointerEvents="none">
-          <Ionicons
-            name={volumeFeedback === 0 ? 'volume-mute' : volumeFeedback < 50 ? 'volume-low' : 'volume-high'}
-            size={28}
-            color="#fff"
-          />
-          <Text style={styles.volumeFeedbackText}>{volumeFeedback}%</Text>
-        </View>
-      )}
-
-      {/* ── 3. Quick Skip Ripple Indicator (-10s / +10s) ── */}
-      {seekFeedback && (
-        <View
-          style={[
-            styles.seekRippleBadge,
-            seekFeedback.direction === 'back' ? styles.seekRippleLeft : styles.seekRippleRight
-          ]}
-          pointerEvents="none"
-        >
-          <Ionicons
-            name={seekFeedback.direction === 'back' ? 'arrow-undo' : 'arrow-redo'}
-            size={28}
-            color="#fff"
-          />
-          <Text style={styles.seekRippleText}>
-            {seekFeedback.direction === 'back' ? '-10s' : '+10s'}
-          </Text>
-        </View>
-      )}
-
-      {/* ── 4. Center Tap Area for Play/Pause & Double-Tap Skip ── */}
-      {!isMinimized && (
-        <TouchableOpacity
-          style={styles.centerTapArea}
-          activeOpacity={1}
-          onPress={handleCenterTap}
-        />
-      )}
-
-      {/* ── 5. Error Overlay Modal ── */}
+      {/* ── 8. Error Overlay with Retry ── */}
       {errorMsg && (
         <View style={styles.errorOverlay}>
           <View style={styles.errorCard}>
-            <Ionicons name="alert-circle-outline" size={48} color={colors.accentRed} />
-            <Text style={styles.errorHeading}>Impossibile riprodurre lo stream</Text>
-            <Text style={styles.errorMessage}>{errorMsg}</Text>
-
-            <View style={styles.errorActionsRow}>
-              <TouchableOpacity
-                style={[styles.btnAction, styles.btnPrimary]}
-                onPress={() => {
-                  if (Platform.OS === 'web') {
-                    initWebPlayer(stream.streamUrl);
-                  } else if (nativeVideoRef.current) {
-                    nativeVideoRef.current.replayAsync?.();
-                  }
-                }}
-              >
-                <Ionicons name="refresh" size={18} color="#fff" />
-                <Text style={styles.btnActionText}>Riprova</Text>
+            <Ionicons name="alert-circle-outline" size={44} color="#ef4444" />
+            <Text style={styles.errorHeading}>Errore di Riproduzione</Text>
+            <Text style={styles.errorDesc}>{errorMsg}</Text>
+            <View style={styles.errorActions}>
+              <TouchableOpacity style={styles.retryBtn} onPress={retry}>
+                <Ionicons name="refresh" size={16} color="#fff" />
+                <Text style={styles.retryBtnText}>Riprova</Text>
               </TouchableOpacity>
-
-
-
-              <TouchableOpacity
-                style={[styles.btnAction, styles.btnDismiss]}
-                onPress={handleAnimatedClose}
-              >
-                <Text style={styles.btnActionText}>Chiudi</Text>
+              <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
+                <Text style={styles.closeBtnText}>Chiudi</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       )}
 
-      {/* ── 6. Full Interactive Controls Overlay ── */}
-      {!isMinimized && showControls && (
-        <Animated.View
-          style={[styles.controlsOverlay, { opacity: controlsAnim }]}
-          pointerEvents="box-none"
-        >
-          {/* Top Header Bar */}
+      {/* ── 9. Interactive Controls Overlay ── */}
+      {showControls && (
+        <View style={styles.controlsOverlay} pointerEvents="box-none">
+          {/* Top Bar */}
           <View style={styles.topBar}>
             <View style={styles.topLeft}>
-              <TouchableOpacity
-                style={styles.backButton}
-                onPress={handleAnimatedClose}
-                accessibilityLabel="Chiudi player"
-              >
+              <TouchableOpacity style={styles.backBtn} onPress={handleClose}>
                 <Ionicons name="chevron-back" size={20} color="#fff" />
-                <Text style={styles.backButtonText}>Chiudi</Text>
+                <Text style={styles.backBtnText}>Chiudi</Text>
               </TouchableOpacity>
 
-              <View style={styles.titleContainer}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={styles.titleInfo}>
+                <View style={styles.badgeRow}>
                   <View style={[styles.typeBadge, isLive ? styles.typeBadgeLive : styles.typeBadgeVod]}>
-                    {isLive && <View style={styles.livePulseDot} />}
                     <Text style={styles.typeBadgeText}>
                       {isLive ? 'LIVE' : stream.type === 'series' ? 'SERIE' : 'VOD'}
                     </Text>
@@ -649,7 +471,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
                   </Text>
                 </View>
                 {stream.subTitle ? (
-                  <Text style={styles.streamSubtitle} numberOfLines={1}>
+                  <Text style={styles.streamSubTitle} numberOfLines={1}>
                     {stream.subTitle}
                   </Text>
                 ) : null}
@@ -657,16 +479,6 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
             </View>
 
             <View style={styles.topRight}>
-              {onToggleMinimize && (
-                <TouchableOpacity
-                  style={styles.roundIconBtn}
-                  onPress={onToggleMinimize}
-                  accessibilityLabel="Riduci a Mini-Player"
-                >
-                  <Ionicons name="contract-outline" size={18} color="#fff" />
-                </TouchableOpacity>
-              )}
-
               {isLive && onOpenEpg && (
                 <TouchableOpacity style={styles.glassBtn} onPress={onOpenEpg}>
                   <Ionicons name="calendar-outline" size={16} color="#fff" />
@@ -674,81 +486,62 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
                 </TouchableOpacity>
               )}
 
-              {Platform.OS === 'web' && !isTouchDevice && (
-                <TouchableOpacity
-                  style={styles.roundIconBtn}
-                  onPress={() => setShortcutsModalVisible(true)}
-                  accessibilityLabel="Scorciatoie da tastiera (?)"
-                >
-                  <Ionicons name="help-circle-outline" size={18} color="#fff" />
+              {onToggleMinimize && (
+                <TouchableOpacity style={styles.iconBtn} onPress={onToggleMinimize} accessibilityLabel="Mini-player">
+                  <Ionicons name="contract-outline" size={18} color="#fff" />
                 </TouchableOpacity>
               )}
 
-              <TouchableOpacity
-                style={styles.roundIconBtn}
-                onPress={handleAnimatedClose}
-                accessibilityLabel="Chiudi"
-              >
+              <TouchableOpacity style={styles.iconBtn} onPress={() => setShortcutsModalVisible(true)} accessibilityLabel="Scorciatoie">
+                <Ionicons name="help-circle-outline" size={18} color="#fff" />
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.iconBtn} onPress={handleClose} accessibilityLabel="Chiudi">
                 <Ionicons name="close" size={20} color="#fff" />
               </TouchableOpacity>
             </View>
           </View>
 
-          {/* Center Play/Pause Indicator (when paused) */}
-          {!isPlaying && !loading && (
-            <View style={styles.centerControlArea} pointerEvents="box-none">
-              <TouchableOpacity
-                style={styles.bigPlayButton}
-                activeOpacity={0.8}
-                onPress={togglePlayPause}
-                accessibilityLabel="Riproduci"
-              >
-                <Ionicons name="play" size={40} color="#fff" style={{ marginLeft: 4 }} />
+          {/* Big Center Play Icon (shown only when paused) */}
+          {!isPlaying && !isBuffering && (
+            <View style={styles.centerPlayArea} pointerEvents="box-none">
+              <TouchableOpacity style={styles.centerPlayBtn} onPress={togglePlayPause}>
+                <Ionicons name="play" size={44} color="#fff" style={{ marginLeft: 4 }} />
               </TouchableOpacity>
             </View>
           )}
 
-          {/* Bottom Bar: Timeline Scrubber + Controls */}
+          {/* Bottom Bar */}
           <View style={styles.bottomBar} pointerEvents="auto">
-            {/* Scrubber Timeline (for Movies and Series) */}
+            {/* Timeline Scrubber (for Movies and Series) */}
             {!isLive && (
               <View
                 // @ts-ignore
                 ref={trackRef}
-                style={styles.timelineHitArea}
+                style={styles.scrubberArea}
                 // @ts-ignore
-                onMouseDown={handleTimelineMouseDown}
-                onTouchStart={handleTimelineTouchStart}
-                onTouchMove={handleTimelineTouchMove}
-                onTouchEnd={handleTimelineTouchEnd}
+                onMouseDown={handleScrubMouseDown}
                 // @ts-ignore
-                onMouseMove={handleTimelineMouseMove}
+                onMouseMove={handleScrubMouseMove}
                 // @ts-ignore
-                onMouseLeave={handleTimelineMouseLeave}
+                onMouseLeave={() => setHoverSec(null)}
               >
-                <View style={styles.timelineBarBackground}>
-                  {/* Buffer Ahead Bar */}
-                  <View style={[styles.timelineBuffer, { width: `${bufferPercent}%` }]} />
-                  {/* Played Progress Bar */}
-                  <View style={[styles.timelinePlayed, { width: `${progressPercent}%` }]} />
-                  {/* Scrubber Handle Thumb */}
-                  <View style={[styles.timelineThumb, { left: `${progressPercent}%` }]} />
+                <View style={styles.scrubberTrack}>
+                  <View style={[styles.scrubberBuffer, { width: `${bufferPercent}%` }]} />
+                  <View style={[styles.scrubberProgress, { width: `${progressPct}%` }]} />
+                  <View style={[styles.scrubberThumb, { left: `${progressPct}%` }]} />
                 </View>
 
-                {/* Hover / Drag Preview Timestamp Tooltip */}
-                {(hoverSeekTime !== null || (isDraggingTrack && dragTime !== null)) && (
+                {/* Hover / Drag Preview Tooltip */}
+                {(hoverSec !== null || (isDragging && dragSec !== null)) && (
                   <View
                     style={[
-                      styles.scrubTooltip,
-                      {
-                        left: isDraggingTrack && dragTime !== null
-                          ? `${progressPercent}%`
-                          : `${(hoverSeekPos / (trackRef.current?.getBoundingClientRect?.()?.width || 1)) * 100}%`
-                      }
+                      styles.hoverTooltip,
+                      { left: isDragging && dragSec !== null ? `${progressPct}%` : `${hoverX}px` }
                     ]}
                   >
-                    <Text style={styles.scrubTooltipText}>
-                      {formatTime(isDraggingTrack && dragTime !== null ? dragTime : (hoverSeekTime || 0))}
+                    <Text style={styles.hoverTooltipText}>
+                      {formatTime(isDragging && dragSec !== null ? dragSec : (hoverSec || 0))}
                     </Text>
                   </View>
                 )}
@@ -756,270 +549,122 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
             )}
 
             {/* Bottom Controls Row */}
-            <View style={styles.controlsRow}>
-              {/* Left Group */}
-              <View style={styles.leftControlsGroup}>
-                <TouchableOpacity
-                  style={styles.ctrlIconBtn}
-                  onPress={togglePlayPause}
-                  accessibilityLabel={isPlaying ? 'Pausa' : 'Riproduci'}
-                >
+            <View style={styles.bottomRow}>
+              {/* Left: Play/Pause, Skip, Time */}
+              <View style={styles.bottomLeft}>
+                <TouchableOpacity style={styles.ctrlBtn} onPress={togglePlayPause}>
                   <Ionicons name={isPlaying ? 'pause' : 'play'} size={22} color="#fff" />
                 </TouchableOpacity>
 
                 {!isLive && (
                   <>
-                    <TouchableOpacity
-                      style={styles.ctrlIconBtn}
-                      onPress={() => seekRelative(-10)}
-                      accessibilityLabel="Indietro di 10 secondi"
-                    >
+                    <TouchableOpacity style={styles.ctrlBtn} onPress={() => seekRelative(-10)}>
                       <Ionicons name="arrow-undo" size={20} color="#fff" />
                     </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={styles.ctrlIconBtn}
-                      onPress={() => seekRelative(10)}
-                      accessibilityLabel="Avanti di 10 secondi"
-                    >
+                    <TouchableOpacity style={styles.ctrlBtn} onPress={() => seekRelative(10)}>
                       <Ionicons name="arrow-redo" size={20} color="#fff" />
                     </TouchableOpacity>
                   </>
                 )}
 
                 {isLive ? (
-                  <View style={styles.liveStatusBadge}>
-                    <View style={styles.livePulseDot} />
-                    <Text style={styles.liveStatusText}>DIRETTA</Text>
+                  <View style={styles.liveBadge}>
+                    <View style={styles.liveDot} />
+                    <Text style={styles.liveText}>DIRETTA</Text>
                   </View>
                 ) : (
-                  <TouchableOpacity
-                    onPress={() => setShowTimeRemaining(!showTimeRemaining)}
-                    style={styles.timeDisplay}
-                  >
-                    <Text style={styles.timeCurrent}>{formatTime(currentTime)}</Text>
-                    <Text style={styles.timeSeparator}>/</Text>
-                    <Text style={styles.timeTotal}>
-                      {showTimeRemaining && duration > 0
-                        ? `-${formatTime(Math.max(0, duration - currentTime))}`
-                        : formatTime(duration)}
-                    </Text>
-                  </TouchableOpacity>
+                  <Text style={styles.timeText}>
+                    {formatTime(currentTime)} / {formatTime(duration)}
+                  </Text>
                 )}
               </View>
 
-              {/* Right Group */}
-              <View style={styles.rightControlsGroup}>
-                {/* Audio & Subtitle Selector */}
+              {/* Right: Tracks, Quality, Speed, Aspect Ratio, Volume, PiP, Fullscreen */}
+              <View style={styles.bottomRight}>
+                {/* Audio / Subtitle modal */}
+                {(audioTracks.length > 1 || subtitleTracks.length > 0) && (
+                  <TouchableOpacity
+                    style={[styles.ctrlBtn, (activeSubtitleTrack !== -1 || audioTracks.length > 1) && styles.ctrlBtnActive]}
+                    onPress={() => setTrackModalVisible(true)}
+                  >
+                    <Ionicons name="chatbubble-ellipses-outline" size={20} color="#fff" />
+                  </TouchableOpacity>
+                )}
+
+                {/* Quality modal */}
+                {qualityLevels.length > 1 && (
+                  <TouchableOpacity
+                    style={[styles.ctrlBtn, activeQualityLevel !== -1 && styles.ctrlBtnActive]}
+                    onPress={() => setQualityModalVisible(true)}
+                  >
+                    <Ionicons name="speedometer-outline" size={20} color="#fff" />
+                  </TouchableOpacity>
+                )}
+
+                {/* Playback speed (VOD) */}
+                {!isLive && (
+                  <TouchableOpacity
+                    style={[styles.ctrlBtn, playbackSpeed !== 1.0 && styles.ctrlBtnActive]}
+                    onPress={() => setSpeedModalVisible(true)}
+                  >
+                    <Text style={styles.speedText}>{playbackSpeed === 1.0 ? '1x' : `${playbackSpeed}x`}</Text>
+                  </TouchableOpacity>
+                )}
+
+                {/* Aspect Ratio Toggle (Adatta / Riempi / Allunga) */}
                 <TouchableOpacity
-                  style={[
-                    styles.ctrlIconBtn,
-                    (activeSubtitleTrack !== -1 || audioTracks.length > 1) && styles.ctrlIconBtnActive
-                  ]}
-                  onPress={() => setTrackModalVisible(true)}
-                  accessibilityLabel="Tracce Audio e Sottotitoli"
+                  style={[styles.ctrlBtn, videoFit !== 'contain' && styles.ctrlBtnActive]}
+                  onPress={cycleVideoFit}
+                  accessibilityLabel="Formato video (Adatta / Riempi / Allunga)"
                 >
                   <Ionicons
-                    name="chatbubble-ellipses-outline"
+                    name={videoFit === 'cover' ? 'crop' : videoFit === 'fill' ? 'resize' : 'scan-outline'}
                     size={20}
-                    color={activeSubtitleTrack !== -1 ? colors.primary : '#fff'}
+                    color={videoFit !== 'contain' ? colors.primary : '#fff'}
                   />
                 </TouchableOpacity>
 
-                {/* Quality & ABR Selector (if multiple quality levels found) */}
-                {qualityLevels.length > 0 && (
-                  <TouchableOpacity
-                    style={[styles.ctrlIconBtn, activeQualityLevel !== -1 && styles.ctrlIconBtnActive]}
-                    onPress={() => setQualityModalVisible(true)}
-                    accessibilityLabel="Qualità Video"
-                  >
-                    <Ionicons
-                      name="speedometer-outline"
-                      size={20}
-                      color={activeQualityLevel !== -1 ? colors.primary : '#fff'}
-                    />
-                  </TouchableOpacity>
-                )}
-
-                {/* Playback Speed (Movies and Series) */}
-                {!isLive && (
-                  <TouchableOpacity
-                    style={[styles.ctrlIconBtn, playbackSpeed !== 1.0 && styles.ctrlIconBtnActive]}
-                    onPress={() => setSpeedModalVisible(true)}
-                    accessibilityLabel="Velocità di riproduzione"
-                  >
-                    <Text style={styles.speedBtnText}>
-                      {playbackSpeed === 1.0 ? '1x' : `${playbackSpeed}x`}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-
-                {/* Picture in Picture */}
-                {Platform.OS === 'web' && (
-                  <TouchableOpacity
-                    style={styles.ctrlIconBtn}
-                    onPress={togglePictureInPicture}
-                    accessibilityLabel="Picture-in-Picture"
-                  >
-                    <Ionicons name="albums-outline" size={20} color="#fff" />
-                  </TouchableOpacity>
-                )}
-
-                {/* Desktop Volume Slider on Hover */}
-                <View
-                  style={styles.volumeContainer}
-                  // @ts-ignore
-                  onMouseEnter={() => setVolumeHovered(true)}
-                  // @ts-ignore
-                  onMouseLeave={() => setVolumeHovered(false)}
-                >
-                  <TouchableOpacity style={styles.ctrlIconBtn} onPress={toggleMute}>
+                {/* Volume Button & Hover Slider */}
+                <View style={styles.volumeWrap}>
+                  <TouchableOpacity style={styles.ctrlBtn} onPress={toggleMute}>
                     <Ionicons
                       name={isMuted || volume === 0 ? 'volume-mute' : volume < 0.5 ? 'volume-low' : 'volume-high'}
                       size={22}
                       color="#fff"
                     />
                   </TouchableOpacity>
-
-                  {Platform.OS === 'web' && volumeHovered && (
-                    <View style={styles.volumeSliderTrack}>
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={isMuted ? 0 : volume}
-                        onChange={(e) => changeVolume(parseFloat(e.target.value))}
-                        style={{
-                          width: 80,
-                          height: 4,
-                          cursor: 'pointer',
-                          accentColor: '#3b82f6'
-                        }}
-                      />
-                    </View>
-                  )}
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={isMuted ? 0 : volume}
+                    onChange={(e) => changeVolume(parseFloat(e.target.value))}
+                    style={{
+                      width: 75,
+                      height: 4,
+                      cursor: 'pointer',
+                      accentColor: colors.primary
+                    }}
+                  />
                 </View>
 
-                {/* Aspect Ratio Toggle (Adatta 16:9 / Riempi / Allunga) */}
-                {Platform.OS === 'web' && (
-                  <TouchableOpacity
-                    style={[styles.ctrlIconBtn, videoFitMode !== 'contain' && styles.ctrlIconBtnActive]}
-                    onPress={cycleVideoFit}
-                    accessibilityLabel="Formato video: Adatta / Riempi / Allunga"
-                  >
-                    <Ionicons
-                      name={videoFitMode === 'cover' ? 'crop' : videoFitMode === 'fill' ? 'resize' : 'scan-outline'}
-                      size={20}
-                      color={videoFitMode !== 'contain' ? colors.primary : '#fff'}
-                    />
-                  </TouchableOpacity>
-                )}
+                {/* PiP */}
+                <TouchableOpacity style={styles.ctrlBtn} onPress={togglePictureInPicture}>
+                  <Ionicons name="albums-outline" size={20} color="#fff" />
+                </TouchableOpacity>
 
-                {/* Fullscreen Button */}
-                <TouchableOpacity
-                  style={styles.ctrlIconBtn}
-                  onPress={toggleFullscreen}
-                  accessibilityLabel="Schermo intero"
-                >
-                  <Ionicons
-                    name={isFullscreen ? 'contract' : 'expand'}
-                    size={20}
-                    color="#fff"
-                  />
+                {/* Fullscreen */}
+                <TouchableOpacity style={styles.ctrlBtn} onPress={toggleFullscreen}>
+                  <Ionicons name={isFullscreen ? 'contract' : 'expand'} size={20} color="#fff" />
                 </TouchableOpacity>
               </View>
             </View>
           </View>
-        </Animated.View>
-      )}
-
-      {/* ── 7. Resume Playback Banner ── */}
-      {resumePrompt && !isMinimized && (
-        <View style={styles.resumePromptContainer} pointerEvents="box-none">
-          <View style={styles.resumePromptCard}>
-            <View style={styles.resumeIconWrap}>
-              <Ionicons name="time" size={20} color={colors.primary} />
-            </View>
-            <View style={styles.resumeTextWrap}>
-              <Text style={styles.resumePromptTitle}>Riprendere la visione?</Text>
-              <Text style={styles.resumePromptSub}>
-                Eri arrivato a {formatTime(resumePrompt.time)}
-              </Text>
-            </View>
-            <View style={styles.resumeBtnGroup}>
-              <TouchableOpacity style={styles.resumeBtnPrimary} onPress={handleConfirmResume}>
-                <Ionicons name="play" size={14} color="#fff" style={{ marginRight: 4 }} />
-                <Text style={styles.resumeBtnText}>Riprendi</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.resumeBtnSecondary} onPress={handleRestartFromBeginning}>
-                <Text style={styles.resumeBtnTextSecondary}>Dall'inizio</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.resumeBtnClose} onPress={() => setResumePrompt(null)}>
-                <Ionicons name="close" size={16} color="rgba(255,255,255,0.7)" />
-              </TouchableOpacity>
-            </View>
-          </View>
         </View>
       )}
 
-      {/* ── 8. Mini-Player Floating Card Controls ── */}
-      {isMinimized && (
-        <View
-          style={styles.miniOverlay}
-          // @ts-ignore
-          onMouseEnter={() => setIsHoveredMini(true)}
-          // @ts-ignore
-          onMouseLeave={() => setIsHoveredMini(false)}
-        >
-          <View style={styles.miniTopBar}>
-            <Text style={styles.miniTitle} numberOfLines={1}>
-              {stream.title}
-            </Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <TouchableOpacity
-                style={styles.miniIconBtn}
-                onPress={onToggleMinimize}
-                accessibilityLabel="Espandi"
-              >
-                <Ionicons name="expand" size={14} color="#fff" />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.miniIconBtn}
-                onPress={handleAnimatedClose}
-                accessibilityLabel="Chiudi"
-              >
-                <Ionicons name="close" size={15} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <TouchableOpacity
-            style={styles.miniCenterTap}
-            activeOpacity={0.8}
-            onPress={togglePlayPause}
-          >
-            {(!isPlaying || isHoveredMini) && (
-              <View style={styles.miniPlayCircle}>
-                <Ionicons name={isPlaying ? 'pause' : 'play'} size={20} color="#fff" />
-              </View>
-            )}
-          </TouchableOpacity>
-
-          {!isLive && duration > 0 && (
-            <View style={styles.miniProgressTrack}>
-              <View
-                style={[
-                  styles.miniProgressFill,
-                  { width: `${Math.min(100, Math.max(0, (currentTime / duration) * 100))}%` }
-                ]}
-              />
-            </View>
-          )}
-        </View>
-      )}
-
-      {/* ── 9. Track Selection Modal (Audio & Subtitles) ── */}
+      {/* ── 10. Modals ── */}
       <TrackSelectionModal
         visible={trackModalVisible}
         audioTracks={audioTracks}
@@ -1031,7 +676,6 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
         onClose={() => setTrackModalVisible(false)}
       />
 
-      {/* ── 10. Quality Selection Modal (ABR) ── */}
       <QualitySelectionModal
         visible={qualityModalVisible}
         qualityLevels={qualityLevels}
@@ -1040,7 +684,6 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
         onClose={() => setQualityModalVisible(false)}
       />
 
-      {/* ── 11. Playback Speed Modal ── */}
       <SpeedSelectionModal
         visible={speedModalVisible}
         activeSpeed={playbackSpeed}
@@ -1048,91 +691,66 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
         onClose={() => setSpeedModalVisible(false)}
       />
 
-      {/* ── 12. Desktop Keyboard Shortcuts Modal ── */}
       <KeyboardShortcutsModal
         visible={shortcutsModalVisible}
         onClose={() => setShortcutsModalVisible(false)}
       />
-    </Animated.View>
-  );
-
-  if (Platform.OS === 'web') {
-    return playerContent;
-  }
-
-  return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={handleAnimatedClose}>
-      {playerContent}
-    </Modal>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    // @ts-ignore
-    position: Platform.OS === 'web' ? 'fixed' : 'relative',
+  fullPlayerContainer: {
+    position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    flex: 1,
-    backgroundColor: '#030508',
-    width: '100%',
-    height: '100%',
-    overflow: 'hidden',
-    zIndex: 99999
+    backgroundColor: '#000',
+    zIndex: 9999,
+    overflow: 'hidden'
   },
-  miniContainer: {
-    // @ts-ignore
-    position: Platform.OS === 'web' ? 'fixed' : 'absolute',
-    bottom: Platform.OS === 'web' ? 24 : 76,
-    right: 18,
+  miniPlayerContainer: {
+    position: 'absolute',
+    bottom: 24,
+    right: 24,
     width: 320,
     height: 180,
     backgroundColor: '#000',
-    borderRadius: 16,
+    borderRadius: 12,
+    zIndex: 9999,
     overflow: 'hidden',
-    zIndex: 99999,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 16 },
-    shadowOpacity: 0.8,
-    shadowRadius: 28,
-    elevation: 24,
     borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.2)'
+    borderColor: 'rgba(255,255,255,0.2)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.8,
+    shadowRadius: 16
   },
-  video: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: '#000'
-  },
-
-  // Center Tap Area
-  centerTapArea: {
+  miniControls: {
     position: 'absolute',
-    top: 70,
+    top: 8,
+    right: 8,
+    flexDirection: 'row',
+    gap: 6
+  },
+  miniBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  videoClickLayer: {
+    position: 'absolute',
+    top: 0,
     left: 0,
     right: 0,
-    bottom: 90,
-    zIndex: 15
+    bottom: 0,
+    zIndex: 5
   },
-
-  // Seek Ripple
-  seekRippleBadge: {
-    position: 'absolute',
-    top: '45%',
-    zIndex: 25,
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
-    gap: 4
-  },
-  inPlaybackBuffering: {
+  bufferingHud: {
     position: 'absolute',
     top: 0,
     left: 0,
@@ -1140,86 +758,126 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 22
+    zIndex: 10
   },
-  inPlaybackBufferingPill: {
+  bufferingHudPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: 'rgba(12, 16, 26, 0.85)',
+    backgroundColor: 'rgba(12, 16, 26, 0.88)',
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 24,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.15)'
   },
-  inPlaybackBufferingText: {
+  bufferingHudText: {
     color: '#fff',
     fontSize: 13,
     fontWeight: '600'
   },
-  aspectFeedbackBadge: {
+  hudBadge: {
     position: 'absolute',
     top: '45%',
     alignSelf: 'center',
-    zIndex: 35,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 22,
-    paddingVertical: 14,
-    borderRadius: 16,
-    backgroundColor: 'rgba(12, 16, 26, 0.92)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(59, 130, 246, 0.5)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.8,
-    shadowRadius: 20
-  },
-  aspectFeedbackText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700'
-  },
-  volumeFeedbackBadge: {
-    position: 'absolute',
-    top: '45%',
-    alignSelf: 'center',
-    zIndex: 35,
+    zIndex: 20,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
     paddingHorizontal: 22,
     paddingVertical: 14,
     borderRadius: 16,
-    backgroundColor: 'rgba(12, 16, 26, 0.88)',
+    backgroundColor: 'rgba(12, 16, 26, 0.92)',
     borderWidth: 1.5,
-    borderColor: 'rgba(59, 130, 246, 0.5)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.8,
-    shadowRadius: 20
+    borderColor: 'rgba(59, 130, 246, 0.5)'
   },
-  volumeFeedbackText: {
+  hudBadgeText: {
     color: '#fff',
-    fontSize: 18,
-    fontWeight: '800',
-    fontVariant: ['tabular-nums']
+    fontSize: 16,
+    fontWeight: '700'
   },
-  seekRippleLeft: {
-    left: '15%'
+  unmuteBanner: {
+    position: 'absolute',
+    top: 24,
+    alignSelf: 'center',
+    zIndex: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 24,
+    borderWidth: 1.5,
+    borderColor: 'rgba(59, 130, 246, 0.6)'
   },
-  seekRippleRight: {
-    right: '15%'
-  },
-  seekRippleText: {
+  unmuteBannerText: {
+    color: '#fff',
     fontSize: 13,
-    fontWeight: '700',
-    color: '#fff'
+    fontWeight: '600'
   },
-
-  // Controls Overlay
+  errorOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    zIndex: 40
+  },
+  errorCard: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+    padding: 28,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+    maxWidth: 420
+  },
+  errorHeading: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '700',
+    marginTop: 12,
+    marginBottom: 6
+  },
+  errorDesc: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: 20
+  },
+  errorActions: {
+    flexDirection: 'row',
+    gap: 12
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8
+  },
+  retryBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600'
+  },
+  closeBtn: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8
+  },
+  closeBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600'
+  },
   controlsOverlay: {
     position: 'absolute',
     top: 0,
@@ -1227,599 +885,244 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     justifyContent: 'space-between',
-    zIndex: 20
+    zIndex: 15
   },
-
-  // Top Bar
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'ios' ? 48 : 18,
-    paddingBottom: 24,
-    backgroundColor: 'transparent',
-    // @ts-ignore
-    background: Platform.OS === 'web'
-      ? 'linear-gradient(to bottom, rgba(3, 5, 8, 0.94) 0%, rgba(3, 5, 8, 0.45) 65%, transparent 100%)'
-      : undefined
-  },
+    paddingHorizontal: 24,
+    paddingTop: 20,
+    paddingBottom: 40,
+    backgroundImage: 'linear-gradient(to bottom, rgba(0,0,0,0.85), transparent)'
+  } as any,
   topLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
-    flex: 1,
-    marginRight: 16
+    gap: 16
   },
-  backButton: {
+  backBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
     paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8
+    paddingVertical: 8,
+    borderRadius: 20
   },
-  backButtonText: {
+  backBtnText: {
     color: '#fff',
     fontSize: 13,
     fontWeight: '600'
   },
-  titleContainer: {
-    flex: 1
+  titleInfo: {
+    gap: 2
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  typeBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4
+  },
+  typeBadgeLive: {
+    backgroundColor: '#ef4444'
+  },
+  typeBadgeVod: {
+    backgroundColor: colors.primary
+  },
+  typeBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '800'
   },
   streamTitle: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '700',
-    letterSpacing: -0.2
+    maxWidth: 400
   },
-  streamSubtitle: {
+  streamSubTitle: {
     color: colors.textSecondary,
-    fontSize: 12,
-    marginTop: 2
+    fontSize: 12
   },
   topRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8
+    gap: 10
   },
   glassBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
     paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8
+    paddingVertical: 8,
+    borderRadius: 20
   },
   glassBtnText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600'
   },
-  roundIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+  iconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.12)',
     justifyContent: 'center',
     alignItems: 'center'
   },
-
-  // Badges
-  typeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 4
-  },
-  typeBadgeVod: {
-    backgroundColor: 'rgba(59, 130, 246, 0.25)',
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.5)'
-  },
-  typeBadgeLive: {
-    backgroundColor: 'rgba(239, 68, 68, 0.25)',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.5)',
-    gap: 5
-  },
-  typeBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#fff',
-    letterSpacing: 0.5
-  },
-  livePulseDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#ef4444'
-  },
-
-  // Center Big Play Button
-  centerControlArea: {
-    flex: 1,
+  centerPlayArea: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     justifyContent: 'center',
     alignItems: 'center'
   },
-  bigPlayButton: {
+  centerPlayBtn: {
     width: 76,
     height: 76,
     borderRadius: 38,
-    backgroundColor: 'rgba(15, 20, 30, 0.82)',
+    backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.5,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
     shadowRadius: 20
   },
-
-  // Bottom Controls Bar
   bottomBar: {
-    paddingHorizontal: 20,
-    paddingBottom: Platform.OS === 'ios' ? 36 : 18,
-    paddingTop: 16,
-    backgroundColor: 'transparent',
-    // @ts-ignore
-    background: Platform.OS === 'web'
-      ? 'linear-gradient(to top, rgba(3, 5, 8, 0.96) 0%, rgba(3, 5, 8, 0.55) 65%, transparent 100%)'
-      : undefined
-  },
-
-  // Timeline Scrubber
-  timelineHitArea: {
-    height: 32,
-    justifyContent: 'center',
-    position: 'relative',
-    // @ts-ignore
-    cursor: Platform.OS === 'web' ? 'pointer' : undefined
-  },
-  timelineBarBackground: {
+    paddingHorizontal: 24,
+    paddingBottom: 20,
+    paddingTop: 30,
+    backgroundImage: 'linear-gradient(to top, rgba(0,0,0,0.9), transparent)'
+  } as any,
+  scrubberArea: {
+    paddingVertical: 10,
+    cursor: 'pointer'
+  } as any,
+  scrubberTrack: {
     height: 5,
+    backgroundColor: 'rgba(255,255,255,0.25)',
     borderRadius: 3,
-    backgroundColor: 'rgba(255, 255, 255, 0.18)',
     position: 'relative'
   },
-  timelineBuffer: {
+  scrubberBuffer: {
     position: 'absolute',
-    left: 0,
     top: 0,
+    left: 0,
     bottom: 0,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255, 255, 255, 0.38)'
+    backgroundColor: 'rgba(255,255,255,0.4)',
+    borderRadius: 3
   },
-  timelinePlayed: {
+  scrubberProgress: {
     position: 'absolute',
-    left: 0,
     top: 0,
+    left: 0,
     bottom: 0,
-    borderRadius: 3,
-    backgroundColor: '#3b82f6'
+    backgroundColor: colors.primary,
+    borderRadius: 3
   },
-  timelineThumb: {
+  scrubberThumb: {
     position: 'absolute',
     top: -5,
     width: 15,
     height: 15,
     borderRadius: 8,
     backgroundColor: '#fff',
-    marginLeft: -7.5,
-    borderWidth: 2,
-    borderColor: '#3b82f6',
-    shadowColor: '#3b82f6',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 6
+    marginLeft: -7,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4
   },
-  scrubTooltip: {
+  hoverTooltip: {
     position: 'absolute',
-    top: -28,
-    marginLeft: -26,
-    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    top: -24,
+    marginLeft: -25,
+    backgroundColor: 'rgba(0,0,0,0.85)',
     paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingVertical: 2,
     borderRadius: 4,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)'
+    borderColor: 'rgba(255,255,255,0.2)'
   },
-  scrubTooltipText: {
+  hoverTooltipText: {
     color: '#fff',
     fontSize: 11,
     fontWeight: '700'
   },
-
-  // Controls Row
-  controlsRow: {
+  bottomRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 6
+    marginTop: 8
   },
-  leftControlsGroup: {
+  bottomLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12
   },
-  rightControlsGroup: {
+  bottomRight: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10
   },
-  ctrlIconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+  ctrlBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.1)',
     justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.08)'
+    alignItems: 'center'
   },
-  ctrlIconBtnActive: {
-    backgroundColor: 'rgba(59, 130, 246, 0.25)',
+  ctrlBtnActive: {
+    backgroundColor: 'rgba(59, 130, 246, 0.3)',
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.5)'
+    borderColor: colors.primary
   },
-  speedBtnText: {
+  speedText: {
     color: '#fff',
     fontSize: 12,
     fontWeight: '700'
   },
-
-  // Volume with Hover Slider
-  volumeContainer: {
+  volumeWrap: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6
   },
-  volumeSliderTrack: {
-    paddingHorizontal: 6,
-    justifyContent: 'center'
-  },
-
-  // Time Display
-  timeDisplay: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginLeft: 6
-  },
-  timeCurrent: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums']
-  },
-  timeSeparator: {
-    color: colors.textMuted,
-    fontSize: 13
-  },
-  timeTotal: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '500',
-    fontVariant: ['tabular-nums']
-  },
-
-  // Live Status Badge
-  liveStatusBadge: {
+  liveBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     backgroundColor: 'rgba(239, 68, 68, 0.2)',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.4)',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 6
-  },
-  liveStatusText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.5
-  },
-
-  // Resume Playback Prompt
-  resumePromptContainer: {
-    position: 'absolute',
-    top: Platform.OS === 'ios' ? 70 : 40,
-    left: 20,
-    right: 20,
-    alignItems: 'center',
-    zIndex: 40
-  },
-  resumePromptCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 22, 35, 0.94)',
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.4)',
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.6,
-    shadowRadius: 20,
-    maxWidth: 500,
-    width: '100%'
-  },
-  resumeIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.primaryMuted,
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  resumeTextWrap: {
-    flex: 1
-  },
-  resumePromptTitle: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700'
-  },
-  resumePromptSub: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    marginTop: 2
-  },
-  resumeBtnGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8
-  },
-  resumeBtnPrimary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.primary,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8
-  },
-  resumeBtnSecondary: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 8
-  },
-  resumeBtnClose: {
-    padding: 6
-  },
-  resumeBtnText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700'
-  },
-  resumeBtnTextSecondary: {
-    color: '#cbd5e1',
-    fontSize: 12,
-    fontWeight: '500'
-  },
-
-  // Mini-Player Styles
-  miniOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    zIndex: 10
-  },
-  miniTopBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 8,
-    paddingTop: 8,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)'
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ef4444'
   },
-  miniTitle: {
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ef4444'
+  },
+  liveText: {
     color: '#fff',
     fontSize: 11,
-    fontWeight: '700',
-    flex: 1,
-    marginRight: 6
+    fontWeight: '800'
   },
-  miniIconBtn: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.18)',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  miniCenterTap: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  miniPlayCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(59, 130, 246, 0.85)',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  miniProgressTrack: {
-    width: '100%',
-    height: 3,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)'
-  },
-  miniProgressFill: {
-    height: '100%',
-    backgroundColor: colors.primary
-  },
-
-  // Error Overlay
-  errorOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(3, 5, 8, 0.94)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 30,
-    padding: 24
-  },
-  errorCard: {
-    backgroundColor: '#141822',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.3)',
-    padding: 28,
-    maxWidth: 480,
-    width: '100%',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 16 },
-    shadowOpacity: 0.6,
-    shadowRadius: 30
-  },
-  errorHeading: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#fff',
-    marginTop: 14,
-    marginBottom: 8,
-    textAlign: 'center'
-  },
-  errorMessage: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 22
-  },
-  errorActionsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: 10
-  },
-  btnAction: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10
-  },
-  btnPrimary: {
-    backgroundColor: '#3b82f6'
-  },
-  btnSecondary: {
-    backgroundColor: '#212838',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)'
-  },
-  btnDismiss: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)'
-  },
-  btnActionText: {
+  timeText: {
     color: '#fff',
     fontSize: 13,
-    fontWeight: '600'
-  },
-
-  // Floating Unmute Banner
-  unmuteBanner: {
-    position: 'absolute',
-    top: Platform.OS === 'ios' ? 56 : 28,
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: 'rgba(15, 23, 42, 0.94)',
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 24,
-    borderWidth: 1.5,
-    borderColor: 'rgba(59, 130, 246, 0.6)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.7,
-    shadowRadius: 16,
-    elevation: 20,
-    zIndex: 35
-  },
-  unmutePulseIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(239, 68, 68, 0.85)',
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  unmuteBannerText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: -0.1
-  },
-
-  // Gesture Required Play Overlay
-  gestureOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(3, 5, 8, 0.65)',
-    zIndex: 25
-  },
-  gesturePlayCard: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.95)',
-    paddingHorizontal: 28,
-    paddingVertical: 22,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: 'rgba(59, 130, 246, 0.5)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 16 },
-    shadowOpacity: 0.8,
-    shadowRadius: 24,
-    elevation: 24
-  },
-  gesturePlayCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#3b82f6',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 14,
-    shadowColor: '#3b82f6',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 18,
-    elevation: 12
-  },
-  gesturePlayTitle: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: '700',
-    marginBottom: 4
-  },
-  gesturePlaySub: {
-    color: colors.textSecondary,
-    fontSize: 13
+    fontWeight: '600',
+    fontVariant: ['tabular-nums']
   }
 });
