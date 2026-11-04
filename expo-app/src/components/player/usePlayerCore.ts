@@ -41,6 +41,7 @@ export function usePlayerCore({
   const webVideoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<any>(null);
   const mpegtsRef = useRef<any>(null);
+  const currentStreamUrlRef = useRef<string>('');
 
   // Core playback states
   const [isPlaying, setIsPlaying] = useState(true);
@@ -177,6 +178,7 @@ export function usePlayerCore({
     const video = webVideoRef.current;
     if (!video || !targetUrl) return;
 
+    currentStreamUrlRef.current = targetUrl;
     setIsBuffering(true);
     setFirstFrameRendered(false);
     setErrorMsg(null);
@@ -232,6 +234,36 @@ export function usePlayerCore({
             kind: 'audio'
           }));
           setAudioTracks(aList);
+        } else if (targetUrl.includes('/api/hls/')) {
+          const rawMatch = targetUrl.match(/url=([^&]+)/);
+          if (rawMatch) {
+            const rawMediaUrl = decodeURIComponent(rawMatch[1]);
+            fetch(`/api/media_info?url=${encodeURIComponent(rawMediaUrl)}`)
+              .then(res => res.json())
+              .then(info => {
+                if (info?.audio_tracks?.length > 0) {
+                  const trMatch = targetUrl.match(/audio_track=(\d+)/);
+                  const activeIdx = trMatch ? parseInt(trMatch[1], 10) : 0;
+                  setAudioTracks(info.audio_tracks.map((t: any, idx: number) => ({
+                    id: t.stream_index !== undefined ? t.stream_index : idx,
+                    label: t.title || (t.language ? `Audio ${t.language.toUpperCase()}` : `Traccia ${idx + 1}`),
+                    language: t.language || '',
+                    active: (t.stream_index !== undefined ? t.stream_index : idx) === activeIdx,
+                    kind: 'audio'
+                  })));
+                }
+                if (info?.subtitle_tracks?.length > 0) {
+                  setSubtitleTracks(info.subtitle_tracks.map((s: any, idx: number) => ({
+                    id: s.stream_index !== undefined ? s.stream_index : idx,
+                    label: s.title || (s.language ? `Sottotitolo ${s.language.toUpperCase()}` : `Sottotitolo ${idx + 1}`),
+                    language: s.language || '',
+                    active: false,
+                    kind: 'subtitle'
+                  })));
+                }
+              })
+              .catch(() => {});
+          }
         }
       });
 
@@ -574,12 +606,25 @@ export function usePlayerCore({
 
   const handleSelectAudioTrack = useCallback((idx: number) => {
     setActiveAudioTrack(idx);
-    if (hlsRef.current) {
+    if (hlsRef.current && hlsRef.current.audioTracks && hlsRef.current.audioTracks.length > 0) {
       hlsRef.current.audioTrack = idx;
+    } else {
+      const curSrc = currentStreamUrlRef.current || '';
+      if (curSrc.includes('/api/hls/')) {
+        const curTime = webVideoRef.current?.currentTime || 0;
+        let newSrc = curSrc.replace(/&audio_track=\d+/g, '');
+        newSrc = `${newSrc}&audio_track=${idx}`;
+        loadStream(newSrc);
+        setTimeout(() => {
+          if (webVideoRef.current && curTime > 0) {
+            webVideoRef.current.currentTime = curTime;
+          }
+        }, 300);
+      }
     }
     setAudioTracks(prev => prev.map(t => ({ ...t, active: t.id === idx })));
     setTrackModalVisible(false);
-  }, []);
+  }, [loadStream]);
 
   const handleSelectSubtitleTrack = useCallback((idx: number) => {
     setActiveSubtitleTrack(idx);

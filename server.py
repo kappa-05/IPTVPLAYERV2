@@ -474,6 +474,14 @@ class HLSStreamManager:
                         pass
                 sess['proc'] = None
 
+            old_log = sess.get('log_file')
+            if old_log:
+                try:
+                    old_log.close()
+                except Exception:
+                    pass
+                sess['log_file'] = None
+
             ffmpeg_path = find_ffmpeg()
             if not ffmpeg_path:
                 return
@@ -487,6 +495,17 @@ class HLSStreamManager:
             force_h264 = sess.get('force_h264', False)
             video_codec = sess.get('video_codec', '')
 
+            # Detect best audio track:
+            # If default audio_track (0) requested, check if an Italian track is available
+            target_audio_track = audio_track
+            if target_audio_track == 0:
+                for a in sess.get('audio_tracks', []):
+                    l = (a.get('language') or '').lower()
+                    t = (a.get('title') or '').lower()
+                    if any(k in l or k in t for k in ('ita', 'it', 'italian', 'italiano')):
+                        target_audio_track = a.get('stream_index', 0)
+                        break
+
             cmd = [
                 ffmpeg_path,
                 "-y",
@@ -495,6 +514,7 @@ class HLSStreamManager:
             ]
             if target_url.startswith(('http://', 'https://')):
                 cmd.extend([
+                    "-hwaccel", "auto",
                     "-reconnect", "1",
                     "-reconnect_at_eof", "1",
                     "-reconnect_streamed", "1",
@@ -513,27 +533,29 @@ class HLSStreamManager:
             cmd.extend([
                 "-i", target_url,
                 "-map", "0:v:0?",
-                "-map", f"0:a:{audio_track}?" if audio_track >= 0 else "0:a?",
+                "-map", f"0:a:{target_audio_track}?" if target_audio_track >= 0 else "0:a?",
             ])
 
-            # Video handling: if already H.264, direct stream copy is 100% browser-safe.
-            # If HEVC / 4K / other codec, hardware-transcode to 8-bit H.264 (yuv420p).
+            # Video handling: if already H.264, direct stream copy is 100% browser-safe and instant.
+            # If HEVC / 4K / other codec, hardware-transcode to 8-bit H.264 at 1080p for rock-solid stability.
             need_video_transcode = (force_h264 or is_hevc) and (video_codec not in ('h264', 'avc'))
             if need_video_transcode:
                 if getattr(self, 'has_nvenc', False):
                     cmd.extend([
                         "-c:v", "h264_nvenc",
                         "-pix_fmt", "yuv420p",
+                        "-s", "1920x1080",
                         "-preset", "p1",
                         "-tune", "ull",
-                        "-b:v", "10000k",
-                        "-maxrate", "14000k",
-                        "-bufsize", "18000k"
+                        "-b:v", "6000k",
+                        "-maxrate", "8000k",
+                        "-bufsize", "12000k"
                     ])
                 else:
                     cmd.extend([
                         "-c:v", "libx264",
                         "-pix_fmt", "yuv420p",
+                        "-s", "1920x1080",
                         "-preset", "ultrafast",
                         "-tune", "zerolatency",
                         "-threads", "0",
@@ -546,24 +568,29 @@ class HLSStreamManager:
                 "-c:a", "aac",
                 "-b:a", "192k",
                 "-ac", "2",
+                "-ar", "48000",
+                "-af", "aresample=matrix_encoding=dplii,volume=1.25",
                 "-avoid_negative_ts", "make_zero",
                 "-f", "hls",
                 "-hls_time", str(int(seg_duration)),
                 "-hls_list_size", "0",
                 "-hls_segment_type", "fmp4",
                 "-hls_fmp4_init_filename", "init.mp4",
-                "-hls_flags", "independent_segments",
+                "-hls_flags", "independent_segments+temp_file",
                 "-start_number", str(start_seg),
                 "-hls_segment_filename", "seg_%04d.m4s",
                 f"internal_{audio_track}_{start_seg}.m3u8"
             ])
             try:
+                log_p = os.path.join(sdir, "ffmpeg.log")
+                log_f = open(log_p, "ab")
+                sess['log_file'] = log_f
                 sess['proc'] = subprocess.Popen(
                     cmd,
                     cwd=sdir,
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
+                    stderr=log_f,
                     env=clean_env
                 )
                 sess['current_start_seg'] = start_seg
@@ -618,11 +645,13 @@ class HLSStreamManager:
                 if proc and proc.poll() is not None and (not os.path.exists(seg_path) or os.path.getsize(seg_path) == 0):
                     err_txt = ""
                     try:
-                        if proc.stderr:
-                            err_txt = proc.stderr.read().decode('utf-8', errors='ignore')
+                        log_p = os.path.join(sdir, "ffmpeg.log")
+                        if os.path.exists(log_p):
+                            with open(log_p, "r", encoding="utf-8", errors="ignore") as lf:
+                                err_txt = lf.read()[-300:]
                     except Exception:
                         pass
-                    print(f"[HLS init.mp4 Error] FFmpeg exited {proc.returncode}: {err_txt[-200:]}")
+                    print(f"[HLS init.mp4 Error] FFmpeg exited {proc.returncode}: {err_txt}")
                     self._ensure_background_worker(sid, target_url, sdir, start_seg=0, audio_track=audio_track)
             if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
                 return seg_path
@@ -639,8 +668,8 @@ class HLSStreamManager:
         cur_start = sess.get('current_start_seg', 0)
         cur_audio = sess.get('current_audio_track', 0)
 
-        # If worker is not running, or if requested segment is far away or audio track differs, restart worker
-        if not worker_alive or (cur_audio != audio_track) or (seg_idx < cur_start) or (seg_idx > cur_start + 12):
+        # If worker is not running, audio track differs, or user jumped way far ahead/backwards (>600s), restart worker
+        if not worker_alive or (cur_audio != audio_track) or (seg_idx < cur_start) or (seg_idx > cur_start + 100):
             self._ensure_background_worker(sid, target_url, sdir, start_seg=seg_idx, audio_track=audio_track)
 
         # 2. Smart Wait: wait up to 35 seconds for worker
@@ -648,17 +677,19 @@ class HLSStreamManager:
         while time.time() - start_wait < 35.0:
             if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
                 return seg_path
-            time.sleep(0.12)
+            time.sleep(0.1)
             proc = sess.get('proc')
             if proc and proc.poll() is not None:
                 if not os.path.exists(seg_path) or os.path.getsize(seg_path) == 0:
                     err_txt = ""
                     try:
-                        if proc.stderr:
-                            err_txt = proc.stderr.read().decode('utf-8', errors='ignore')
+                        log_p = os.path.join(sdir, "ffmpeg.log")
+                        if os.path.exists(log_p):
+                            with open(log_p, "r", encoding="utf-8", errors="ignore") as lf:
+                                err_txt = lf.read()[-300:]
                     except Exception:
                         pass
-                    print(f"[HLS seg_{seg_idx} Error] FFmpeg exited {proc.returncode}: {err_txt[-200:]}")
+                    print(f"[HLS seg_{seg_idx} Error] FFmpeg exited {proc.returncode}: {err_txt}")
                     self._ensure_background_worker(sid, target_url, sdir, start_seg=seg_idx, audio_track=audio_track)
 
         if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
