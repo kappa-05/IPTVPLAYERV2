@@ -155,6 +155,20 @@ export const Header: React.FC<HeaderProps> = ({
         contentContainerStyle={styles.tabsContainer}
       >
         <TouchableOpacity
+          style={[styles.tab, activeTab === 'home' && styles.tabActive]}
+          onPress={() => onTabChange('home')}
+        >
+          <Ionicons
+            name="home-outline"
+            size={16}
+            color={activeTab === 'home' ? colors.primary : colors.textSecondary}
+          />
+          <Text style={[styles.tabText, activeTab === 'home' && styles.tabTextActive]}>
+            Home
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
           style={[styles.tab, activeTab === 'live' && styles.tabActive]}
           onPress={() => onTabChange('live')}
         >

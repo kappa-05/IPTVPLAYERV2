@@ -24,6 +24,7 @@ import { CategorySelector } from '../components/CategorySelector';
 import { StreamCard } from '../components/StreamCard';
 import { EpgGuideView } from '../components/EpgGuideView';
 import { ContinueWatchingRow } from '../components/ContinueWatchingRow';
+import { HomeScreen } from '../components/HomeScreen';
 import { Ionicons } from '@expo/vector-icons';
 
 interface DesktopAppProps {
@@ -52,6 +53,9 @@ interface DesktopAppProps {
   onOpenLogin: () => void;
   onLogout: () => void;
   history?: WatchHistoryItem[];
+  homeVod: any[];
+  homeSeries: any[];
+  homeLoading?: boolean;
   onPressHistoryItem?: (item: WatchHistoryItem) => void;
   onRemoveHistoryItem?: (id: string) => void;
   onToggleMobileMode?: () => void;
@@ -84,6 +88,9 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
   onOpenLogin,
   onLogout,
   history = [],
+  homeVod = [],
+  homeSeries = [],
+  homeLoading = false,
   onPressHistoryItem,
   onRemoveHistoryItem,
   onToggleMobileMode,
@@ -193,7 +200,19 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
 
       {/* Main Content Area */}
       <View style={[styles.mainContent, { flexDirection: width >= 900 ? 'row' : 'column' }]}>
-        {activeTab === 'epg' && account ? (
+        {activeTab === 'home' ? (
+          <HomeScreen
+            vod={homeVod}
+            series={homeSeries}
+            history={history}
+            loading={homeLoading}
+            onPressItem={onPressItem}
+            onToggleFavorite={onToggleFavorite}
+            onPressHistoryItem={onPressHistoryItem}
+            onRemoveHistoryItem={onRemoveHistoryItem}
+            onNavigate={onTabChange}
+          />
+        ) : activeTab === 'epg' && account ? (
           <EpgGuideView
             account={account}
             channels={liveChannels.length > 0 ? liveChannels : (streams as LiveStream[])}

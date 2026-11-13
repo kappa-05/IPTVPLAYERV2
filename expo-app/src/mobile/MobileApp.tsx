@@ -27,6 +27,7 @@ import { MobileCategorySheet } from './components/MobileCategorySheet';
 import { MobileAccountSheet } from './components/MobileAccountSheet';
 import { MobileEpgView } from './components/MobileEpgView';
 import { ContinueWatchingRow } from '../components/ContinueWatchingRow';
+import { HomeScreen } from '../components/HomeScreen';
 import { Ionicons } from '@expo/vector-icons';
 
 interface MobileAppProps {
@@ -51,6 +52,9 @@ interface MobileAppProps {
   onOpenLogin: () => void;
   onLogout: () => void;
   history?: WatchHistoryItem[];
+  homeVod: any[];
+  homeSeries: any[];
+  homeLoading?: boolean;
   onPressHistoryItem?: (item: WatchHistoryItem) => void;
   onRemoveHistoryItem?: (id: string) => void;
   onToggleDesktopMode: () => void;
@@ -79,6 +83,9 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onOpenLogin,
   onLogout,
   history = [],
+  homeVod = [],
+  homeSeries = [],
+  homeLoading = false,
   onPressHistoryItem,
   onRemoveHistoryItem,
   onToggleDesktopMode,
@@ -231,7 +238,19 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
       {/* Main Content Area */}
       <View style={styles.contentArea}>
-        {activeTab === 'epg' && account ? (
+        {activeTab === 'home' ? (
+          <HomeScreen
+            vod={homeVod}
+            series={homeSeries}
+            history={history}
+            loading={homeLoading}
+            onPressItem={onPressItem}
+            onToggleFavorite={onToggleFavorite}
+            onPressHistoryItem={onPressHistoryItem}
+            onRemoveHistoryItem={onRemoveHistoryItem}
+            onNavigate={onTabChange}
+          />
+        ) : activeTab === 'epg' && account ? (
           <MobileEpgView
             account={account}
             channels={liveChannels.length > 0 ? liveChannels : (streams as LiveStream[])}

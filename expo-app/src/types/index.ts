@@ -1,5 +1,5 @@
 export type MediaType = 'live' | 'vod' | 'series';
-export type NavTab = MediaType | 'favorites' | 'epg';
+export type NavTab = MediaType | 'favorites' | 'epg' | 'home';
 
 export interface Account {
   id: string;
@@ -63,8 +63,10 @@ export interface SeriesItem {
   releaseDate?: string;
   rating?: string | number;
   rating_5based?: number;
-  category_id?: string;
-  direct_source?: string;
+  category_id?: string;
+
+  direct_source?: string;
+
 }
 
 export interface SeriesSeason {

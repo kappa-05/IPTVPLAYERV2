@@ -85,7 +85,7 @@ export default function App() {
   const [loginModalVisible, setLoginModalVisible] = useState(false);
 
   // Navigation State
-  const [activeTab, setActiveTab] = useState<NavTab>('live');
+  const [activeTab, setActiveTab] = useState<NavTab>('home');
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [categorySearchQuery, setCategorySearchQuery] = useState('');
@@ -98,6 +98,10 @@ export default function App() {
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [homeVod, setHomeVod] = useState<any[]>([]);
+  const [homeSeries, setHomeSeries] = useState<any[]>([]);
+  const [homeLoading, setHomeLoading] = useState(false);
+  const [homeCatalogAccountId, setHomeCatalogAccountId] = useState<string | null>(null);
 
   // Modals & Playback State
   const [playingStream, setPlayingStream] = useState<PlayingStream | null>(null);
@@ -146,6 +150,7 @@ export default function App() {
         loadFavorites(current.id);
         loadHistory(current.id);
         loadCategoriesAndStreams(current, 'live');
+        loadHomeCatalog(current);
       } else {
         setLoginModalVisible(true);
       }
@@ -158,6 +163,38 @@ export default function App() {
   const loadFavorites = async (accountId: string) => {
     const favs = await StorageService.getFavorites(accountId);
     setFavorites(favs);
+  };
+
+  // Load the complete VOD and series catalogs for the Home dashboard.
+  // This uses the existing API and cache without changing playback behavior.
+  const loadHomeCatalog = async (targetAccount: Account, forceRefresh: boolean = false) => {
+    setHomeLoading(true);
+    try {
+      if (forceRefresh && targetAccount.accountType === 'm3u' && (targetAccount.m3uUrl || targetAccount.host)) {
+        await XtreamAPI.loadM3U(targetAccount.m3uUrl || targetAccount.host, targetAccount.name, targetAccount.useProxy);
+      }
+
+      const loadType = async (type: MediaType) => {
+        let items: any[] | null = null;
+        if (!forceRefresh) {
+          items = await StorageService.getCachedStreams(targetAccount.id, type, 'all');
+        }
+        if (!items || items.length === 0) {
+          items = await XtreamAPI.getStreams(targetAccount, type);
+          await StorageService.cacheStreams(targetAccount.id, type, 'all', items);
+        }
+        return items;
+      };
+
+      const [vodItems, seriesItems] = await Promise.all([loadType('vod'), loadType('series')]);
+      setHomeVod(vodItems);
+      setHomeSeries(seriesItems);
+      setHomeCatalogAccountId(targetAccount.id);
+    } catch (e: any) {
+      console.warn('Failed to load Home catalog:', e?.message || e);
+    } finally {
+      setHomeLoading(false);
+    }
   };
 
   // Load Categories & Streams when tab or account changes
@@ -236,7 +273,13 @@ export default function App() {
     setStreams([]);
     setCategories([]);
     setSelectedCategoryId('all');
+
+    // Home uses its own complete VOD/series catalog and does not replace the active section data.
     if (!account) return;
+    if (newTab === 'home') {
+      if (homeCatalogAccountId !== account.id) await loadHomeCatalog(account);
+      return;
+    }
 
     if (newTab === 'epg') {
       if (liveChannels.length === 0) {
@@ -251,7 +294,7 @@ export default function App() {
 
   const handleSelectCategory = (catId: string) => {
     setSelectedCategoryId(catId);
-    if (account && activeTab !== 'favorites' && activeTab !== 'epg') {
+    if (account && activeTab !== 'home' && activeTab !== 'favorites' && activeTab !== 'epg') {
       loadCategoriesAndStreams(account, activeTab, catId);
     }
   };
@@ -260,9 +303,12 @@ export default function App() {
     if (!account) return;
     setRefreshing(true);
     await StorageService.clearCache(account.id);
-    const targetTab = activeTab === 'epg' ? 'live' : activeTab;
-    await loadCategoriesAndStreams(account, targetTab, selectedCategoryId, true);
-    await loadFavorites(account.id);
+    const targetTab = activeTab === 'epg' || activeTab === 'home' ? 'live' : activeTab;
+    await Promise.all([
+      loadCategoriesAndStreams(account, targetTab, selectedCategoryId, true),
+      loadHomeCatalog(account, true),
+      loadFavorites(account.id)
+    ]);
     setRefreshing(false);
   };
 
@@ -270,8 +316,12 @@ export default function App() {
     setAccount(newAccount);
     loadFavorites(newAccount.id);
     loadHistory(newAccount.id);
-    const targetTab = activeTab === 'epg' ? 'live' : activeTab;
+    setHomeVod([]);
+    setHomeSeries([]);
+    setHomeCatalogAccountId(null);
+    const targetTab = activeTab === 'epg' || activeTab === 'home' ? 'live' : activeTab;
     loadCategoriesAndStreams(newAccount, targetTab, undefined, true);
+    loadHomeCatalog(newAccount, true);
   };
 
   const handleLogout = async () => {
@@ -281,12 +331,17 @@ export default function App() {
     setAccount(null);
     setStreams([]);
     setCategories([]);
+    setHomeVod([]);
+    setHomeSeries([]);
+    setHomeCatalogAccountId(null);
     setLoginModalVisible(true);
   };
 
   const handleToggleFavorite = async (item: any) => {
     if (!account) return;
-    const type = activeTab === 'favorites' ? (item.type || 'live') : activeTab;
+    const type: MediaType = activeTab === 'favorites' || activeTab === 'home'
+      ? (item.type || 'live')
+      : activeTab;
     await StorageService.toggleFavorite(account.id, item, type);
     await loadFavorites(account.id);
   };
@@ -469,6 +524,9 @@ export default function App() {
           liveCategories={liveCategories}
           favorites={favorites}
           history={history}
+          homeVod={homeVod}
+          homeSeries={homeSeries}
+          homeLoading={homeLoading}
           onPressHistoryItem={handlePressHistoryItem}
           onRemoveHistoryItem={handleRemoveHistoryItem}
           epgMap={epgMap}
@@ -501,6 +559,9 @@ export default function App() {
           liveCategories={liveCategories}
           favorites={favorites}
           history={history}
+          homeVod={homeVod}
+          homeSeries={homeSeries}
+          homeLoading={homeLoading}
           onPressHistoryItem={handlePressHistoryItem}
           onRemoveHistoryItem={handleRemoveHistoryItem}
           epgMap={epgMap}
