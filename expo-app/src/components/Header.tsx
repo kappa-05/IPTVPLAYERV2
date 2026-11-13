@@ -264,6 +264,20 @@ export const Header: React.FC<HeaderProps> = ({
             Guida TV
           </Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tab, activeTab === 'settings' && styles.tabActive]}
+          onPress={() => onTabChange('settings')}
+        >
+          <Ionicons
+            name="settings-outline"
+            size={16}
+            color={activeTab === 'settings' ? colors.primary : colors.textSecondary}
+          />
+          <Text style={[styles.tabText, activeTab === 'settings' && styles.tabTextActive]}>
+            Impostazioni
+          </Text>
+        </TouchableOpacity>
       </ScrollView>
     </View>
   );

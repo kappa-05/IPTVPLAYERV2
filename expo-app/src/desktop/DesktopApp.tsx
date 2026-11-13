@@ -25,12 +25,15 @@ import { StreamCard } from '../components/StreamCard';
 import { EpgGuideView } from '../components/EpgGuideView';
 import { ContinueWatchingRow } from '../components/ContinueWatchingRow';
 import { HomeScreen } from '../components/HomeScreen';
+import { SettingsScreen } from '../components/SettingsScreen';
 import { Ionicons } from '@expo/vector-icons';
 
 interface DesktopAppProps {
   account: Account | null;
   activeTab: NavTab;
   onTabChange: (tab: NavTab) => void;
+  deviceMode: 'auto' | 'mobile' | 'desktop';
+  onSetDeviceMode: (mode: 'auto' | 'mobile' | 'desktop') => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
   categories: Category[];
@@ -66,6 +69,8 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
   account,
   activeTab,
   onTabChange,
+  deviceMode,
+  onSetDeviceMode,
   searchQuery,
   onSearchChange,
   categories,
@@ -200,7 +205,17 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
 
       {/* Main Content Area */}
       <View style={[styles.mainContent, { flexDirection: width >= 900 ? 'row' : 'column' }]}>
-        {activeTab === 'home' ? (
+        {activeTab === 'settings' ? (
+          <SettingsScreen
+            account={account}
+            deviceMode={deviceMode}
+            onSetDeviceMode={onSetDeviceMode}
+            onOpenLogin={onOpenLogin}
+            onLogout={onLogout}
+            onRefresh={onRefresh}
+            onOpenInstallPwa={onOpenInstallPwa}
+          />
+        ) : activeTab === 'home' ? (
           <HomeScreen
             vod={homeVod}
             series={homeSeries}

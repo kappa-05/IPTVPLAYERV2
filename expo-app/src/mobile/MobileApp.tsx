@@ -28,12 +28,15 @@ import { MobileAccountSheet } from './components/MobileAccountSheet';
 import { MobileEpgView } from './components/MobileEpgView';
 import { ContinueWatchingRow } from '../components/ContinueWatchingRow';
 import { HomeScreen } from '../components/HomeScreen';
+import { SettingsScreen } from '../components/SettingsScreen';
 import { Ionicons } from '@expo/vector-icons';
 
 interface MobileAppProps {
   account: Account | null;
   activeTab: NavTab;
   onTabChange: (tab: NavTab) => void;
+  deviceMode: 'auto' | 'mobile' | 'desktop';
+  onSetDeviceMode: (mode: 'auto' | 'mobile' | 'desktop') => void;
   categories: Category[];
   selectedCategoryId: string;
   onSelectCategory: (id: string) => void;
@@ -65,6 +68,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   account,
   activeTab,
   onTabChange,
+  deviceMode,
+  onSetDeviceMode,
   categories,
   selectedCategoryId,
   onSelectCategory,
@@ -238,7 +243,17 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
       {/* Main Content Area */}
       <View style={styles.contentArea}>
-        {activeTab === 'home' ? (
+        {activeTab === 'settings' ? (
+          <SettingsScreen
+            account={account}
+            deviceMode={deviceMode}
+            onSetDeviceMode={onSetDeviceMode}
+            onOpenLogin={onOpenLogin}
+            onLogout={onLogout}
+            onRefresh={onRefresh}
+            onOpenInstallPwa={onOpenInstallPwa}
+          />
+        ) : activeTab === 'home' ? (
           <HomeScreen
             vod={homeVod}
             series={homeSeries}
@@ -344,6 +359,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         visible={accountSheetVisible}
         account={account}
         onClose={() => setAccountSheetVisible(false)}
+        onOpenSettings={() => {
+          setAccountSheetVisible(false);
+          onTabChange('settings');
+        }}
         onOpenLogin={onOpenLogin}
         onRefresh={onRefresh}
         onToggleDesktopMode={onToggleDesktopMode}

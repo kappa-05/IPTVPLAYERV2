@@ -274,7 +274,8 @@ export default function App() {
     setCategories([]);
     setSelectedCategoryId('all');
 
-    // Home uses its own complete VOD/series catalog and does not replace the active section data.
+    // Home and Settings are UI-only tabs and do not trigger a media-category request.
+    if (newTab === 'settings') return;
     if (!account) return;
     if (newTab === 'home') {
       if (homeCatalogAccountId !== account.id) await loadHomeCatalog(account);
@@ -294,7 +295,7 @@ export default function App() {
 
   const handleSelectCategory = (catId: string) => {
     setSelectedCategoryId(catId);
-    if (account && activeTab !== 'home' && activeTab !== 'favorites' && activeTab !== 'epg') {
+    if (account && activeTab !== 'home' && activeTab !== 'favorites' && activeTab !== 'epg' && activeTab !== 'settings') {
       loadCategoriesAndStreams(account, activeTab, catId);
     }
   };
@@ -303,7 +304,7 @@ export default function App() {
     if (!account) return;
     setRefreshing(true);
     await StorageService.clearCache(account.id);
-    const targetTab = activeTab === 'epg' || activeTab === 'home' ? 'live' : activeTab;
+    const targetTab = activeTab === 'epg' || activeTab === 'home' || activeTab === 'settings' ? 'live' : activeTab;
     await Promise.all([
       loadCategoriesAndStreams(account, targetTab, selectedCategoryId, true),
       loadHomeCatalog(account, true),
@@ -319,7 +320,7 @@ export default function App() {
     setHomeVod([]);
     setHomeSeries([]);
     setHomeCatalogAccountId(null);
-    const targetTab = activeTab === 'epg' || activeTab === 'home' ? 'live' : activeTab;
+    const targetTab = activeTab === 'epg' || activeTab === 'home' || activeTab === 'settings' ? 'live' : activeTab;
     loadCategoriesAndStreams(newAccount, targetTab, undefined, true);
     loadHomeCatalog(newAccount, true);
   };
@@ -377,7 +378,7 @@ export default function App() {
   ) => {
     if (!account) return;
     const raw = item.rawItem || item;
-    const currentTab = typeOverride || (activeTab === 'epg' ? 'live' : (activeTab === 'favorites' ? (item.type || 'live') : activeTab));
+    const currentTab = typeOverride || (activeTab === 'epg' || activeTab === 'settings' || activeTab === 'home' ? 'live' : (activeTab === 'favorites' ? (item.type || 'live') : activeTab));
 
     // 1. Check if Series
     const isSeries = Boolean(
@@ -516,6 +517,8 @@ export default function App() {
           account={account}
           activeTab={activeTab}
           onTabChange={handleTabChange}
+          deviceMode={deviceMode}
+          onSetDeviceMode={handleSetDeviceMode}
           categories={categories}
           selectedCategoryId={selectedCategoryId}
           onSelectCategory={handleSelectCategory}
@@ -547,6 +550,8 @@ export default function App() {
           account={account}
           activeTab={activeTab}
           onTabChange={handleTabChange}
+          deviceMode={deviceMode}
+          onSetDeviceMode={handleSetDeviceMode}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           categories={categories}

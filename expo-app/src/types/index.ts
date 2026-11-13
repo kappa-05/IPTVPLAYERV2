@@ -1,5 +1,5 @@
 export type MediaType = 'live' | 'vod' | 'series';
-export type NavTab = MediaType | 'favorites' | 'epg' | 'home';
+export type NavTab = MediaType | 'favorites' | 'epg' | 'home' | 'settings';
 
 export interface Account {
   id: string;

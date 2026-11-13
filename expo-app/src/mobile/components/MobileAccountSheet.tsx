@@ -15,6 +15,7 @@ interface MobileAccountSheetProps {
   visible: boolean;
   account: Account | null;
   onClose: () => void;
+  onOpenSettings: () => void;
   onOpenLogin: () => void;
   onRefresh: () => void;
   onToggleDesktopMode: () => void;
@@ -26,6 +27,7 @@ export const MobileAccountSheet: React.FC<MobileAccountSheetProps> = ({
   visible,
   account,
   onClose,
+  onOpenSettings,
   onOpenLogin,
   onRefresh,
   onToggleDesktopMode,
@@ -72,6 +74,23 @@ export const MobileAccountSheet: React.FC<MobileAccountSheetProps> = ({
 
           {/* Actions List */}
           <View style={styles.actionsList}>
+            <TouchableOpacity
+              style={styles.actionRow}
+              onPress={() => {
+                onClose();
+                onOpenSettings();
+              }}
+            >
+              <View style={[styles.actionIconWrapper, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]}>
+                <Ionicons name="settings-outline" size={18} color={colors.primary} />
+              </View>
+              <View style={styles.actionTextWrapper}>
+                <Text style={styles.actionTitle}>Impostazioni</Text>
+                <Text style={styles.actionSub}>Personalizza l’interfaccia e gestisci le preferenze</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+            </TouchableOpacity>
+
             <TouchableOpacity
               style={styles.actionRow}
               onPress={() => {
