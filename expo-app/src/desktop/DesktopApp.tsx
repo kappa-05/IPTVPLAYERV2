@@ -26,6 +26,7 @@ import { EpgGuideView } from '../components/EpgGuideView';
 import { ContinueWatchingRow } from '../components/ContinueWatchingRow';
 import { HomeScreen } from '../components/HomeScreen';
 import { SettingsScreen } from '../components/SettingsScreen';
+import { SearchScreen } from '../components/SearchScreen';
 import { Ionicons } from '@expo/vector-icons';
 
 interface DesktopAppProps {
@@ -226,6 +227,15 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
             onPressHistoryItem={onPressHistoryItem}
             onRemoveHistoryItem={onRemoveHistoryItem}
             onNavigate={onTabChange}
+          />
+        ) : activeTab === 'search' ? (
+          <SearchScreen
+            live={liveChannels}
+            vod={homeVod}
+            series={homeSeries}
+            query={searchQuery}
+            onQueryChange={onSearchChange}
+            onPressItem={(item, type) => onPressItem(item, type)}
           />
         ) : activeTab === 'epg' && account ? (
           <EpgGuideView

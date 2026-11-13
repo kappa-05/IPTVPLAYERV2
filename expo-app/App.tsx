@@ -265,6 +265,13 @@ export default function App() {
     }
   };
 
+  const handleGlobalSearchChange = (value: string) => {
+    setSearchQuery(value);
+    if (value.trim().length > 0) {
+      setActiveTab('search');
+    }
+  };
+
   const handleTabChange = async (newTab: NavTab) => {
     setActiveTab(newTab);
     setSearchQuery('');
@@ -274,14 +281,14 @@ export default function App() {
     setCategories([]);
     setSelectedCategoryId('all');
 
-    // Home and Settings are UI-only tabs and do not trigger a media-category request.
-    if (newTab === 'settings') return;
-    if (!account) return;
-    if (newTab === 'home') {
-      if (homeCatalogAccountId !== account.id) await loadHomeCatalog(account);
+    // Home, Search and Settings are UI-only tabs and do not trigger a media-category request.
+    if (newTab === 'home' || newTab === 'search' || newTab === 'settings') {
+      if (newTab === 'home' && account && homeCatalogAccountId !== account.id) {
+        await loadHomeCatalog(account);
+      }
       return;
     }
-
+    if (!account) return;
     if (newTab === 'epg') {
       if (liveChannels.length === 0) {
         await loadCategoriesAndStreams(account, 'live', 'all');
@@ -295,7 +302,7 @@ export default function App() {
 
   const handleSelectCategory = (catId: string) => {
     setSelectedCategoryId(catId);
-    if (account && activeTab !== 'home' && activeTab !== 'favorites' && activeTab !== 'epg' && activeTab !== 'settings') {
+    if (account && activeTab !== 'home' && activeTab !== 'favorites' && activeTab !== 'epg' && activeTab !== 'search' && activeTab !== 'settings') {
       loadCategoriesAndStreams(account, activeTab, catId);
     }
   };
@@ -304,7 +311,7 @@ export default function App() {
     if (!account) return;
     setRefreshing(true);
     await StorageService.clearCache(account.id);
-    const targetTab = activeTab === 'epg' || activeTab === 'home' || activeTab === 'settings' ? 'live' : activeTab;
+    const targetTab = activeTab === 'epg' || activeTab === 'home' || activeTab === 'search' || activeTab === 'settings' ? 'live' : activeTab;
     await Promise.all([
       loadCategoriesAndStreams(account, targetTab, selectedCategoryId, true),
       loadHomeCatalog(account, true),
@@ -320,7 +327,7 @@ export default function App() {
     setHomeVod([]);
     setHomeSeries([]);
     setHomeCatalogAccountId(null);
-    const targetTab = activeTab === 'epg' || activeTab === 'home' || activeTab === 'settings' ? 'live' : activeTab;
+    const targetTab = activeTab === 'epg' || activeTab === 'home' || activeTab === 'search' || activeTab === 'settings' ? 'live' : activeTab;
     loadCategoriesAndStreams(newAccount, targetTab, undefined, true);
     loadHomeCatalog(newAccount, true);
   };
@@ -340,7 +347,7 @@ export default function App() {
 
   const handleToggleFavorite = async (item: any) => {
     if (!account) return;
-    const type: MediaType = activeTab === 'favorites' || activeTab === 'home'
+    const type: MediaType = activeTab === 'favorites' || activeTab === 'home' || activeTab === 'search' || activeTab === 'settings'
       ? (item.type || 'live')
       : activeTab;
     await StorageService.toggleFavorite(account.id, item, type);
@@ -519,6 +526,8 @@ export default function App() {
           onTabChange={handleTabChange}
           deviceMode={deviceMode}
           onSetDeviceMode={handleSetDeviceMode}
+          searchQuery={searchQuery}
+          onSearchChange={handleGlobalSearchChange}
           categories={categories}
           selectedCategoryId={selectedCategoryId}
           onSelectCategory={handleSelectCategory}
@@ -553,7 +562,7 @@ export default function App() {
           deviceMode={deviceMode}
           onSetDeviceMode={handleSetDeviceMode}
           searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
+          onSearchChange={handleGlobalSearchChange}
           categories={categories}
           selectedCategoryId={selectedCategoryId}
           onSelectCategory={handleSelectCategory}

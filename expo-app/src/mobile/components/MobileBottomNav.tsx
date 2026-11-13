@@ -20,6 +20,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
     { key: 'live', label: 'Live', icon: 'tv-outline', iconActive: 'tv' },
     { key: 'vod', label: 'Film/VOD', icon: 'film-outline', iconActive: 'film' },
     { key: 'series', label: 'Serie TV', icon: 'albums-outline', iconActive: 'albums' },
+    { key: 'search', label: 'Cerca', icon: 'search-outline', iconActive: 'search' },
     { key: 'favorites', label: 'Preferiti', icon: 'star-outline', iconActive: 'star' },
     { key: 'epg', label: 'Guida TV', icon: 'calendar-outline', iconActive: 'calendar' }
   ];

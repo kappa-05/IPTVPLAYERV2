@@ -231,6 +231,20 @@ export const Header: React.FC<HeaderProps> = ({
         </TouchableOpacity>
 
         <TouchableOpacity
+          style={[styles.tab, activeTab === 'search' && styles.tabActive]}
+          onPress={() => onTabChange('search')}
+        >
+          <Ionicons
+            name="search-outline"
+            size={16}
+            color={activeTab === 'search' ? colors.primary : colors.textSecondary}
+          />
+          <Text style={[styles.tabText, activeTab === 'search' && styles.tabTextActive]}>
+            Cerca
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
           style={[styles.tab, activeTab === 'favorites' && styles.tabActive]}
           onPress={() => onTabChange('favorites')}
         >

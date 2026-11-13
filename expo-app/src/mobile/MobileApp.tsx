@@ -29,6 +29,7 @@ import { MobileEpgView } from './components/MobileEpgView';
 import { ContinueWatchingRow } from '../components/ContinueWatchingRow';
 import { HomeScreen } from '../components/HomeScreen';
 import { SettingsScreen } from '../components/SettingsScreen';
+import { SearchScreen } from '../components/SearchScreen';
 import { Ionicons } from '@expo/vector-icons';
 
 interface MobileAppProps {
@@ -37,6 +38,8 @@ interface MobileAppProps {
   onTabChange: (tab: NavTab) => void;
   deviceMode: 'auto' | 'mobile' | 'desktop';
   onSetDeviceMode: (mode: 'auto' | 'mobile' | 'desktop') => void;
+  searchQuery: string;
+  onSearchChange: (query: string) => void;
   categories: Category[];
   selectedCategoryId: string;
   onSelectCategory: (id: string) => void;
@@ -70,6 +73,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onTabChange,
   deviceMode,
   onSetDeviceMode,
+  searchQuery,
+  onSearchChange,
   categories,
   selectedCategoryId,
   onSelectCategory,
@@ -99,7 +104,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const { width } = useWindowDimensions();
   const isTablet = width >= 600;
 
-  const [searchQuery, setSearchQuery] = useState('');
   const [categorySheetVisible, setCategorySheetVisible] = useState(false);
   const [accountSheetVisible, setAccountSheetVisible] = useState(false);
   const [favFilter, setFavFilter] = useState<'all' | 'live' | 'vod' | 'series'>('all');
@@ -231,7 +235,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         activeTab={activeTab}
         account={account}
         searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
+        onSearchChange={onSearchChange}
         categories={categories}
         selectedCategoryId={selectedCategoryId}
         onSelectCategory={onSelectCategory}
@@ -264,6 +268,15 @@ export const MobileApp: React.FC<MobileAppProps> = ({
             onPressHistoryItem={onPressHistoryItem}
             onRemoveHistoryItem={onRemoveHistoryItem}
             onNavigate={onTabChange}
+          />
+        ) : activeTab === 'search' ? (
+          <SearchScreen
+            live={liveChannels}
+            vod={homeVod}
+            series={homeSeries}
+            query={searchQuery}
+            onQueryChange={onSearchChange}
+            onPressItem={(item, type) => onPressItem(item, type)}
           />
         ) : activeTab === 'epg' && account ? (
           <MobileEpgView
@@ -338,7 +351,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       <MobileBottomNav
         activeTab={activeTab}
         onTabChange={(newTab) => {
-          setSearchQuery('');
           onTabChange(newTab);
         }}
         favoritesCount={favorites.length}
