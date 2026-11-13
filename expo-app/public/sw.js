@@ -1,59 +1,72 @@
-// IPTV Player V2 Service Worker
-const CACHE_NAME = 'iptv-player-v2-cache-v1';
+
+const CACHE_NAME = 'iptv-player-v2-cache-v2';
+
 const ASSETS_TO_CACHE = [
   '/',
-  '/manifest.json'
+  '/manifest.json',
+  '/assets/icon.png',
+  '/assets/favicon.png'
 ];
 
 self.addEventListener('install', (event) => {
-  self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE).catch((err) => {
-        console.warn('[SW] Caching assets on install warning:', err);
-      });
-    })
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(ASSETS_TO_CACHE))
+      .then(() => self.skipWaiting())
   );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
-        keys.map((key) => {
-          if (key !== CACHE_NAME) {
-            return caches.delete(key);
-          }
-        })
-      );
-    }).then(() => self.clients.claim())
+    caches.keys()
+      .then((keys) => Promise.all(
+        keys
+          .filter((key) =>
+            key.startsWith('iptv-player-v2-cache-') &&
+            key !== CACHE_NAME
+          )
+          .map((key) => caches.delete(key))
+      ))
+      .then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
+  const request = event.request;
+  const url = new URL(request.url);
 
-  // Never cache or intercept API proxies, HLS streams or video chunks
-  if (url.pathname.startsWith('/api/') || 
-      url.pathname.includes('.m3u8') || 
-      url.pathname.includes('.ts') || 
-      url.pathname.includes('.m4s') ||
-      event.request.method !== 'GET') {
+  // Gestisce esclusivamente richieste GET dello stesso dominio
+  if (
+    request.method !== 'GET' ||
+    url.origin !== self.location.origin
+  ) {
     return;
   }
 
-  // Network-First with Cache fallback for App Shell
+  // Non intercetta API, proxy, richieste Range o contenuti multimediali
+  if (
+    url.pathname.startsWith('/api/') ||
+    request.headers.has('Range') ||
+    /\.(m3u8|ts|m4s|mp4|mkv|avi|mov|mpd|aac|mp3|m4a|webm|flv)(?:$|\/)/i.test(url.pathname)
+  ) {
+    return;
+  }
+
+  // Network-first per le risorse dell'applicazione
   event.respondWith(
-    fetch(event.request)
-      .then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200) {
-          const responseToCache = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
+    fetch(request)
+      .then((response) => {
+        if (response && response.status === 200 && response.type === 'basic') {
+          const copy = response.clone();
+
+          event.waitUntil(
+            caches.open(CACHE_NAME)
+              .then((cache) => cache.put(request, copy))
+          );
         }
-        return networkResponse;
+
+        return response;
       })
-      .catch(() => caches.match(event.request))
+      .catch(() => caches.match(request))
   );
 });

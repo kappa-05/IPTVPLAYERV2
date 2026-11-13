@@ -1,33 +1,32 @@
 export const colors = {
-  // Deep Cinematic Slate (Apple TV+ / Modern Netflix tone)
-  background: '#090b10',
-  backgroundSecondary: '#0f1219',
-  card: '#141822',
-  cardHover: '#1c2230',
-  surface: '#181d28',
-  surfaceElevated: '#212838',
-  overlay: 'rgba(5, 7, 11, 0.82)',
-  modalOverlay: 'rgba(3, 4, 8, 0.9)',
+  // C — Apple TV inspired: monochrome, restrained, cinematic.
+  background: '#080808',
+  backgroundSecondary: '#101010',
+  card: '#151515',
+  cardHover: '#202020',
+  surface: '#191919',
+  surfaceElevated: '#242424',
+  overlay: 'rgba(0, 0, 0, 0.78)',
+  modalOverlay: 'rgba(0, 0, 0, 0.90)',
 
-  // Refined borders with subtle contrast
-  border: '#1f2533',
-  borderHighlight: '#2e374d',
-  borderActive: '#3b82f6',
+  // Quiet borders and crisp monochrome focus states.
+  border: '#292929',
+  borderHighlight: '#414141',
+  borderActive: '#f2f2f2',
 
-  // Elegant streaming accents
-  primary: '#3b82f6', // Refined Cobalt Blue
-  primaryHover: '#2563eb',
-  primaryMuted: 'rgba(59, 130, 246, 0.12)',
+  // Apple-like neutral accent.
+  primary: '#f2f2f2',
+  primaryHover: '#ffffff',
+  primaryMuted: 'rgba(255, 255, 255, 0.12)',
 
-  secondary: '#64748b',
+  secondary: '#858585',
 
-  accentGreen: '#10b981', // Emerald
-  accentAmber: '#f59e0b', // Gold rating
-  accentRed: '#ef4444', // Live Red
+  accentGreen: '#42c98a',
+  accentAmber: '#e9b85b',
+  accentRed: '#ff453a',
 
-  // High-legibility typography
-  textPrimary: '#ffffff',
-  textSecondary: '#94a3b8',
-  textMuted: '#64748b',
-  textDisabled: '#475569'
+  textPrimary: '#f5f5f7',
+  textSecondary: '#a1a1a6',
+  textMuted: '#77777d',
+  textDisabled: '#505055'
 };

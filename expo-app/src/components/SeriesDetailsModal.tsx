@@ -175,7 +175,10 @@ export const SeriesDetailsModal: React.FC<SeriesDetailsModalProps> = ({
                       <TouchableOpacity
                         key={String(ep.id || ep.episode_num)}
                         style={styles.episodeRow}
-                        onPress={() => onPlayEpisode(ep, selectedSeason, info.name, info.cover)}
+                        onPress={() => {
+                          onClose();
+                          onPlayEpisode(ep, selectedSeason, info.name, info.cover);
+                        }}
                         activeOpacity={0.7}
                       >
                         <View style={styles.epPlayCircle}>

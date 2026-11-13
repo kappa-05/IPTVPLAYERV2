@@ -1,0 +1,21 @@
+IPTV PLAYER V2 — VARIANTE C (NERO)
+
+Identità grafica:
+- Ripristinata la palette C originale: nero, grigi e bianco in stile Apple TV.
+- Integrato il logo originale fornito dall'utente nell'header desktop e mobile.
+- Aggiornati anche icona app, favicon e splash icon con il logo fornito.
+
+Modifiche funzionali mantenute:
+- Identificativo EPG grezzo (es. Rai1.it) non visualizzato nelle schede Live.
+- Identificativo conservato nei dati interni per mantenere il matching EPG.
+- Expo Web configurato con Metro.
+- start.bat installa le dipendenze se mancanti, compila il frontend e apre localhost:8080.
+
+Pulizia:
+- Rimossi node_modules, .git, cache Expo, build generate, cache Python e file temporanei.
+- Conservati sorgenti, asset, package.json e package-lock.json.
+- Nessun modulo applicativo è stato eliminato solo per supposizione.
+
+Verifiche:
+- Integrità dell'archivio e controlli statici sui file modificati.
+- Non è stata eseguita una build Expo né una prova di streaming in questo ambiente.

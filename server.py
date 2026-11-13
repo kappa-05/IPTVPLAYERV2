@@ -161,6 +161,7 @@ class HLSStreamManager:
         self.sessions = {}
         self.stream_info_cache = {}
         self.duration_cache = {}
+        # Per-session locks serialize FFmpeg worker restarts during concurrent HLS seeks.
         self.seg_locks = {}
         self.lock = threading.Lock()
         self.has_nvenc = False
@@ -168,7 +169,7 @@ class HLSStreamManager:
         if ff:
             try:
                 r = subprocess.run(
-                    [ff, '-y', '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=1', '-c:v', 'h264_nvenc', '-f', 'null', '-'],
+                    [ff, '-y', '-f', 'lavfi', '-i', 'testsrc=duration=1:size=1280x720:rate=1', '-c:v', 'h264_nvenc', '-f', 'null', '-'],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0
                 )
                 self.has_nvenc = (r.returncode == 0)
@@ -177,6 +178,16 @@ class HLSStreamManager:
         self._cleaner = threading.Thread(target=self._cleanup_loop, daemon=True)
         self._cleaner.start()
         atexit.register(self.shutdown_all)
+
+    def _get_session_lock(self, sid):
+        # Keep lock creation protected by the manager lock, but never hold the
+        # manager lock while waiting for FFmpeg or for a segment to be written.
+        with self.lock:
+            lock = self.seg_locks.get(sid)
+            if lock is None:
+                lock = threading.RLock()
+                self.seg_locks[sid] = lock
+            return lock
 
     def _cleanup_loop(self):
         while True:
@@ -206,6 +217,7 @@ class HLSStreamManager:
             sdir = data.get('dir')
             if sdir and os.path.isdir(sdir):
                 shutil.rmtree(sdir, ignore_errors=True)
+        self.seg_locks.pop(sid, None)
 
     def shutdown_all(self):
         with self.lock:
@@ -215,7 +227,7 @@ class HLSStreamManager:
     def probe_stream(self, target_url, hint_duration=0):
         """
         Detects duration, HEVC/H.264 codec, all audio tracks, and all subtitle tracks.
-        Returns (duration, is_hevc, audio_tracks, subtitle_tracks).
+        Returns (duration, is_hevc, audio_tracks, subtitle_tracks, video_codec).
         """
         cached = self.stream_info_cache.get(target_url)
         if cached:
@@ -421,7 +433,15 @@ class HLSStreamManager:
         m3u8_bytes = ("\n".join(lines) + "\n").encode('utf-8')
 
         if target_url and sdir:
-            self._ensure_background_worker(sid, target_url, sdir, start_seg=0, audio_track=audio_track)
+            with self._get_session_lock(sid):
+                with self.lock:
+                    proc = self.sessions.get(sid, {}).get('proc')
+                    current_audio = self.sessions.get(sid, {}).get('current_audio_track', 0)
+                    worker_alive = proc is not None and proc.poll() is None
+                if not worker_alive or current_audio != audio_track:
+                    self._ensure_background_worker(
+                        sid, target_url, sdir, start_seg=0, audio_track=audio_track
+                    )
 
         return m3u8_bytes
 
@@ -514,24 +534,26 @@ class HLSStreamManager:
             ]
             if target_url.startswith(('http://', 'https://')):
                 cmd.extend([
-                    "-hwaccel", "auto",
                     "-reconnect", "1",
-                    "-reconnect_at_eof", "1",
                     "-reconnect_streamed", "1",
                     "-reconnect_delay_max", "5",
                     "-probesize", "2097152",
-                    "-analyzeduration", "3000000",
-                    "-fflags", "+nobuffer+fastseek+discardcorrupt",
+                    "-analyzeduration", "5000000",
+                    "-fflags", "+discardcorrupt",
                     "-user_agent", "IPTVSmartersPlayer",
                     "-headers", "Accept: */*\r\n",
                 ])
 
+            # Seek before opening the input so FFmpeg can use HTTP range
+            # requests on VOD sources. Output-side seeking forced FFmpeg to read
+            # from the beginning and could leave distant seeks buffering for a
+            # very long time.
             if start_seg > 0:
                 seek_secs = start_seg * seg_duration
                 cmd.extend(["-ss", f"{seek_secs:.2f}"])
+            cmd.extend(["-i", target_url])
 
             cmd.extend([
-                "-i", target_url,
                 "-map", "0:v:0?",
                 "-map", f"0:a:{target_audio_track}?" if target_audio_track >= 0 else "0:a?",
             ])
@@ -543,21 +565,20 @@ class HLSStreamManager:
                 if getattr(self, 'has_nvenc', False):
                     cmd.extend([
                         "-c:v", "h264_nvenc",
+                        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
                         "-pix_fmt", "yuv420p",
-                        "-s", "1920x1080",
                         "-preset", "p1",
                         "-b:v", "6000k",
                         "-maxrate", "8000k",
                         "-bufsize", "12000k",
                         "-g", "48",
-                        "-keyint_min", "48",
-                        "-no-scenecut", "1"
+                        "-keyint_min", "48"
                     ])
                 else:
                     cmd.extend([
                         "-c:v", "libx264",
+                        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
                         "-pix_fmt", "yuv420p",
-                        "-s", "1920x1080",
                         "-preset", "ultrafast",
                         "-tune", "zerolatency",
                         "-threads", "0",
@@ -630,77 +651,97 @@ class HLSStreamManager:
 
         seg_path = os.path.join(sdir, seg_name)
 
-        # 1. Fast path: Segment already generated on disk
-        if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
+        # A completed segment is immutable for this VOD session and can be served immediately.
+        if os.path.isfile(seg_path) and os.path.getsize(seg_path) > 0:
             return seg_path
-
         if not target_url:
             return None
 
-        # Handle initialization fragment init.mp4
-        if seg_name == "init.mp4":
-            proc = sess.get('proc')
-            if not proc or proc.poll() is not None:
-                self._ensure_background_worker(sid, target_url, sdir, start_seg=0, audio_track=audio_track)
-            start_wait = time.time()
-            while time.time() - start_wait < 25.0:
-                if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
+        session_lock = self._get_session_lock(sid)
+
+        if seg_name == 'init.mp4':
+            with session_lock:
+                if os.path.isfile(seg_path) and os.path.getsize(seg_path) > 0:
+                    return seg_path
+                with self.lock:
+                    proc = sess.get('proc')
+                if not proc or proc.poll() is not None:
+                    self._ensure_background_worker(sid, target_url, sdir, start_seg=0, audio_track=audio_track)
+
+            deadline = time.time() + 25.0
+            while time.time() < deadline:
+                if os.path.isfile(seg_path) and os.path.getsize(seg_path) > 0:
                     return seg_path
                 time.sleep(0.1)
+            return None
+
+        match = re.fullmatch(r'seg_(\d+)\.(?:m4s|ts)', seg_name)
+        if not match:
+            return None
+        seg_idx = int(match.group(1))
+
+        # Decide whether this request belongs to the current sequential worker or
+        # represents a seek. A jump of more than five segments (about 30 seconds)
+        # restarts FFmpeg at the requested segment instead of waiting for it to
+        # process every segment between the old and new positions.
+        with session_lock:
+            if os.path.isfile(seg_path) and os.path.getsize(seg_path) > 0:
+                return seg_path
+            with self.lock:
                 proc = sess.get('proc')
-                if proc and proc.poll() is not None and (not os.path.exists(seg_path) or os.path.getsize(seg_path) == 0):
-                    err_txt = ""
-                    try:
-                        log_p = os.path.join(sdir, "ffmpeg.log")
-                        if os.path.exists(log_p):
-                            with open(log_p, "r", encoding="utf-8", errors="ignore") as lf:
-                                err_txt = lf.read()[-300:]
-                    except Exception:
-                        pass
-                    print(f"[HLS init.mp4 Error] FFmpeg exited {proc.returncode}: {err_txt}")
-                    self._ensure_background_worker(sid, target_url, sdir, start_seg=0, audio_track=audio_track)
-            if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
-                return seg_path
-            return None
+                cur_start = sess.get('current_start_seg', 0)
+                cur_audio = sess.get('current_audio_track', 0)
+                worker_alive = proc is not None and proc.poll() is None
 
-        m = re.match(r'seg_(\d+)\.(?:m4s|ts)', seg_name)
-        if not m:
-            return None
-        seg_idx = int(m.group(1))
+            # A late request for a segment before the active seek position is
+            # stale (usually an aborted hls.js request). Do not rewind the worker.
+            if seg_idx < cur_start:
+                return None
 
-        # Check worker status
-        proc = sess.get('proc')
-        worker_alive = proc is not None and proc.poll() is None
-        cur_start = sess.get('current_start_seg', 0)
-        cur_audio = sess.get('current_audio_track', 0)
+            needs_restart = (
+                not worker_alive or
+                cur_audio != audio_track or
+                seg_idx > cur_start + 5
+            )
+            if needs_restart:
+                self._ensure_background_worker(
+                    sid, target_url, sdir, start_seg=seg_idx, audio_track=audio_track
+                )
 
-        # If worker is not running, audio track differs, or user jumped way far ahead/backwards (>600s), restart worker
-        if not worker_alive or (cur_audio != audio_track) or (seg_idx < cur_start) or (seg_idx > cur_start + 100):
-            self._ensure_background_worker(sid, target_url, sdir, start_seg=seg_idx, audio_track=audio_track)
+        # Wait for the requested fragment. If FFmpeg exits, restart once at the
+        # exact requested position; do not loop indefinitely on a dead worker.
+        for attempt in range(2):
+            deadline = time.time() + 25.0
+            while time.time() < deadline:
+                if os.path.isfile(seg_path) and os.path.getsize(seg_path) > 0:
+                    return seg_path
+                time.sleep(0.1)
+                with self.lock:
+                    proc = sess.get('proc')
+                    worker_alive = proc is not None and proc.poll() is None
+                if not worker_alive:
+                    break
 
-        # 2. Smart Wait: wait up to 35 seconds for worker
-        start_wait = time.time()
-        while time.time() - start_wait < 35.0:
-            if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
-                return seg_path
-            time.sleep(0.1)
-            proc = sess.get('proc')
-            if proc and proc.poll() is not None:
-                if not os.path.exists(seg_path) or os.path.getsize(seg_path) == 0:
-                    err_txt = ""
-                    try:
-                        log_p = os.path.join(sdir, "ffmpeg.log")
-                        if os.path.exists(log_p):
-                            with open(log_p, "r", encoding="utf-8", errors="ignore") as lf:
-                                err_txt = lf.read()[-300:]
-                    except Exception:
-                        pass
-                    print(f"[HLS seg_{seg_idx} Error] FFmpeg exited {proc.returncode}: {err_txt}")
-                    self._ensure_background_worker(sid, target_url, sdir, start_seg=seg_idx, audio_track=audio_track)
+            if attempt == 0:
+                with session_lock:
+                    if os.path.isfile(seg_path) and os.path.getsize(seg_path) > 0:
+                        return seg_path
+                    self._ensure_background_worker(
+                        sid, target_url, sdir, start_seg=seg_idx, audio_track=audio_track
+                    )
+            else:
+                break
 
-        if os.path.exists(seg_path) and os.path.getsize(seg_path) > 0:
-            return seg_path
-
+        # Log the tail of FFmpeg output to make future failures diagnosable.
+        try:
+            log_p = os.path.join(sdir, 'ffmpeg.log')
+            if os.path.exists(log_p):
+                with open(log_p, 'r', encoding='utf-8', errors='ignore') as log_file:
+                    err_txt = log_file.read()[-500:]
+                if err_txt:
+                    print(f'[HLS seg_{seg_idx} timeout] {err_txt}')
+        except Exception:
+            pass
         return None
 
 HLS_STREAM_MGR = HLSStreamManager()
@@ -715,7 +756,7 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
     def end_headers(self):
         # Do NOT send no-store on media streams or proxy/transcode/hls responses (breaks iOS AVPlayer playback)
         path_lower = getattr(self, 'path', '').lower()
-        is_media = any(ext in path_lower for ext in ('/api/proxy', '/api/transcode', '/api/hls', '.ts', '.m3u8', '.mp4', '.mkv', '.avi', '.mov', '.mp3'))
+        is_media = any(ext in path_lower for ext in ('/api/proxy', '/api/transcode', '/api/live_transcode', '/api/hls', '.ts', '.m3u8', '.mp4', '.mkv', '.avi', '.mov', '.mp3'))
         if not is_media:
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
             self.send_header('Pragma', 'no-cache')
@@ -741,6 +782,9 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == '/api/transcode':
             self.handle_transcode(is_head=True)
+            return
+        if parsed.path == '/api/live_transcode':
+            self.handle_live_transcode(is_head=True)
             return
         super().do_HEAD()
 
@@ -1213,17 +1257,148 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                     err_body = {"error": f"Errore Proxy: {str(e)}", "code": 500}
                     self.wfile.write(json.dumps(err_body).encode('utf-8'))
 
+    def handle_live_transcode(self, is_head=False):
+        """Remux a live stream while converting only its audio to AAC for browser MSE."""
+        parsed = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
+        target_url = qs.get('url', [None])[0]
+
+        if not target_url:
+            self.send_response(400)
+            self.end_cors_headers()
+            self.end_headers()
+            if not is_head:
+                self.wfile.write(b'{"error":"Parametro url mancante"}')
+            return
+
+        if target_url.startswith(('http%3A', 'https%3A')) or '%2F' in target_url:
+            target_url = urllib.parse.unquote(target_url)
+
+        target_parts = urllib.parse.urlparse(target_url)
+        if target_parts.scheme not in ('http', 'https') or not target_parts.netloc:
+            self.send_response(400)
+            self.end_cors_headers()
+            self.end_headers()
+            if not is_head:
+                self.wfile.write(b'{"error":"URL del flusso non valido"}')
+            return
+
+        ffmpeg_path = find_ffmpeg()
+        if not ffmpeg_path:
+            self.send_response(501)
+            self.end_cors_headers()
+            self.end_headers()
+            if not is_head:
+                self.wfile.write(b'{"error":"FFmpeg non disponibile sul server"}')
+            return
+
+        if is_head:
+            self.send_response(200)
+            self.end_cors_headers(content_type='video/mp2t')
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+            return
+
+        clean_env = os.environ.copy()
+        clean_env.pop('http_proxy', None)
+        clean_env.pop('https_proxy', None)
+
+        cmd = [
+            ffmpeg_path,
+            '-hide_banner', '-loglevel', 'error', '-nostdin',
+            '-fflags', '+discardcorrupt',
+            '-rw_timeout', '15000000',
+            '-reconnect', '1',
+            '-reconnect_streamed', '1',
+            '-reconnect_delay_max', '3',
+            '-user_agent', 'IPTVSmartersPlayer',
+            '-headers', 'Accept: */*\r\n',
+            '-i', target_url,
+            '-map', '0:v:0?',
+            '-map', '0:a:0?',
+            '-c:v', 'copy',
+            '-c:a', 'aac', '-b:a', '128k', '-ac', '2', '-ar', '48000',
+            '-max_interleave_delta', '1000000',
+            '-muxdelay', '0', '-muxpreload', '0',
+            '-flush_packets', '1',
+            '-mpegts_flags', '+resend_headers',
+            '-f', 'mpegts', 'pipe:1'
+        ]
+
+        proc = None
+        try:
+            # Read the first output bytes before sending HTTP 200 so startup failures
+            # can still be reported as an HTTP error instead of a broken media stream.
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=clean_env,
+                bufsize=0
+            )
+            first_chunk = proc.stdout.read(188 * 64) if proc.stdout else b''
+            if not first_chunk:
+                self.send_response(502)
+                self.end_cors_headers()
+                self.end_headers()
+                self.wfile.write(b'{"error":"FFmpeg non ha ricevuto dati dal flusso Live"}')
+                return
+
+            self.close_connection = True
+            self.send_response(200)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', '*')
+            self.send_header('Access-Control-Expose-Headers', 'Content-Type')
+            self.send_header('Content-Type', 'video/mp2t')
+            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+
+            self.wfile.write(first_chunk)
+            self.wfile.flush()
+            while True:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+        except Exception as exc:
+            print(f'[Live Transcode] Streaming error: {exc}')
+        finally:
+            if proc:
+                try:
+                    if proc.stdout:
+                        proc.stdout.close()
+                    if proc.poll() is None:
+                        proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=2)
+                    except Exception:
+                        pass
+
     def handle_tools(self):
         ffmpeg = find_ffmpeg()
-        self.send_response(200)
-        self.end_cors_headers()
-        self.end_headers()
+
         res = {
             "ffmpeg_available": bool(ffmpeg),
             "ffmpeg_path": ffmpeg
         }
-        self.wfile.write(json.dumps(res).encode('utf-8'))
 
+        body = json.dumps(res).encode('utf-8')
+
+        self.send_response(200)
+        self.end_cors_headers()
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+
+        self.wfile.write(body)
 
     def handle_transcode(self, is_head=False, override_url=None):
         parsed = urllib.parse.urlparse(self.path)
@@ -1423,26 +1598,39 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(parsed.query)
         target_url = qs.get('url', [None])[0]
+
         if not target_url:
+            body = json.dumps({
+                "error": "Parametro url mancante"
+            }).encode('utf-8')
+
             self.send_response(400)
             self.end_cors_headers()
+            self.send_header('Content-Length', str(len(body)))
             self.end_headers()
-            self.wfile.write(b'{"error": "Parametro url mancante"}')
+            self.wfile.write(body)
             return
+
 
         if target_url.startswith(('http%3A', 'https%3A')) or '%2F' in target_url:
             target_url = urllib.parse.unquote(target_url)
 
-        dur, is_hevc, audio_tracks, subtitle_tracks = HLS_STREAM_MGR.probe_stream(target_url)
-        self.send_response(200)
-        self.end_cors_headers()
-        self.end_headers()
-        self.wfile.write(json.dumps({
+        dur, is_hevc, audio_tracks, subtitle_tracks, video_codec = HLS_STREAM_MGR.probe_stream(target_url)
+
+        body = json.dumps({
             "duration": dur,
             "is_hevc": is_hevc,
+            "video_codec": video_codec,
             "audio_tracks": audio_tracks,
             "subtitle_tracks": subtitle_tracks
-        }).encode('utf-8'))
+        }).encode('utf-8')
+
+        self.send_response(200)
+        self.end_cors_headers()
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def handle_subtitles(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -1669,6 +1857,11 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             return
 
+        # Live MPEG-TS remux: keep H.264 video and convert AC-3/E-AC-3 audio to AAC.
+        if path == '/api/live_transcode':
+            self.handle_live_transcode(is_head=False)
+            return
+
         # 1. CORS Proxy Endpoint (for API calls and Streams): /api/proxy?url=<TARGET_URL>
         if path == '/api/proxy':
             self.handle_proxy(is_head=False)
@@ -1792,11 +1985,10 @@ def run_server():
         httpd.serve_forever()
     except OSError as e:
         if "address already in use" in str(e).lower() or getattr(e, 'errno', None) in (98, 10048):
-            alt_port = PORT + 1
-            print(f"Porta {PORT} occupata, provo porta {alt_port}...")
-            httpd = ThreadingHTTPServer(('', alt_port), IPTVRequestHandler)
-            print(f">> Browser: http://localhost:{alt_port}")
-            httpd.serve_forever()
+            print(f"ERRORE: la porta {PORT} e' gia' occupata.")
+            print("Chiudi il processo che sta usando la porta e riavvia start.bat.")
+            print("Non viene usata automaticamente la porta 8081, per evitare di aprire una versione diversa o non aggiornata dell'app.")
+            return
         else:
             raise e
 

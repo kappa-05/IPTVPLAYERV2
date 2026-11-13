@@ -36,14 +36,24 @@ Funziona perfettamente su **Browser Desktop**, **Smartphone / Tablet (iOS & Andr
 ## 🛠️ Come Avviare l'Applicazione in Locale
 
 ### Metodo 1: Doppio Clic (Windows)
-Fai doppio clic sul file `start.bat`. Verrà avviato il server e il browser si aprirà su:
+Fai doppio clic sul file `start.bat`. Lo script compila prima il frontend Expo aggiornato nella cartella `expo-app/dist`, avvia il backend che serve il frontend e apre il browser su:
 ```
 http://localhost:8080
 ```
+Ogni volta che modifichi il frontend, riesegui `start.bat` per ricompilare la versione servita su 8080. Se la porta 8080 è occupata, lo script segnala l'errore invece di spostarsi silenziosamente su 8081.
 Da smartphone connesso allo stesso Wi-Fi del PC:
 ```
 http://<IP_LOCALE_PC>:8080
 ```
+
+### Sviluppo frontend con hot reload (Expo Web)
+
+Per lavorare al codice e vedere le modifiche in tempo reale:
+```bash
+cd expo-app
+npx expo start --web
+```
+Expo avvia il server di sviluppo normalmente su `http://localhost:8081` (8080 è riservata al backend che serve la build web). Questo indirizzo è diverso dalla versione compilata servita su 8080.
 
 ### Metodo 2: Sviluppo Mobile con Expo Go (QR Code)
 Fai doppio clic su `start-dev.bat`. Verrà avviato il server Expo con tunnel cloud attivo: inquadra il QR Code con l'app **Expo Go** del telefono.
@@ -80,3 +90,9 @@ IPTVPlayerV2/
         ├── services/      # Client Xtream, M3U Parser, EPG Service, Storage
         └── components/    # Header, EpgGuideView, EpgModal, UniversalVideoPlayer...
 ```
+
+
+## Pulizia del pacchetto
+
+L'archivio di distribuzione non include `node_modules`, `.git`, `.expo`, cache Python o build generate.
+Le dipendenze vengono reinstallate automaticamente da `start.bat` al primo avvio.

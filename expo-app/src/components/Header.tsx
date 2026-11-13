@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Platform, useWindowDimensions, ScrollView } from 'react-native';
+import { View, Text, Image, StyleSheet, TouchableOpacity, TextInput, Platform, useWindowDimensions, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { Account, MediaType, NavTab } from '../types';
@@ -44,9 +44,12 @@ export const Header: React.FC<HeaderProps> = ({
       <View style={styles.topRow}>
         {/* Brand Logo */}
         <View style={styles.brandContainer}>
-          <View style={styles.logoBadge}>
-            <Ionicons name="play" size={14} color="#fff" />
-          </View>
+          <Image
+            source={require('../../assets/iptv-player-logo.png')}
+            style={styles.logoImage}
+            resizeMode="contain"
+            accessibilityLabel="IPTV Player"
+          />
           <Text style={styles.brandTitle}>
             IPTV <Text style={styles.brandTitleAccent}>PLAYER</Text>
           </Text>
@@ -271,15 +274,12 @@ const styles = StyleSheet.create({
   brandContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8
+    gap: 10
   },
-  logoBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 6,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center'
+  logoImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 10
   },
   brandTitle: {
     color: colors.textPrimary,

@@ -57,6 +57,33 @@ export class XtreamAPI {
     return clean;
   }
 
+  static getLiveTranscodeUrl(targetUrl: string): string {
+    let sourceUrl = (targetUrl || '').trim();
+
+    // The player may currently hold a local /api/proxy URL. Unwrap it so
+    // FFmpeg receives the original IPTV URL, not a request back to this server.
+    for (let i = 0; i < 5; i++) {
+      try {
+        const base = typeof window !== 'undefined' && window.location
+          ? window.location.origin
+          : 'http://localhost';
+        const parsed = new URL(sourceUrl, base);
+        if (!parsed.pathname.endsWith('/api/proxy')) break;
+        const nested = parsed.searchParams.get('url');
+        if (!nested) break;
+        sourceUrl = nested;
+      } catch {
+        break;
+      }
+    }
+
+    const query = `url=${encodeURIComponent(sourceUrl)}`;
+    if (typeof window !== 'undefined' && window.location) {
+      return `${window.location.origin}/api/live_transcode?${query}`;
+    }
+    return `/api/live_transcode?${query}`;
+  }
+
   static extractDuration(item: any): number {
     if (!item) return 0;
     if (typeof item.duration_secs === 'number' && item.duration_secs > 0) return item.duration_secs;
@@ -93,13 +120,15 @@ export class XtreamAPI {
     } else if (itemOrDuration && typeof itemOrDuration === 'object') {
       dur = this.extractDuration(itemOrDuration);
     }
-    const durParam = dur > 0 ? `&duration=${Math.floor(dur)}` : '';
-    const h264Param = (forceH264 || !this.canPlayHevc()) ? '&h264=1' : '';
-    const qs = `${encodeURIComponent(clean)}${durParam}${h264Param}`;
+    const params = new URLSearchParams();
+    params.set('url', clean);
+    if (dur > 0) params.set('duration', String(Math.floor(dur)));
+    if (forceH264 || !this.canPlayHevc()) params.set('h264', '1');
+    const qs = params.toString();
     if (typeof window !== 'undefined' && window.location) {
-      return `${window.location.origin}/api/hls/master.m3u8?url=${qs}`;
+      return `${window.location.origin}/api/hls/master.m3u8?${qs}`;
     }
-    return `/api/hls/master.m3u8?url=${qs}`;
+    return `/api/hls/master.m3u8?${qs}`;
   }
 
   static async fetchJSON<T = any>(url: string, useProxy: boolean = true, timeoutMs: number = 15000): Promise<T> {

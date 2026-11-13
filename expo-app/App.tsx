@@ -391,6 +391,9 @@ export default function App() {
     initialSeekTime?: number
   ) => {
     if (!account) return;
+
+    // Chiudi il pannello serie prima di avviare l'episodio.
+    setSelectedSeries(null);
     const streamUrl = XtreamAPI.buildStreamUrl(
       account,
       episode,

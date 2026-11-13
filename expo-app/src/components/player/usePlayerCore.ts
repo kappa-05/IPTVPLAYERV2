@@ -1,4 +1,4 @@
-﻿import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Platform } from 'react-native';
 import { PlayingStream, Account, MediaTrack, QualityLevel, PlaybackSpeed } from '../../types';
 import { XtreamAPI } from '../../services/api';
@@ -42,6 +42,9 @@ export function usePlayerCore({
   const hlsRef = useRef<any>(null);
   const mpegtsRef = useRef<any>(null);
   const currentStreamUrlRef = useRef<string>('');
+  const hlsFallbackAttemptedRef = useRef(false);
+  const liveFallbackAttemptedRef = useRef(false);
+  const loadStreamRef = useRef<((url: string) => void) | null>(null);
 
   // Core playback states
   const [isPlaying, setIsPlaying] = useState(true);
@@ -186,7 +189,7 @@ export function usePlayerCore({
 
     const cleanUrl = targetUrl.toLowerCase();
     const isM3u8 = cleanUrl.includes('.m3u8') || targetUrl.includes('/api/hls/');
-    const isTs = cleanUrl.endsWith('.ts') || cleanUrl.includes('.ts?') || cleanUrl.includes('.ts&') || stream?.extension === 'ts';
+    const isTs = cleanUrl.endsWith('.ts') || cleanUrl.includes('.ts?') || cleanUrl.includes('.ts&') || cleanUrl.includes('/api/live_transcode') || stream?.extension === 'ts';
 
     // 1. HLS Engine (Hls.js)
     if (isM3u8 && HlsClass && HlsClass.isSupported()) {
@@ -273,10 +276,24 @@ export function usePlayerCore({
         if (data.fatal) {
           switch (data.type) {
             case HlsClass.ErrorTypes.NETWORK_ERROR:
-              hls.startLoad();
+              if (!hlsFallbackAttemptedRef.current) {
+                hlsFallbackAttemptedRef.current = true;
+                hls.startLoad();
+              } else {
+                setErrorMsg('Connessione al flusso interrotta. Riprova la riproduzione.');
+                setIsBuffering(false);
+                hls.destroy();
+                if (hlsRef.current === hls) hlsRef.current = null;
+              }
               break;
             case HlsClass.ErrorTypes.MEDIA_ERROR:
-              hls.recoverMediaError();
+              if (!hlsFallbackAttemptedRef.current) {
+                hlsFallbackAttemptedRef.current = true;
+                hls.recoverMediaError();
+              } else {
+                setErrorMsg('Formato multimediale non supportato o danneggiato.');
+                setIsBuffering(false);
+              }
               break;
             default:
               // Fallback to TS if live
@@ -320,17 +337,36 @@ export function usePlayerCore({
         }, {
           enableWorker: true,
           lazyLoad: false,
+          // Restore the previously stable Live startup buffer.
           stashInitialSize: 512 * 1024,
           autoCleanupSourceBuffer: true,
           autoCleanupMaxBackwardDuration: 60,
           autoCleanupMinBackwardDuration: 30,
-          liveBufferLatencyChasing: false // NEVER chase latency on IPTV: prevents stuttering
+          liveBufferLatencyChasing: false
         });
         mpegtsRef.current = player;
         player.attachMediaElement(video);
         player.load();
 
-        player.on(mpegts.Events.MEDIA_INFO, () => {
+        player.on(mpegts.Events.MEDIA_INFO, (info: any) => {
+          const audioCodec = String(
+            info?.audioCodec || info?.audio_codec || info?.audioCodecName || ''
+          );
+          const needsAacTranscode = /ac-?3|e-?ac-?3|dolby/i.test(audioCodec);
+
+          if (
+            isLive &&
+            needsAacTranscode &&
+            !cleanUrl.includes('/api/live_transcode') &&
+            !liveFallbackAttemptedRef.current
+          ) {
+            liveFallbackAttemptedRef.current = true;
+            console.info(`[Live] Audio ${audioCodec} rilevato: attivo remux H.264 + AAC tramite FFmpeg.`);
+            const transcodedUrl = XtreamAPI.getLiveTranscodeUrl(targetUrl);
+            setTimeout(() => loadStreamRef.current?.(transcodedUrl), 0);
+            return;
+          }
+
           setIsBuffering(false);
           setFirstFrameRendered(true);
         });
@@ -355,10 +391,14 @@ export function usePlayerCore({
     triggerPlay(video);
   }, [destroyEngines, stream, triggerPlay, isLive]);
 
+  loadStreamRef.current = loadStream;
+
   // Main lifecycle when stream changes
   useEffect(() => {
     if (visible && stream) {
       isSwitchingRef.current = false;
+      hlsFallbackAttemptedRef.current = false;
+      liveFallbackAttemptedRef.current = false;
       setCurrentTime(0);
       setDuration(0);
       setBufferPercent(0);
@@ -432,10 +472,11 @@ export function usePlayerCore({
     const onError = () => {
       const code = video.error ? video.error.code : 0;
       console.warn('HTML5 Video Error code:', code);
-      if (!isSwitchingRef.current && stream?.streamUrl) {
+      const activeUrl = currentStreamUrlRef.current || stream?.streamUrl || '';
+      if (!isSwitchingRef.current && activeUrl) {
         if (isLive) {
           isSwitchingRef.current = true;
-          const clean = stream.streamUrl;
+          const clean = activeUrl;
           const altM3u8 = clean.includes('.ts') ? clean.replace(/\.ts(\?.*)?$/i, '.m3u8$1') : clean;
           if (altM3u8 !== clean) {
             setTimeout(() => {
@@ -446,22 +487,23 @@ export function usePlayerCore({
           }
         } else {
           // VOD / Movie / Series Error (Code 3: MEDIA_ERR_DECODE or Code 4: MEDIA_ERR_SRC_NOT_SUPPORTED)
-          const curUrl = stream.streamUrl;
-          // If the stream wasn't routed through HLS yet, switch to server HLS pipeline with forceH264
+          const curUrl = activeUrl;
+          // If the stream wasn't routed through HLS yet, switch to server HLS pipeline with forceH264.
           if (!curUrl.includes('/api/hls/')) {
             isSwitchingRef.current = true;
             console.log('[PlayerCore] Video error code', code, 'on movie/series. Falling back to server HLS remuxer...');
-            const fallbackUrl = XtreamAPI.getHlsUrl(curUrl, stream.rawItem, true);
+            const fallbackUrl = XtreamAPI.getHlsUrl(curUrl, stream?.rawItem, true);
             setTimeout(() => {
               isSwitchingRef.current = false;
               loadStream(fallbackUrl);
             }, 200);
             return;
-          } else if (!curUrl.includes('&h264=1')) {
-            // If already on HLS but failed, force H.264 transcode
+          } else if (!/[?&](?:h264|force_h264)=1(?:&|$)/i.test(curUrl) && !hlsFallbackAttemptedRef.current) {
+            // Retry HLS once with forced H.264, preserving existing query parameters.
+            hlsFallbackAttemptedRef.current = true;
             isSwitchingRef.current = true;
             console.log('[PlayerCore] HLS error code', code, 'on movie/series. Retrying with forced H.264 transcode...');
-            const forceH264Url = curUrl + '&h264=1';
+            const forceH264Url = curUrl + (curUrl.includes('?') ? '&' : '?') + 'h264=1';
             setTimeout(() => {
               isSwitchingRef.current = false;
               loadStream(forceH264Url);
@@ -668,7 +710,12 @@ export function usePlayerCore({
   }, [saveProgress, destroyEngines, onClose]);
 
   const retry = useCallback(() => {
-    if (stream?.streamUrl) loadStream(stream.streamUrl);
+    if (stream?.streamUrl) {
+      hlsFallbackAttemptedRef.current = false;
+      liveFallbackAttemptedRef.current = false;
+      isSwitchingRef.current = false;
+      loadStream(stream.streamUrl);
+    }
   }, [stream, loadStream]);
 
   return {

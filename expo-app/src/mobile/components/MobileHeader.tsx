@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   TouchableOpacity,
   TextInput,
@@ -76,9 +77,12 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
       <View style={styles.topBar}>
         {/* Brand */}
         <View style={styles.brandRow}>
-          <View style={styles.logoBadge}>
-            <Ionicons name="play" size={13} color="#fff" />
-          </View>
+          <Image
+            source={require('../../../assets/iptv-player-logo.png')}
+            style={styles.logoImage}
+            resizeMode="contain"
+            accessibilityLabel="IPTV Player"
+          />
           <View>
             <Text style={styles.brandTitle}>
               IPTV <Text style={styles.brandAccent}>PLAYER</Text>
@@ -223,13 +227,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10
   },
-  logoBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 6,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center'
+  logoImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 10
   },
   brandTitle: {
     color: '#ffffff',

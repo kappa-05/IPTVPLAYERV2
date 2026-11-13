@@ -495,10 +495,6 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
               <TouchableOpacity style={styles.iconBtn} onPress={() => setShortcutsModalVisible(true)} accessibilityLabel="Scorciatoie">
                 <Ionicons name="help-circle-outline" size={18} color="#fff" />
               </TouchableOpacity>
-
-              <TouchableOpacity style={styles.iconBtn} onPress={handleClose} accessibilityLabel="Chiudi">
-                <Ionicons name="close" size={20} color="#fff" />
-              </TouchableOpacity>
             </View>
           </View>
 

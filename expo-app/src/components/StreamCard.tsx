@@ -88,11 +88,6 @@ export const StreamCard: React.FC<StreamCardProps> = ({
                 <View style={styles.liveRedDot} />
                 <Text style={styles.badgeLiveText}>LIVE</Text>
               </View>
-              {stream.epg_channel_id ? (
-                <Text style={styles.liveEpg} numberOfLines={1}>
-                  {stream.epg_channel_id}
-                </Text>
-              ) : null}
             </View>
           )}
         </View>
@@ -295,10 +290,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.5
-  },
-  liveEpg: {
-    color: colors.textMuted,
-    fontSize: 11
   },
   liveEpgPreview: {
     marginTop: 2
