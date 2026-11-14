@@ -626,7 +626,34 @@ export function usePlayerCore({
     video.addEventListener('volumechange', onVolumeChange);
     video.addEventListener('error', onError);
 
+    // Fullscreen events: standard browsers plus Safari/iOS native video fullscreen.
+    const syncFullscreenState = () => {
+      const doc = document as any;
+      const active = Boolean(
+        document.fullscreenElement ||
+        doc.webkitFullscreenElement ||
+        doc.webkitIsFullScreen ||
+        (video as any).webkitDisplayingFullscreen
+      );
+      setIsFullscreen(active);
+      if (!active) video.controls = false;
+    };
+    const onNativeFullscreenBegin = () => setIsFullscreen(true);
+    const onNativeFullscreenEnd = () => {
+      video.controls = false;
+      setIsFullscreen(false);
+    };
+
+    document.addEventListener('fullscreenchange', syncFullscreenState);
+    document.addEventListener('webkitfullscreenchange', syncFullscreenState as EventListener);
+    video.addEventListener('webkitbeginfullscreen', onNativeFullscreenBegin as EventListener);
+    video.addEventListener('webkitendfullscreen', onNativeFullscreenEnd as EventListener);
+
     return () => {
+      document.removeEventListener('fullscreenchange', syncFullscreenState);
+      document.removeEventListener('webkitfullscreenchange', syncFullscreenState as EventListener);
+      video.removeEventListener('webkitbeginfullscreen', onNativeFullscreenBegin as EventListener);
+      video.removeEventListener('webkitendfullscreen', onNativeFullscreenEnd as EventListener);
       video.removeEventListener('play', onPlay);
       video.removeEventListener('pause', onPause);
       video.removeEventListener('waiting', onWaiting);
@@ -717,21 +744,77 @@ export function usePlayerCore({
   }, []);
 
   const toggleFullscreen = useCallback(() => {
+    const video = webVideoRef.current as (HTMLVideoElement & {
+      webkitEnterFullscreen?: () => void;
+      webkitExitFullscreen?: () => void;
+      webkitDisplayingFullscreen?: boolean;
+    }) | null;
     const container = document.getElementById('iptv-universal-player') || document.documentElement;
-    if (!document.fullscreenElement && !(document as any).webkitFullscreenElement) {
-      if (container.requestFullscreen) {
-        container.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
-      } else if ((container as any).webkitRequestFullscreen) {
-        (container as any).webkitRequestFullscreen();
+    const doc = document as any;
+    const isNativeVideoFullscreen = Boolean(video?.webkitDisplayingFullscreen);
+    const isDocumentFullscreen = Boolean(document.fullscreenElement || doc.webkitFullscreenElement || doc.webkitIsFullScreen);
+    const isFullscreenNow = isNativeVideoFullscreen || isDocumentFullscreen;
+
+    if (isFullscreenNow) {
+      if (isNativeVideoFullscreen && typeof video?.webkitExitFullscreen === 'function') {
+        video.webkitExitFullscreen();
+      } else if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if (typeof doc.webkitExitFullscreen === 'function') {
+        doc.webkitExitFullscreen();
+      } else if (typeof video?.webkitExitFullscreen === 'function') {
+        video.webkitExitFullscreen();
+      }
+      return;
+    }
+
+    if (!video) {
+      if (typeof container.requestFullscreen === 'function') {
+        container.requestFullscreen().catch(() => {});
+      }
+      return;
+    }
+
+    // iPhone/iPad Safari exposes a dedicated native fullscreen API for video.
+    const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+    const isIOS = /iPhone|iPad|iPod/i.test(userAgent) ||
+      (/Macintosh/i.test(userAgent) && typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1);
+
+    if (isIOS && typeof video.webkitEnterFullscreen === 'function') {
+      video.controls = true;
+      try {
+        video.webkitEnterFullscreen();
         setIsFullscreen(true);
+      } catch {
+        video.controls = false;
+        if (typeof container.requestFullscreen === 'function') {
+          container.requestFullscreen().catch(() => {});
+        }
       }
-    } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
-      } else if ((document as any).webkitExitFullscreen) {
-        (document as any).webkitExitFullscreen();
-        setIsFullscreen(false);
-      }
+      return;
+    }
+
+    // Android browsers can fullscreen the video element itself and expose native controls.
+    if (typeof video.requestFullscreen === 'function') {
+      video.controls = true;
+      video.requestFullscreen().then(() => {
+        setIsFullscreen(true);
+      }).catch(() => {
+        video.controls = false;
+        if (typeof container.requestFullscreen === 'function') {
+          container.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+        }
+      });
+      return;
+    }
+
+    // Fallback for browsers that only support fullscreen on the player container.
+    video.controls = false;
+    if (typeof container.requestFullscreen === 'function') {
+      container.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+    } else if (typeof (container as any).webkitRequestFullscreen === 'function') {
+      (container as any).webkitRequestFullscreen();
+      setIsFullscreen(true);
     }
   }, []);
 
