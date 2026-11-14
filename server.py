@@ -621,7 +621,7 @@ class HLSStreamManager:
                 "-b:a", "192k",
                 "-ac", "2",
                 "-ar", "48000",
-                "-af", "aresample=async=1000:first_pts=0,volume=1.25",
+                "-af", "aresample=async=1000,volume=1.25",
                 "-max_muxing_queue_size", "2048",
                 "-avoid_negative_ts", "make_zero",
                 "-f", "hls",

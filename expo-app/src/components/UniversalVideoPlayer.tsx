@@ -41,6 +41,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
   onWatchProgressUpdated
 }) => {
   const { width } = useWindowDimensions();
+  const isCompactLayout = width < 600;
 
   // Core Hook
   const {
@@ -631,9 +632,9 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
             )}
 
             {/* Bottom Controls Row */}
-            <View style={styles.bottomRow}>
+            <View style={[styles.bottomRow, isCompactLayout && styles.bottomRowCompact]}>
               {/* Left: Play/Pause, Skip, Time */}
-              <View style={styles.bottomLeft}>
+              <View style={[styles.bottomLeft, isCompactLayout && styles.bottomLeftCompact]}>
                 <TouchableOpacity style={styles.ctrlBtn} onPress={togglePlayPause}>
                   <Ionicons name={isPlaying ? 'pause' : 'play'} size={22} color="#fff" />
                 </TouchableOpacity>
@@ -655,14 +656,14 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
                     <Text style={styles.liveText}>DIRETTA</Text>
                   </View>
                 ) : (
-                  <Text style={styles.timeText}>
+                  <Text style={[styles.timeText, isCompactLayout && styles.timeTextCompact]}>
                     {formatTime(currentTime)} / {formatTime(duration)}
                   </Text>
                 )}
               </View>
 
               {/* Right: Tracks, Quality, Speed, Aspect Ratio, Volume, PiP, Fullscreen */}
-              <View style={styles.bottomRight}>
+              <View style={[styles.bottomRight, isCompactLayout && styles.bottomRightCompact]}>
                 {/* Audio / Subtitle modal */}
                 {(audioTracks.length > 1 || subtitleTracks.length > 0) && (
                   <TouchableOpacity
@@ -723,6 +724,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
                     value={isMuted ? 0 : volume}
                     onChange={(e) => changeVolume(parseFloat(e.target.value))}
                     style={{
+                      display: isCompactLayout ? 'none' : 'block',
                       width: 75,
                       height: 4,
                       cursor: 'pointer',
@@ -1212,15 +1214,31 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: 8
   },
+  bottomRowCompact: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    justifyContent: 'flex-start',
+    gap: 12
+  },
   bottomLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12
   },
+  bottomLeftCompact: {
+    width: '100%',
+    justifyContent: 'flex-start',
+    gap: 8
+  },
   bottomRight: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10
+  },
+  bottomRightCompact: {
+    width: '100%',
+    justifyContent: 'space-between',
+    gap: 6
   },
   ctrlBtn: {
     width: 36,
@@ -1272,5 +1290,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     fontVariant: ['tabular-nums']
+  },
+  timeTextCompact: {
+    marginLeft: 'auto',
+    fontSize: 11
   }
 });
