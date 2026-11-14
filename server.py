@@ -381,6 +381,26 @@ class HLSStreamManager:
         m3u8_bytes = ("\n".join(lines) + "\n").encode('utf-8')
         return sid, m3u8_bytes
 
+    def _get_variant_key(self, sess, audio_track):
+        """Return a stable cache/worker key for one audio + video rendition."""
+        video_codec = (sess.get('video_codec') or '').lower()
+        video_mode = 'h264' if (
+            (sess.get('force_h264', False) or sess.get('is_hevc', False))
+            and video_codec not in ('h264', 'avc')
+        ) else 'copy'
+        raw_key = f"audio={int(audio_track)}|video={video_mode}|codec={video_codec}"
+        return hashlib.sha256(raw_key.encode('utf-8')).hexdigest()[:12]
+
+    def _get_variant_dir(self, sess, audio_track):
+        """Keep init fragments and media segments isolated per rendition."""
+        base_dir = sess.get('dir')
+        if not base_dir:
+            return None
+        variant_key = self._get_variant_key(sess, audio_track)
+        variant_dir = os.path.join(base_dir, f"variant_{variant_key}")
+        os.makedirs(variant_dir, exist_ok=True)
+        return variant_dir
+
     def get_vod_media_m3u8(self, sid, audio_track=0):
         with self.lock:
             sess = self.sessions.get(sid)
@@ -408,7 +428,8 @@ class HLSStreamManager:
             seg_duration = sess.get('seg_duration', 6.0)
             num_segments = sess.get('num_segments', max(1, int(math.ceil(duration / seg_duration))))
             target_url = sess.get('target_url')
-            sdir = sess.get('dir')
+            sdir = self._get_variant_dir(sess, audio_track)
+            variant_key = self._get_variant_key(sess, audio_track)
 
         lines = [
             "#EXTM3U",
@@ -437,8 +458,9 @@ class HLSStreamManager:
                 with self.lock:
                     proc = self.sessions.get(sid, {}).get('proc')
                     current_audio = self.sessions.get(sid, {}).get('current_audio_track', 0)
+                    current_variant = self.sessions.get(sid, {}).get('current_variant_key')
                     worker_alive = proc is not None and proc.poll() is None
-                if not worker_alive or current_audio != audio_track:
+                if not worker_alive or current_audio != audio_track or current_variant != variant_key:
                     self._ensure_background_worker(
                         sid, target_url, sdir, start_seg=0, audio_track=audio_track
                     )
@@ -477,9 +499,13 @@ class HLSStreamManager:
             proc = sess.get('proc')
             cur_start = sess.get('current_start_seg', 0)
             cur_audio = sess.get('current_audio_track', 0)
+            variant_key = self._get_variant_key(sess, audio_track)
+            cur_variant = sess.get('current_variant_key')
 
-            # If worker is already running near this position and same audio track, let it continue
-            if proc and proc.poll() is None and cur_audio == audio_track:
+            # Reuse a worker only when both the requested position and the full
+            # audio/video rendition match. A force-H.264 retry must never inherit
+            # segments or a process created for the previous rendition.
+            if proc and proc.poll() is None and cur_audio == audio_track and cur_variant == variant_key:
                 if 0 <= (start_seg - cur_start) <= 5:
                     return
 
@@ -622,6 +648,7 @@ class HLSStreamManager:
                 )
                 sess['current_start_seg'] = start_seg
                 sess['current_audio_track'] = audio_track
+                sess['current_variant_key'] = variant_key
             except Exception as e:
                 print(f"[Worker Error] {e}")
 
@@ -645,10 +672,13 @@ class HLSStreamManager:
                 }
                 self.sessions[sid] = sess
             sess['last_seen'] = time.time()
-            sdir = sess['dir']
             target_url = sess.get('target_url')
             seg_duration = sess.get('seg_duration', 6.0)
+            variant_key = self._get_variant_key(sess, audio_track)
+            sdir = self._get_variant_dir(sess, audio_track)
 
+        if not sdir:
+            return None
         seg_path = os.path.join(sdir, seg_name)
 
         # A completed segment is immutable for this VOD session and can be served immediately.
@@ -665,7 +695,13 @@ class HLSStreamManager:
                     return seg_path
                 with self.lock:
                     proc = sess.get('proc')
-                if not proc or proc.poll() is not None:
+                    current_variant = sess.get('current_variant_key')
+                    worker_matches = (
+                        proc is not None and proc.poll() is None
+                        and current_variant == variant_key
+                        and sess.get('current_audio_track', 0) == audio_track
+                    )
+                if not worker_matches:
                     self._ensure_background_worker(sid, target_url, sdir, start_seg=0, audio_track=audio_track)
 
             deadline = time.time() + 25.0
@@ -691,6 +727,7 @@ class HLSStreamManager:
                 proc = sess.get('proc')
                 cur_start = sess.get('current_start_seg', 0)
                 cur_audio = sess.get('current_audio_track', 0)
+                cur_variant = sess.get('current_variant_key')
                 worker_alive = proc is not None and proc.poll() is None
 
             # A late request for a segment before the active seek position is
@@ -701,6 +738,7 @@ class HLSStreamManager:
             needs_restart = (
                 not worker_alive or
                 cur_audio != audio_track or
+                cur_variant != variant_key or
                 seg_idx > cur_start + 5
             )
             if needs_restart:

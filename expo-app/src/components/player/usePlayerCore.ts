@@ -42,8 +42,14 @@ export function usePlayerCore({
   const hlsRef = useRef<any>(null);
   const mpegtsRef = useRef<any>(null);
   const currentStreamUrlRef = useRef<string>('');
+  const activeStreamIdRef = useRef<string>('');
   const hlsFallbackAttemptedRef = useRef(false);
+  const h264FallbackAttemptedRef = useRef(false);
   const liveFallbackAttemptedRef = useRef(false);
+  const liveFormatFallbackAttemptedRef = useRef(false);
+  const mediaRecoveryAttemptedRef = useRef(false);
+  const pendingSeekRef = useRef<number | null>(null);
+  const resumeSeekAppliedRef = useRef(false);
   const loadStreamRef = useRef<((url: string) => void) | null>(null);
 
   // Core playback states
@@ -89,6 +95,28 @@ export function usePlayerCore({
   const volumeTimeoutRef = useRef<any>(null);
   const lastSaveTimeRef = useRef(0);
   const isSwitchingRef = useRef(false);
+
+  const applyPendingSeek = useCallback((video: HTMLVideoElement) => {
+    const pending = pendingSeekRef.current;
+    if (pending === null || resumeSeekAppliedRef.current) return;
+    if (!Number.isFinite(pending) || pending <= 0) {
+      pendingSeekRef.current = null;
+      resumeSeekAppliedRef.current = true;
+      return;
+    }
+    if (video.readyState < 1) return;
+    const maxTime = Number.isFinite(video.duration) && video.duration > 0
+      ? Math.max(0, video.duration - 2)
+      : pending;
+    const target = Math.min(pending, maxTime);
+    try {
+      video.currentTime = target;
+      if (Math.abs(video.currentTime - target) < 2 || video.seeking) {
+        pendingSeekRef.current = null;
+        resumeSeekAppliedRef.current = true;
+      }
+    } catch {}
+  }, []);
 
   // Stream type detection
   const isLive = useMemo(() => {
@@ -176,6 +204,17 @@ export function usePlayerCore({
   }, []);
 
   // Stream Loader
+  const withQueryParam = (rawUrl: string, key: string, value: string) => {
+    try {
+      const url = new URL(rawUrl, typeof window !== 'undefined' ? window.location.href : 'http://localhost');
+      url.searchParams.set(key, value);
+      return url.toString();
+    } catch {
+      const separator = rawUrl.includes('?') ? '&' : '?';
+      return `${rawUrl}${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+    }
+  };
+
   const loadStream = useCallback((targetUrl: string) => {
     destroyEngines();
     const video = webVideoRef.current;
@@ -188,8 +227,10 @@ export function usePlayerCore({
     setIsPlaying(true);
 
     const cleanUrl = targetUrl.toLowerCase();
-    const isM3u8 = cleanUrl.includes('.m3u8') || targetUrl.includes('/api/hls/');
-    const isTs = cleanUrl.endsWith('.ts') || cleanUrl.includes('.ts?') || cleanUrl.includes('.ts&') || cleanUrl.includes('/api/live_transcode') || stream?.extension === 'ts';
+    let path = cleanUrl;
+    try { path = new URL(targetUrl, typeof window !== 'undefined' ? window.location.href : 'http://localhost').pathname.toLowerCase(); } catch {}
+    const isM3u8 = path.endsWith('.m3u8') || path.includes('/api/hls/');
+    const isTs = path.endsWith('.ts') || path.includes('/api/live_transcode') || (!path.endsWith('.m3u8') && stream?.extension === 'ts');
 
     // 1. HLS Engine (Hls.js)
     if (isM3u8 && HlsClass && HlsClass.isSupported()) {
@@ -239,29 +280,36 @@ export function usePlayerCore({
             kind: 'audio'
           }));
           setAudioTracks(aList);
+          setActiveAudioTrack(hls.audioTrack ?? 0);
         } else if (targetUrl.includes('/api/hls/')) {
-          const rawMatch = targetUrl.match(/url=([^&]+)/);
-          if (rawMatch) {
-            const rawMediaUrl = decodeURIComponent(rawMatch[1]);
-            fetch(`/api/media_info?url=${encodeURIComponent(rawMediaUrl)}`)
-              .then(res => res.json())
+          let rawMediaUrl = '';
+          try {
+            rawMediaUrl = new URL(targetUrl, window.location.href).searchParams.get('url') || '';
+          } catch {}
+          if (rawMediaUrl) {
+            fetch(`/api/media_info?url=${encodeURIComponent(rawMediaUrl)}`, { cache: 'no-store' })
+              .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
               .then(info => {
+                if (hlsRef.current !== hls || currentStreamUrlRef.current !== targetUrl) return;
+                const selectedAudio = Number(new URL(targetUrl, window.location.href).searchParams.get('audio_track') || 0);
                 if (info?.audio_tracks?.length > 0) {
-                  const trMatch = targetUrl.match(/audio_track=(\d+)/);
-                  const activeIdx = trMatch ? parseInt(trMatch[1], 10) : 0;
-                  setAudioTracks(info.audio_tracks.map((t: any, idx: number) => ({
-                    id: t.stream_index !== undefined ? t.stream_index : idx,
-                    label: t.title || (t.language ? `Audio ${t.language.toUpperCase()}` : `Traccia ${idx + 1}`),
-                    language: t.language || '',
-                    active: (t.stream_index !== undefined ? t.stream_index : idx) === activeIdx,
-                    kind: 'audio'
-                  })));
+                  setAudioTracks(info.audio_tracks.map((t: any, idx: number) => {
+                    const id = t.stream_index !== undefined ? t.stream_index : idx;
+                    return {
+                      id,
+                      label: t.title || (t.language ? `Audio ${t.language.toUpperCase()}` : `Traccia ${idx + 1}`),
+                      language: t.language || '',
+                      active: id === selectedAudio,
+                      kind: 'audio'
+                    };
+                  }));
+                  setActiveAudioTrack(selectedAudio);
                 }
                 if (info?.subtitle_tracks?.length > 0) {
-                  setSubtitleTracks(info.subtitle_tracks.map((s: any, idx: number) => ({
-                    id: s.stream_index !== undefined ? s.stream_index : idx,
-                    label: s.title || (s.language ? `Sottotitolo ${s.language.toUpperCase()}` : `Sottotitolo ${idx + 1}`),
-                    language: s.language || '',
+                  setSubtitleTracks(info.subtitle_tracks.map((sub: any, idx: number) => ({
+                    id: sub.stream_index !== undefined ? sub.stream_index : idx,
+                    label: sub.title || (sub.language ? `Sottotitolo ${sub.language.toUpperCase()}` : `Sottotitolo ${idx + 1}`),
+                    language: sub.language || '',
                     active: false,
                     kind: 'subtitle'
                   })));
@@ -270,57 +318,68 @@ export function usePlayerCore({
               .catch(() => {});
           }
         }
+
+        if (hls.subtitleTracks && hls.subtitleTracks.length > 0) {
+          setSubtitleTracks(hls.subtitleTracks.map((track: any, idx: number) => ({
+            id: idx,
+            label: track.name || track.lang || `Sottotitolo ${idx + 1}`,
+            language: track.lang || '',
+            active: idx === hls.subtitleTrack,
+            kind: 'subtitles'
+          })));
+          setActiveSubtitleTrack(hls.subtitleTrack ?? -1);
+        }
       });
 
       hls.on(HlsClass.Events.ERROR, (_event: any, data: any) => {
-        if (data.fatal) {
-          switch (data.type) {
-            case HlsClass.ErrorTypes.NETWORK_ERROR:
-              if (!hlsFallbackAttemptedRef.current) {
-                hlsFallbackAttemptedRef.current = true;
-                hls.startLoad();
-              } else {
-                setErrorMsg('Connessione al flusso interrotta. Riprova la riproduzione.');
-                setIsBuffering(false);
-                hls.destroy();
-                if (hlsRef.current === hls) hlsRef.current = null;
-              }
-              break;
-            case HlsClass.ErrorTypes.MEDIA_ERROR:
-              if (!hlsFallbackAttemptedRef.current) {
-                hlsFallbackAttemptedRef.current = true;
-                hls.recoverMediaError();
-              } else {
-                setErrorMsg('Formato multimediale non supportato o danneggiato.');
-                setIsBuffering(false);
-              }
-              break;
-            default:
-              // Fallback to TS if live
-              if (isLive && !isSwitchingRef.current) {
+        if (!data?.fatal || hlsRef.current !== hls) return;
+        switch (data.type) {
+          case HlsClass.ErrorTypes.NETWORK_ERROR:
+            if (!hlsFallbackAttemptedRef.current) {
+              hlsFallbackAttemptedRef.current = true;
+              hls.startLoad();
+            } else {
+              setErrorMsg('Connessione al flusso interrotta. Riprova la riproduzione.');
+              setIsBuffering(false);
+              hls.destroy();
+              if (hlsRef.current === hls) hlsRef.current = null;
+            }
+            break;
+          case HlsClass.ErrorTypes.MEDIA_ERROR:
+            if (!mediaRecoveryAttemptedRef.current) {
+              mediaRecoveryAttemptedRef.current = true;
+              hls.recoverMediaError();
+            } else {
+              setErrorMsg('Formato multimediale non supportato o danneggiato.');
+              setIsBuffering(false);
+            }
+            break;
+          default: {
+            // For live streams, try the provider's TS endpoint only when this is a direct HLS URL.
+            if (isLive && !isSwitchingRef.current && !path.includes('/api/hls/')) {
+              const altTs = targetUrl.replace(/\.m3u8(\?.*)?$/i, '.ts$1');
+              if (altTs !== targetUrl) {
                 isSwitchingRef.current = true;
-                const altTs = targetUrl.replace(/\.m3u8(\?.*)?$/i, '.ts$1');
-                if (altTs !== targetUrl) {
-                  setTimeout(() => {
-                    isSwitchingRef.current = false;
-                    loadStream(altTs);
-                  }, 200);
-                  return;
-                }
-              }
-              // Fallback for VOD / Movies: if HLS failed and did not have &h264=1, retry with forced H264
-              if (!isLive && !isSwitchingRef.current && !targetUrl.includes('&h264=1')) {
-                isSwitchingRef.current = true;
-                const forceH264Url = targetUrl + '&h264=1';
                 setTimeout(() => {
                   isSwitchingRef.current = false;
-                  loadStream(forceH264Url);
+                  loadStreamRef.current?.(altTs);
                 }, 200);
                 return;
               }
-              setErrorMsg('Impossibile caricare il flusso multimediale.');
-              setIsBuffering(false);
-              break;
+            }
+            // The server HLS endpoint understands h264=1; preserve all existing query parameters.
+            if (!isLive && path.includes('/api/hls/master.m3u8') && !/[?&](?:h264|force_h264)=1(?:&|$)/i.test(targetUrl) && !isSwitchingRef.current) {
+              isSwitchingRef.current = true;
+              const forceH264Url = withQueryParam(targetUrl, 'h264', '1');
+              setTimeout(() => {
+                isSwitchingRef.current = false;
+                loadStreamRef.current?.(forceH264Url);
+              }, 200);
+              return;
+            }
+            setErrorMsg('Impossibile caricare il flusso multimediale.');
+            setIsBuffering(false);
+            break;
           }
         }
       });
@@ -361,7 +420,7 @@ export function usePlayerCore({
             !liveFallbackAttemptedRef.current
           ) {
             liveFallbackAttemptedRef.current = true;
-            console.info(`[Live] Audio ${audioCodec} rilevato: attivo remux H.264 + AAC tramite FFmpeg.`);
+            console.info(`[Live] Audio ${audioCodec} rilevato: attivo remux audio AAC tramite FFmpeg.`);
             const transcodedUrl = XtreamAPI.getLiveTranscodeUrl(targetUrl);
             setTimeout(() => loadStreamRef.current?.(transcodedUrl), 0);
             return;
@@ -376,8 +435,23 @@ export function usePlayerCore({
           p.catch(() => triggerPlay(video));
         }
 
-        player.on(mpegts.Events.ERROR, (errType: any, errDetail: any) => {
-          console.warn('mpegts warning:', errType, errDetail);
+        player.on(mpegts.Events.ERROR, (errType: any, errDetail: any, errInfo: any) => {
+          console.warn('mpegts error:', errType, errDetail, errInfo || '');
+          if (mpegtsRef.current !== player) return;
+          if (isLive && !liveFormatFallbackAttemptedRef.current && !cleanUrl.includes('/api/live_transcode')) {
+            const altM3u8 = targetUrl.replace(/\.ts(\?.*)?$/i, '.m3u8$1');
+            if (altM3u8 !== targetUrl) {
+              liveFormatFallbackAttemptedRef.current = true;
+              isSwitchingRef.current = true;
+              setTimeout(() => {
+                isSwitchingRef.current = false;
+                loadStreamRef.current?.(altM3u8);
+              }, 250);
+              return;
+            }
+          }
+          setIsBuffering(false);
+          setErrorMsg('Errore durante la lettura del flusso MPEG-TS. Prova a riavviare il canale.');
         });
         return;
       } catch (e) {
@@ -396,9 +470,24 @@ export function usePlayerCore({
   // Main lifecycle when stream changes
   useEffect(() => {
     if (visible && stream) {
+      activeStreamIdRef.current = String(stream.streamId);
       isSwitchingRef.current = false;
       hlsFallbackAttemptedRef.current = false;
+      h264FallbackAttemptedRef.current = false;
       liveFallbackAttemptedRef.current = false;
+      liveFormatFallbackAttemptedRef.current = false;
+      mediaRecoveryAttemptedRef.current = false;
+      pendingSeekRef.current = Number.isFinite(stream.initialSeekTime) && (stream.initialSeekTime || 0) > 0
+        ? Number(stream.initialSeekTime)
+        : null;
+      resumeSeekAppliedRef.current = pendingSeekRef.current === null;
+      lastSaveTimeRef.current = 0;
+      setAudioTracks([]);
+      setSubtitleTracks([]);
+      setQualityLevels([]);
+      setActiveAudioTrack(0);
+      setActiveSubtitleTrack(-1);
+      setActiveQualityLevel(-1);
       setCurrentTime(0);
       setDuration(0);
       setBufferPercent(0);
@@ -407,8 +496,10 @@ export function usePlayerCore({
 
       // Check VOD history for resume
       if (isMovieOrSeries && account?.id) {
+        const requestedStreamId = String(stream.streamId);
         StorageService.getHistory(account.id).then(hist => {
-          const match = hist.find(h => String(h.id) === String(stream.streamId));
+          if (!visible || activeStreamIdRef.current !== requestedStreamId) return;
+          const match = hist.find(h => String(h.id) === requestedStreamId);
           if (match && match.currentTime > 15 && match.currentTime < match.duration - 30) {
             setResumePrompt({ visible: true, time: match.currentTime });
           }
@@ -440,9 +531,14 @@ export function usePlayerCore({
       setFirstFrameRendered(true);
       setIsPlaying(true);
     };
-    const onCanPlay = () => setIsBuffering(false);
+    const onCanPlay = () => {
+      setIsBuffering(false);
+      applyPendingSeek(video);
+    };
+    const onLoadedMetadata = () => applyPendingSeek(video);
     const onLoadedData = () => {
       if (video.readyState >= 2) setFirstFrameRendered(true);
+      applyPendingSeek(video);
     };
     const onTimeUpdate = () => {
       if (video.currentTime > 0) setFirstFrameRendered(true);
@@ -458,6 +554,7 @@ export function usePlayerCore({
     };
     const onDurationChange = () => {
       if (video.duration && isFinite(video.duration)) setDuration(video.duration);
+      applyPendingSeek(video);
     };
     const onProgress = () => {
       if (video.buffered.length > 0 && video.duration > 0) {
@@ -498,12 +595,12 @@ export function usePlayerCore({
               loadStream(fallbackUrl);
             }, 200);
             return;
-          } else if (!/[?&](?:h264|force_h264)=1(?:&|$)/i.test(curUrl) && !hlsFallbackAttemptedRef.current) {
+          } else if (!/[?&](?:h264|force_h264)=1(?:&|$)/i.test(curUrl) && !h264FallbackAttemptedRef.current) {
             // Retry HLS once with forced H.264, preserving existing query parameters.
-            hlsFallbackAttemptedRef.current = true;
+            h264FallbackAttemptedRef.current = true;
             isSwitchingRef.current = true;
             console.log('[PlayerCore] HLS error code', code, 'on movie/series. Retrying with forced H.264 transcode...');
-            const forceH264Url = curUrl + (curUrl.includes('?') ? '&' : '?') + 'h264=1';
+            const forceH264Url = withQueryParam(curUrl, 'h264', '1');
             setTimeout(() => {
               isSwitchingRef.current = false;
               loadStream(forceH264Url);
@@ -521,6 +618,7 @@ export function usePlayerCore({
     video.addEventListener('waiting', onWaiting);
     video.addEventListener('playing', onPlaying);
     video.addEventListener('canplay', onCanPlay);
+    video.addEventListener('loadedmetadata', onLoadedMetadata);
     video.addEventListener('loadeddata', onLoadedData);
     video.addEventListener('timeupdate', onTimeUpdate);
     video.addEventListener('durationchange', onDurationChange);
@@ -534,6 +632,7 @@ export function usePlayerCore({
       video.removeEventListener('waiting', onWaiting);
       video.removeEventListener('playing', onPlaying);
       video.removeEventListener('canplay', onCanPlay);
+      video.removeEventListener('loadedmetadata', onLoadedMetadata);
       video.removeEventListener('loadeddata', onLoadedData);
       video.removeEventListener('timeupdate', onTimeUpdate);
       video.removeEventListener('durationchange', onDurationChange);
@@ -541,7 +640,7 @@ export function usePlayerCore({
       video.removeEventListener('volumechange', onVolumeChange);
       video.removeEventListener('error', onError);
     };
-  }, [stream, isMovieOrSeries, account, isLive, loadStream, saveProgress]);
+  }, [stream, isMovieOrSeries, account, isLive, loadStream, saveProgress, applyPendingSeek]);
 
   // Controls Handlers
   const togglePlayPause = useCallback(() => {
@@ -648,32 +747,67 @@ export function usePlayerCore({
     } catch {}
   }, []);
 
-  const handleSelectAudioTrack = useCallback((idx: number) => {
-    setActiveAudioTrack(idx);
-    if (hlsRef.current && hlsRef.current.audioTracks && hlsRef.current.audioTracks.length > 0) {
-      hlsRef.current.audioTrack = idx;
-    } else {
-      const curSrc = currentStreamUrlRef.current || '';
-      if (curSrc.includes('/api/hls/')) {
-        const curTime = webVideoRef.current?.currentTime || 0;
-        let newSrc = curSrc.replace(/&audio_track=\d+/g, '');
-        newSrc = `${newSrc}&audio_track=${idx}`;
-        loadStream(newSrc);
-        setTimeout(() => {
-          if (webVideoRef.current && curTime > 0) {
-            webVideoRef.current.currentTime = curTime;
-          }
-        }, 300);
-      }
+  const handleSelectAudioTrack = useCallback(async (idx: number) => {
+    const hls = hlsRef.current;
+    if (hls && Array.isArray(hls.audioTracks) && hls.audioTracks.length > 0) {
+      hls.audioTrack = idx;
+      setActiveAudioTrack(idx);
+      setAudioTracks(prev => prev.map(track => ({ ...track, active: track.id === idx })));
+      setTrackModalVisible(false);
+      return;
     }
-    setAudioTracks(prev => prev.map(t => ({ ...t, active: t.id === idx })));
+
+    const currentUrl = currentStreamUrlRef.current || '';
+    const isBackendMaster = currentUrl.includes('/api/hls/master.m3u8');
+    const isBackendMediaPlaylist = /\/api\/hls\/[^/?#]+\/(?:index|playlist)\.m3u8(?:[?#]|$)/i.test(currentUrl);
+    if (isBackendMaster || isBackendMediaPlaylist) {
+      const video = webVideoRef.current;
+      pendingSeekRef.current = video && Number.isFinite(video.currentTime) ? video.currentTime : currentTime;
+      resumeSeekAppliedRef.current = pendingSeekRef.current <= 0;
+      try {
+        let mediaPlaylistUrl = currentUrl;
+        if (isBackendMaster) {
+          // Resolve the generated media playlist. audio_track must be attached
+          // to /{sid}/index.m3u8, because the master endpoint only creates the session.
+          const masterResponse = await fetch(currentUrl, { cache: 'no-store' });
+          if (!masterResponse.ok) throw new Error(`HTTP ${masterResponse.status}`);
+          const masterText = await masterResponse.text();
+          const match = masterText.match(/(?:https?:\/\/[^\s]+)?\/api\/hls\/[^/\s"']+\/(?:index|playlist)\.m3u8/);
+          if (!match) throw new Error('Playlist HLS media non trovata');
+          mediaPlaylistUrl = new URL(match[0], currentUrl).toString();
+        }
+        const nextUrl = withQueryParam(mediaPlaylistUrl, 'audio_track', String(idx));
+        loadStreamRef.current?.(nextUrl);
+        setActiveAudioTrack(idx);
+        setAudioTracks(prev => prev.map(track => ({ ...track, active: track.id === idx })));
+      } catch (error) {
+        console.warn('[PlayerCore] Impossibile cambiare traccia audio:', error);
+        pendingSeekRef.current = null;
+        resumeSeekAppliedRef.current = true;
+        setErrorMsg('Impossibile cambiare la traccia audio. Riprova.');
+      }
+    } else {
+      setActiveAudioTrack(idx);
+      setAudioTracks(prev => prev.map(track => ({ ...track, active: track.id === idx })));
+    }
     setTrackModalVisible(false);
-  }, [loadStream]);
+  }, [currentTime]);
 
   const handleSelectSubtitleTrack = useCallback((idx: number) => {
     setActiveSubtitleTrack(idx);
-    if (hlsRef.current) {
-      hlsRef.current.subtitleTrack = idx;
+    if (hlsRef.current && Array.isArray(hlsRef.current.subtitleTracks)) {
+      if (idx === -1) {
+        hlsRef.current.subtitleTrack = -1;
+      } else if (hlsRef.current.subtitleTracks.length > 0) {
+        const subtitle = hlsRef.current.subtitleTracks.findIndex((track: any, trackIndex: number) =>
+          trackIndex === idx || Number(track.id) === idx
+        );
+        if (subtitle >= 0) hlsRef.current.subtitleTrack = subtitle;
+      }
+    } else if (webVideoRef.current?.textTracks) {
+      Array.from(webVideoRef.current.textTracks).forEach((track, trackIndex) => {
+        track.mode = idx !== -1 && trackIndex === idx ? 'showing' : 'disabled';
+      });
     }
     setSubtitleTracks(prev => prev.map(t => ({ ...t, active: t.id === idx })));
     setTrackModalVisible(false);
@@ -712,7 +846,10 @@ export function usePlayerCore({
   const retry = useCallback(() => {
     if (stream?.streamUrl) {
       hlsFallbackAttemptedRef.current = false;
+      h264FallbackAttemptedRef.current = false;
       liveFallbackAttemptedRef.current = false;
+      liveFormatFallbackAttemptedRef.current = false;
+      mediaRecoveryAttemptedRef.current = false;
       isSwitchingRef.current = false;
       loadStream(stream.streamUrl);
     }

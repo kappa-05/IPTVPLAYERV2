@@ -113,6 +113,18 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
   const [dragSec, setDragSec] = useState<number | null>(null);
   const [hoverSec, setHoverSec] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState<number>(0);
+  const [pendingResumeTime, setPendingResumeTime] = useState<number | null>(null);
+
+  // Apply a resume choice as soon as the media duration is available.
+  useEffect(() => {
+    if (pendingResumeTime === null || duration <= 0) return;
+    seekTo(pendingResumeTime);
+    setPendingResumeTime(null);
+  }, [pendingResumeTime, duration, seekTo]);
+
+  useEffect(() => {
+    setPendingResumeTime(null);
+  }, [stream?.streamId]);
 
   // Auto-hide controls timer
   const resetControlsTimer = useCallback(() => {
@@ -296,6 +308,47 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
     setHoverSec((x / rect.width) * duration);
   };
 
+  // Touch support for the timeline on phones and tablets.
+  const getTouchClientX = (e: any): number | null => {
+    const touch = e?.nativeEvent?.changedTouches?.[0]
+      ?? e?.nativeEvent?.touches?.[0]
+      ?? e?.changedTouches?.[0]
+      ?? e?.touches?.[0];
+    if (typeof touch?.clientX === 'number') return touch.clientX;
+    if (typeof touch?.pageX === 'number') return touch.pageX - (typeof window !== 'undefined' ? window.scrollX : 0);
+    return null;
+  };
+
+  const handleScrubTouchStart = (e: any) => {
+    if (duration <= 0 || !trackRef.current) return;
+    const clientX = getTouchClientX(e);
+    if (clientX === null) return;
+    e.preventDefault?.();
+    const target = getScrubSec(clientX);
+    setIsDragging(true);
+    setDragSec(target);
+    setHoverSec(null);
+  };
+
+  const handleScrubTouchMove = (e: any) => {
+    if (!isDragging || !trackRef.current) return;
+    const clientX = getTouchClientX(e);
+    if (clientX === null) return;
+    e.preventDefault?.();
+    setDragSec(getScrubSec(clientX));
+  };
+
+  const handleScrubTouchEnd = (e: any) => {
+    if (!isDragging || !trackRef.current) return;
+    const clientX = getTouchClientX(e);
+    const finalSec = clientX === null && dragSec !== null
+      ? dragSec
+      : clientX === null ? null : getScrubSec(clientX);
+    setIsDragging(false);
+    setDragSec(null);
+    if (finalSec !== null) seekTo(finalSec);
+  };
+
   // Format time (H:MM:SS or M:SS)
   const formatTime = (secs: number) => {
     if (!isFinite(secs) || isNaN(secs) || secs <= 0) return '0:00';
@@ -309,33 +362,6 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
 
   if (!visible || !stream) return null;
 
-  // Mini player mode
-  if (isMinimized) {
-    return (
-      <View style={styles.miniPlayerContainer}>
-        <video
-          // @ts-ignore
-          ref={webVideoRef}
-          style={{ width: '100%', height: '100%', objectFit: videoFit, backgroundColor: '#000' }}
-          autoPlay
-          playsInline
-        />
-        <View style={styles.miniControls}>
-          <TouchableOpacity style={styles.miniBtn} onPress={togglePlayPause}>
-            <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color="#fff" />
-          </TouchableOpacity>
-          {onToggleMinimize && (
-            <TouchableOpacity style={styles.miniBtn} onPress={onToggleMinimize}>
-              <Ionicons name="expand-outline" size={18} color="#fff" />
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity style={styles.miniBtn} onPress={handleClose}>
-            <Ionicons name="close" size={18} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
 
   const curSec = isDragging && dragSec !== null ? dragSec : currentTime;
   const progressPct = duration > 0 ? Math.min(100, Math.max(0, (curSec / duration) * 100)) : 0;
@@ -346,8 +372,8 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
       nativeID="iptv-universal-player"
       id="iptv-universal-player"
       style={[
-        styles.fullPlayerContainer,
-        Platform.OS === 'web' && !showControls && isPlaying ? ({ cursor: 'none' } as any) : undefined
+        isMinimized ? styles.miniPlayerContainer : styles.fullPlayerContainer,
+        Platform.OS === 'web' && !isMinimized && !showControls && isPlaying ? ({ cursor: 'none' } as any) : undefined
       ]}
       // @ts-ignore
       onMouseMove={resetControlsTimer}
@@ -355,13 +381,15 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
       onWheel={handleWheel}
     >
       {/* ── 1. Initial Loading Screen (Gone forever after 1st frame) ── */}
-      <SeamlessPosterBackdrop
-        posterUri={stream.poster}
-        title={stream.title}
-        loading={isBuffering}
-        statusText="Connessione allo stream..."
-        firstFrameRendered={firstFrameRendered}
-      />
+      {!isMinimized && (
+        <SeamlessPosterBackdrop
+          posterUri={stream.poster}
+          title={stream.title}
+          loading={isBuffering}
+          statusText="Connessione allo stream..."
+          firstFrameRendered={firstFrameRendered}
+        />
+      )}
 
       {/* ── 2. Video Element ── */}
       <video
@@ -371,7 +399,8 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
           width: '100%',
           height: '100%',
           backgroundColor: '#000',
-          objectFit: videoFit
+          objectFit: videoFit,
+          borderRadius: isMinimized ? 12 : 0
         }}
         autoPlay
         playsInline
@@ -379,14 +408,16 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
       />
 
       {/* ── 3. Transparent Video Click Layer ── */}
-      <TouchableOpacity
-        style={styles.videoClickLayer}
-        activeOpacity={1}
-        onPress={handleVideoClick}
-      />
+      {!isMinimized && (
+        <TouchableOpacity
+          style={styles.videoClickLayer}
+          activeOpacity={1}
+          onPress={handleVideoClick}
+        />
+      )}
 
       {/* ── 4. In-Playback Buffering Spinner (Never covers video with full poster) ── */}
-      {isBuffering && firstFrameRendered && (
+      {!isMinimized && isBuffering && firstFrameRendered && (
         <View style={styles.bufferingHud} pointerEvents="none">
           <View style={styles.bufferingHudPill}>
             <ActivityIndicator size="small" color={colors.primary} />
@@ -396,7 +427,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
       )}
 
       {/* ── 5. Aspect Ratio HUD Feedback ── */}
-      {fitFeedback !== null && (
+      {!isMinimized && fitFeedback !== null && (
         <View style={styles.hudBadge} pointerEvents="none">
           <Ionicons name="scan-outline" size={24} color="#fff" />
           <Text style={styles.hudBadgeText}>{fitFeedback}</Text>
@@ -404,7 +435,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
       )}
 
       {/* ── 6. Volume HUD Feedback ── */}
-      {volumeFeedback !== null && (
+      {!isMinimized && volumeFeedback !== null && (
         <View style={styles.hudBadge} pointerEvents="none">
           <Ionicons
             name={volumeFeedback === 0 ? 'volume-mute' : volumeFeedback < 50 ? 'volume-low' : 'volume-high'}
@@ -416,7 +447,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
       )}
 
       {/* ── 7. Muted Autoplay Warning Banner ── */}
-      {showMutedBanner && (
+      {!isMinimized && showMutedBanner && (
         <TouchableOpacity
           style={styles.unmuteBanner}
           activeOpacity={0.85}
@@ -429,7 +460,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
       )}
 
       {/* ── 8. Error Overlay with Retry ── */}
-      {errorMsg && (
+      {!isMinimized && errorMsg && (
         <View style={styles.errorOverlay}>
           <View style={styles.errorCard}>
             <Ionicons name="alert-circle-outline" size={44} color="#ef4444" />
@@ -448,8 +479,55 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
         </View>
       )}
 
+      {isMinimized && (
+        <View style={styles.miniControls}>
+          <TouchableOpacity style={styles.miniBtn} onPress={togglePlayPause} accessibilityLabel={isPlaying ? 'Pausa' : 'Riproduci'}>
+            <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color="#fff" />
+          </TouchableOpacity>
+          {onToggleMinimize && (
+            <TouchableOpacity style={styles.miniBtn} onPress={onToggleMinimize} accessibilityLabel="Espandi player">
+              <Ionicons name="expand-outline" size={18} color="#fff" />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.miniBtn} onPress={handleClose} accessibilityLabel="Chiudi player">
+            <Ionicons name="close" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Resume prompt */}
+      {!isMinimized && resumePrompt?.visible && (
+        <View style={styles.resumeOverlay}>
+          <View style={styles.resumeCard}>
+            <Ionicons name="play-circle-outline" size={34} color={colors.primary} />
+            <Text style={styles.resumeTitle}>Vuoi riprendere la visione?</Text>
+            <Text style={styles.resumeDescription}>Hai lasciato questo contenuto a {formatTime(resumePrompt.time)}.</Text>
+            <View style={styles.resumeActions}>
+              <TouchableOpacity
+                style={styles.resumePrimaryBtn}
+                onPress={() => {
+                  setPendingResumeTime(resumePrompt.time);
+                  setResumePrompt(null);
+                }}
+              >
+                <Text style={styles.resumePrimaryText}>Riprendi</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.resumeSecondaryBtn}
+                onPress={() => {
+                  setPendingResumeTime(0);
+                  setResumePrompt(null);
+                }}
+              >
+                <Text style={styles.resumeSecondaryText}>Dall'inizio</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
       {/* ── 9. Interactive Controls Overlay ── */}
-      {showControls && (
+      {!isMinimized && showControls && (
         <View style={styles.controlsOverlay} pointerEvents="box-none">
           {/* Top Bar */}
           <View style={styles.topBar}>
@@ -521,6 +599,14 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
                 onMouseMove={handleScrubMouseMove}
                 // @ts-ignore
                 onMouseLeave={() => setHoverSec(null)}
+                // @ts-ignore
+                onTouchStart={handleScrubTouchStart}
+                // @ts-ignore
+                onTouchMove={handleScrubTouchMove}
+                // @ts-ignore
+                onTouchEnd={handleScrubTouchEnd}
+                // @ts-ignore
+                onTouchCancel={handleScrubTouchEnd}
               >
                 <View style={styles.scrubberTrack}>
                   <View style={[styles.scrubberBuffer, { width: `${bufferPercent}%` }]} />
@@ -711,6 +797,7 @@ const styles = StyleSheet.create({
     bottom: 24,
     right: 24,
     width: 320,
+    maxWidth: 'calc(100vw - 32px)' as any,
     height: 180,
     backgroundColor: '#000',
     borderRadius: 12,
@@ -729,6 +816,70 @@ const styles = StyleSheet.create({
     right: 8,
     flexDirection: 'row',
     gap: 6
+  },
+  resumeOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 45,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: 'rgba(0,0,0,0.48)'
+  },
+  resumeCard: {
+    width: '100%',
+    maxWidth: 360,
+    alignItems: 'center',
+    padding: 24,
+    borderRadius: 16,
+    backgroundColor: 'rgba(15, 23, 42, 0.97)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)'
+  },
+  resumeTitle: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '700',
+    marginTop: 10,
+    textAlign: 'center'
+  },
+  resumeDescription: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    marginTop: 7,
+    textAlign: 'center'
+  },
+  resumeActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 20
+  },
+  resumePrimaryBtn: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 9
+  },
+  resumePrimaryText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700'
+  },
+  resumeSecondaryBtn: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 9
+  },
+  resumeSecondaryText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600'
   },
   miniBtn: {
     width: 28,
@@ -1001,7 +1152,8 @@ const styles = StyleSheet.create({
   } as any,
   scrubberArea: {
     paddingVertical: 10,
-    cursor: 'pointer'
+    cursor: 'pointer',
+    touchAction: 'none'
   } as any,
   scrubberTrack: {
     height: 5,
