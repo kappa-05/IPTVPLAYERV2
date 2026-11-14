@@ -565,9 +565,8 @@ class HLSStreamManager:
                     "-reconnect_delay_max", "5",
                     "-probesize", "2097152",
                     "-analyzeduration", "5000000",
-                    # Generate missing presentation timestamps at the demuxer.  The
-                    # muxer then applies one common zero-offset to both streams
-                    # below, rather than relying on an audio-only correction.
+                    # Generate missing presentation timestamps before the streams
+                    # enter the common VOD timeline.
                     "-fflags", "+genpts+discardcorrupt",
                     "-user_agent", "IPTVSmartersPlayer",
                     "-headers", "Accept: */*\r\n",
@@ -587,34 +586,40 @@ class HLSStreamManager:
                 "-map", f"0:a:{target_audio_track}?" if target_audio_track >= 0 else "0:a?",
             ])
 
-            # Video handling: if already H.264, direct stream copy is 100% browser-safe and instant.
-            # If HEVC / 4K / other codec, hardware-transcode to 8-bit H.264 at 1080p for rock-solid stability.
-            need_video_transcode = (force_h264 or is_hevc) and (video_codec not in ('h264', 'avc'))
+            # VOD HLS is consumed by AVPlayer as independent fMP4 fragments.
+            # Copying H.264 while rebuilding AAC leaves the two streams with
+            # different source clocks (and can retain B-frame DTS/PTS offsets),
+            # which causes persistent A/V drift after playback starts or seeks
+            # on iPhone.  Always encode both streams into one fresh timeline.
+            need_video_transcode = True
             if need_video_transcode:
                 if getattr(self, 'has_nvenc', False):
                     cmd.extend([
                         "-c:v", "h264_nvenc",
-                        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+                        "-vf", "setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
                         "-pix_fmt", "yuv420p",
                         "-preset", "p1",
                         "-b:v", "6000k",
                         "-maxrate", "8000k",
                         "-bufsize", "12000k",
-                        "-g", "48",
-                        "-keyint_min", "48"
+                        "-g", "180",
+                        "-keyint_min", "1",
+                        "-forced-idr", "1",
+                        "-force_key_frames", "expr:gte(t,n_forced*6)"
                     ])
                 else:
                     cmd.extend([
                         "-c:v", "libx264",
-                        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+                        "-vf", "setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
                         "-pix_fmt", "yuv420p",
                         "-preset", "ultrafast",
                         "-tune", "zerolatency",
                         "-threads", "0",
                         "-crf", "22",
-                        "-g", "48",
-                        "-keyint_min", "48",
-                        "-sc_threshold", "0"
+                        "-g", "180",
+                        "-keyint_min", "1",
+                        "-sc_threshold", "0",
+                        "-force_key_frames", "expr:gte(t,n_forced*6)"
                     ])
             else:
                 cmd.extend(["-c:v", "copy"])
@@ -624,12 +629,10 @@ class HLSStreamManager:
                 "-b:a", "192k",
                 "-ac", "2",
                 "-ar", "48000",
-                # Do not force just the audio clock to start at zero: copied video
-                # retains its own initial PTS, which makes AVPlayer expose a
-                # constant A/V offset.  aresample still absorbs small timestamp
-                # discontinuities; avoid_negative_ts normalizes the final muxed
-                # timeline for audio and video together.
-                "-af", "aresample=async=1000,volume=1.25",
+                # Reset the newly decoded audio clock together with the newly
+                # encoded video clock.  This is deliberately done to both
+                # streams, unlike the previous audio-only first_pts workaround.
+                "-af", "aresample=async=1000,asetpts=PTS-STARTPTS,volume=1.25",
                 "-max_muxing_queue_size", "2048",
                 "-avoid_negative_ts", "make_zero",
                 "-f", "hls",
