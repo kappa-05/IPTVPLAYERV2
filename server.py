@@ -565,7 +565,10 @@ class HLSStreamManager:
                     "-reconnect_delay_max", "5",
                     "-probesize", "2097152",
                     "-analyzeduration", "5000000",
-                    "-fflags", "+discardcorrupt",
+                    # Generate missing presentation timestamps at the demuxer.  The
+                    # muxer then applies one common zero-offset to both streams
+                    # below, rather than relying on an audio-only correction.
+                    "-fflags", "+genpts+discardcorrupt",
                     "-user_agent", "IPTVSmartersPlayer",
                     "-headers", "Accept: */*\r\n",
                 ])
@@ -621,6 +624,11 @@ class HLSStreamManager:
                 "-b:a", "192k",
                 "-ac", "2",
                 "-ar", "48000",
+                # Do not force just the audio clock to start at zero: copied video
+                # retains its own initial PTS, which makes AVPlayer expose a
+                # constant A/V offset.  aresample still absorbs small timestamp
+                # discontinuities; avoid_negative_ts normalizes the final muxed
+                # timeline for audio and video together.
                 "-af", "aresample=async=1000,volume=1.25",
                 "-max_muxing_queue_size", "2048",
                 "-avoid_negative_ts", "make_zero",
