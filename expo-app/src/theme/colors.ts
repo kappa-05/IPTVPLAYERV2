@@ -12,12 +12,12 @@ export const colors = {
   // Quiet borders and crisp monochrome focus states.
   border: '#292929',
   borderHighlight: '#414141',
-  borderActive: '#f2f2f2',
+  borderActive: '#38BDF8',
 
   // Apple-like neutral accent.
-  primary: '#f2f2f2',
-  primaryHover: '#ffffff',
-  primaryMuted: 'rgba(255, 255, 255, 0.12)',
+  primary: '#087E8B',
+  primaryHover: '#0EA5B7',
+  primaryMuted: 'rgba(8, 126, 139, 0.18)',
 
   secondary: '#858585',
 

@@ -143,7 +143,6 @@ export class XtreamAPI {
           'Accept': 'application/json'
         }
       });
-      clearTimeout(timer);
 
       if (!response.ok) {
         let errorDetail = `Errore HTTP ${response.status}`;
@@ -157,12 +156,14 @@ export class XtreamAPI {
 
       const data = await response.json();
       return data as T;
+
     } catch (err: any) {
-      clearTimeout(timer);
       if (err.name === 'AbortError') {
         throw new Error(`Timeout richiesta (${timeoutMs / 1000}s). Il server non risponde.`);
       }
       throw err;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

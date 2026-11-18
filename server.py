@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 IPTV Player V2 - Local Dev Server & CORS Proxy
 Zero-dependency Python server that serves the web application,
@@ -27,7 +27,9 @@ import math
 import tempfile
 import atexit
 import hashlib
+import ipaddress
 import itertools
+import secrets
 
 # Unverified SSL context to prevent certificate validation errors on IPTV servers
 SSL_UNVERIFIED_CTX = ssl._create_unverified_context()
@@ -56,6 +58,53 @@ except Exception:
 API_CACHE = {}
 API_CACHE_LOCK = threading.Lock()
 API_CACHE_TTL = 180
+
+
+def _validate_external_http_url(url):
+    """Best-effort SSRF guard: only HTTP(S) URLs resolving to globally routable IPs."""
+    try:
+        if not isinstance(url, str) or not url or len(url) > 8192:
+            return False, "URL mancante o troppo lungo"
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in url):
+            return False, "Caratteri di controllo nell'URL"
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme.lower() not in ("http", "https"):
+            return False, "Schema non consentito"
+        if not parsed.hostname or parsed.username is not None or parsed.password is not None:
+            return False, "Host non valido o credenziali nell'URL"
+        host = parsed.hostname.rstrip(".").lower()
+        if not host or host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
+            return False, "Nome host locale non consentito"
+        try:
+            port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+        except ValueError:
+            return False, "Porta non valida"
+        if not (1 <= port <= 65535):
+            return False, "Porta non valida"
+        try:
+            addresses = [ipaddress.ip_address(host)]
+        except ValueError:
+            try:
+                infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            except OSError:
+                return False, "Risoluzione DNS non riuscita"
+            addresses = []
+            for info in infos:
+                try:
+                    addresses.append(ipaddress.ip_address(info[4][0].split("%", 1)[0]))
+                except ValueError:
+                    return False, "Risposta DNS non valida"
+        if not addresses:
+            return False, "Nessun indirizzo DNS"
+        for address in addresses:
+            if getattr(address, "ipv4_mapped", None) is not None:
+                address = address.ipv4_mapped
+            if not address.is_global:
+                return False, "Destinazione IP non pubblica"
+        return True, "ok"
+    except Exception:
+        return False, "URL non valido"
+
 
 def find_ffmpeg():
     """Detect FFmpeg executable in PATH or WinGet installation directory."""
@@ -164,6 +213,7 @@ class HLSStreamManager:
         # Per-session locks serialize FFmpeg worker restarts during concurrent HLS seeks.
         self.seg_locks = {}
         self.lock = threading.Lock()
+        self.worker_idle_timeout = 90
         self.has_nvenc = False
         ff = find_ffmpeg()
         if ff:
@@ -191,15 +241,66 @@ class HLSStreamManager:
 
     def _cleanup_loop(self):
         while True:
-            time.sleep(30)
-            now = time.time()
+            time.sleep(15)
+
             with self.lock:
-                to_delete = []
-                for sid, data in self.sessions.items():
-                    if now - data.get('last_seen', now) > 600:
-                        to_delete.append(sid)
-                for sid in to_delete:
-                    self._kill_session(sid)
+                session_ids = list(self.sessions.keys())
+
+            for sid in session_ids:
+                session_lock = self._get_session_lock(sid)
+
+                # Serialize idle cleanup with worker starts and seek restarts.
+                with session_lock:
+                    idle_proc = None
+                    idle_log = None
+
+                    with self.lock:
+                        data = self.sessions.get(sid)
+                        if not data:
+                            continue
+
+                        now = time.time()
+
+                        # Preserve the existing 10-minute session cleanup.
+                        if now - data.get('last_seen', now) > 600:
+                            self._kill_session(sid)
+                            continue
+
+                        proc = data.get('proc')
+                        last_request = data.get(
+                            'last_request_at', data.get('last_seen', now)
+                        )
+
+                        if (
+                            proc is not None
+                            and proc.poll() is None
+                            and now - last_request > self.worker_idle_timeout
+                        ):
+                            # Detach the worker before stopping it so that a
+                            # subsequent request can safely start a new one.
+                            data['proc'] = None
+                            idle_proc = proc
+                            idle_log = data.get('log_file')
+                            data['log_file'] = None
+
+                    if idle_proc is not None:
+                        try:
+                            idle_proc.terminate()
+                            idle_proc.wait(timeout=2)
+                        except Exception:
+                            try:
+                                idle_proc.kill()
+                                idle_proc.wait(timeout=2)
+                            except Exception:
+                                pass
+
+                        if idle_log:
+                            try:
+                                idle_log.close()
+                            except Exception:
+                                pass
+
+                        print(f'[HLS] Worker inattivo arrestato: {sid}')
 
     def _kill_session(self, sid):
         data = self.sessions.pop(sid, None)
@@ -226,22 +327,26 @@ class HLSStreamManager:
 
     def probe_stream(self, target_url, hint_duration=0):
         """
-        Detects duration, HEVC/H.264 codec, all audio tracks, and all subtitle tracks.
-        Returns (duration, is_hevc, audio_tracks, subtitle_tracks, video_codec).
+        Detect duration, video codec, resolution, profile, pixel format,
+        frame rate, HDR metadata, audio tracks and subtitle tracks.
+        Returns the original five fields plus a video_info dictionary.
         """
         cached = self.stream_info_cache.get(target_url)
         if cached:
             return cached
 
-        # Fast detection from URL keywords (common in IPTV 4K / UHD streams)
         url_lower = target_url.lower()
-        is_hevc_url = any(k in url_lower for k in ('hevc', 'h265', '4k', 'uhd', '2160p', 'hdr'))
+        is_hevc_url = any(
+            k in url_lower
+            for k in ('hevc', 'h265', '4k', 'uhd', '2160p', 'hdr')
+        )
 
         duration = float(hint_duration) if hint_duration and hint_duration > 0 else 7200.0
         is_hevc = is_hevc_url
         audio_tracks = []
         subtitle_tracks = []
         video_codec = ''
+        video_info = {}
 
         ffprobe_path = find_ffprobe()
         if ffprobe_path:
@@ -253,63 +358,128 @@ class HLSStreamManager:
                     "-headers", "Accept: */*\r\n",
                     "-probesize", "2097152",
                     "-analyzeduration", "4000000",
-                    "-show_entries", "format=duration:stream=index,codec_name,codec_type:stream_tags=language,title,handler_name",
+                    "-show_entries",
+                    "format=duration,bit_rate:"
+                    "stream=index,codec_name,codec_type,width,height,sample_rate,channels,"
+                    "profile,pix_fmt,level,bit_rate,avg_frame_rate,"
+                    "r_frame_rate,codec_tag_string,color_space,"
+                    "color_transfer,color_primaries,sample_aspect_ratio,"
+                    "display_aspect_ratio:"
+                    "stream_tags=language,title,handler_name",
                     "-of", "json",
                     target_url
                 ]
+
                 clean_env = os.environ.copy()
                 clean_env.pop('http_proxy', None)
                 clean_env.pop('https_proxy', None)
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=8.0, env=clean_env)
+
+                res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=8.0,
+                    env=clean_env
+                )
+
                 if res.stdout:
                     info = json.loads(res.stdout)
+
                     dur_str = info.get('format', {}).get('duration')
                     if dur_str:
                         d = float(dur_str)
                         if d > 0:
                             duration = d
+
                     for s in info.get('streams', []):
                         ctype = s.get('codec_type')
                         tags = s.get('tags') or {}
                         lang = tags.get('language', '')
                         title = tags.get('title') or tags.get('handler_name')
+
                         if ctype == 'video':
-                            codec = s.get('codec_name', '').lower()
+                            codec = (s.get('codec_name') or '').lower()
                             video_codec = codec
+
+                            width = int(s.get('width') or 0)
+                            height = int(s.get('height') or 0)
+                            color_transfer = s.get('color_transfer') or ''
+
+                            video_info = {
+                                'width': width,
+                                'height': height,
+                                'profile': s.get('profile') or '',
+                                'pix_fmt': s.get('pix_fmt') or '',
+                                'level': s.get('level'),
+                                'bit_rate': s.get('bit_rate'),
+                                'avg_frame_rate': s.get('avg_frame_rate') or '',
+                                'r_frame_rate': s.get('r_frame_rate') or '',
+                                'codec_tag': s.get('codec_tag_string') or '',
+                                'color_space': s.get('color_space') or '',
+                                'color_transfer': color_transfer,
+                                'color_primaries': s.get('color_primaries') or '',
+                                'sample_aspect_ratio': s.get('sample_aspect_ratio') or '',
+                                'display_aspect_ratio': s.get('display_aspect_ratio') or '',
+                                'is_4k': width >= 3840 or height >= 2160,
+                                'is_hdr': color_transfer.lower() in (
+                                    'smpte2084', 'arib-std-b67'
+                                )
+                            }
+
                             if codec in ('hevc', 'h265', 'vp9', 'av1', 'mpeg2video', 'vc1'):
                                 is_hevc = True
                             elif codec in ('h264', 'avc'):
                                 is_hevc = False
+
                         elif ctype == 'audio':
                             audio_tracks.append({
                                 'index': s.get('index'),
                                 'stream_index': len(audio_tracks),
                                 'codec': s.get('codec_name', ''),
+                                'sample_rate': s.get('sample_rate'),
+                                'channels': s.get('channels'),
                                 'language': lang,
-                                'title': title or (f"Audio {lang.upper()}" if lang else f"Traccia {len(audio_tracks) + 1}")
+                                'title': title or (
+                                    f"Audio {lang.upper()}"
+                                    if lang else f"Traccia {len(audio_tracks) + 1}"
+                                )
                             })
+
                         elif ctype == 'subtitle':
                             subtitle_tracks.append({
                                 'index': s.get('index'),
                                 'stream_index': len(subtitle_tracks),
                                 'codec': s.get('codec_name', ''),
                                 'language': lang,
-                                'title': title or (f"Sottotitolo {lang.upper()}" if lang else f"Sottotitolo {len(subtitle_tracks) + 1}")
+                                'title': title or (
+                                    f"Sottotitolo {lang.upper()}"
+                                    if lang else f"Sottotitolo {len(subtitle_tracks) + 1}"
+                                )
                             })
-            except Exception:
-                pass
 
-        res_tuple = (duration, is_hevc, audio_tracks, subtitle_tracks, video_codec)
+            except Exception as e:
+                print(f"[FFprobe] Analisi stream non completata: {e}")
+
+        res_tuple = (
+            duration,
+            is_hevc,
+            audio_tracks,
+            subtitle_tracks,
+            video_codec,
+            video_info
+        )
+
         self.stream_info_cache[target_url] = res_tuple
         self.duration_cache[target_url] = duration
+
         return res_tuple
 
     def get_duration(self, target_url, hint_duration=0):
         dur = self.probe_stream(target_url, hint_duration)[0]
         return dur
 
-    def get_vod_master_m3u8(self, target_url, duration, seg_duration=6.0, is_hevc=False, audio_tracks=None, subtitle_tracks=None, force_h264=False, video_codec=''):
-        sid = hashlib.md5(target_url.encode('utf-8')).hexdigest()[:12]
+    def get_vod_master_m3u8(self, target_url, duration, seg_duration=6.0, is_hevc=False, audio_tracks=None, subtitle_tracks=None, force_h264=False, video_codec='', owner_id=None, video_info=None):
+        sid = secrets.token_urlsafe(18)
         sdir = os.path.join(self.temp_root, sid)
         os.makedirs(sdir, exist_ok=True)
 
@@ -321,27 +491,32 @@ class HLSStreamManager:
             if sid not in self.sessions:
                 self.sessions[sid] = {
                     'target_url': target_url,
+                    'owner_id': owner_id,
                     'duration': duration,
                     'seg_duration': seg_duration,
                     'num_segments': num_segments,
                     'dir': sdir,
                     'last_seen': time.time(),
+                    'last_request_at': time.time(),
                     'proc': None,
                     'current_start_seg': 0,
                     'current_audio_track': 0,
                     'is_hevc': is_hevc,
                     'force_h264': force_h264,
                     'video_codec': video_codec,
+                    'video_info': video_info or {},
                     'audio_tracks': audio_tracks,
                     'subtitle_tracks': subtitle_tracks
                 }
             else:
                 self.sessions[sid]['last_seen'] = time.time()
+                self.sessions[sid]['last_request_at'] = time.time()
                 self.sessions[sid]['duration'] = duration
                 self.sessions[sid]['is_hevc'] = is_hevc
                 self.sessions[sid]['force_h264'] = force_h264
                 if video_codec:
                     self.sessions[sid]['video_codec'] = video_codec
+                self.sessions[sid]['video_info'] = video_info or {}
                 self.sessions[sid]['audio_tracks'] = audio_tracks
                 self.sessions[sid]['subtitle_tracks'] = subtitle_tracks
 
@@ -405,25 +580,9 @@ class HLSStreamManager:
         with self.lock:
             sess = self.sessions.get(sid)
             if not sess:
-                sdir = os.path.join(self.temp_root, sid)
-                if not os.path.isdir(sdir):
-                    return None
-                sess = {
-                    'dir': sdir,
-                    'last_seen': time.time(),
-                    'target_url': None,
-                    'duration': 7200.0,
-                    'seg_duration': 6.0,
-                    'num_segments': 1200,
-                    'proc': None,
-                    'current_start_seg': 0,
-                    'current_audio_track': audio_track,
-                    'is_hevc': False,
-                    'audio_tracks': [],
-                    'subtitle_tracks': []
-                }
-                self.sessions[sid] = sess
+                return None
             sess['last_seen'] = time.time()
+            sess['last_request_at'] = time.time()
             duration = sess.get('duration', 7200.0)
             seg_duration = sess.get('seg_duration', 6.0)
             num_segments = sess.get('num_segments', max(1, int(math.ceil(duration / seg_duration))))
@@ -473,6 +632,7 @@ class HLSStreamManager:
             if not sess:
                 return None
             sess['last_seen'] = time.time()
+            sess['last_request_at'] = time.time()
             duration = sess.get('duration', 7200.0)
             target_url = sess.get('target_url')
 
@@ -667,22 +827,9 @@ class HLSStreamManager:
         with self.lock:
             sess = self.sessions.get(sid)
             if not sess:
-                sdir = os.path.join(self.temp_root, sid)
-                if not os.path.isdir(sdir):
-                    return None
-                sess = {
-                    'dir': sdir,
-                    'last_seen': time.time(),
-                    'target_url': None,
-                    'duration': 7200.0,
-                    'seg_duration': 6.0,
-                    'proc': None,
-                    'current_start_seg': 0,
-                    'current_audio_track': audio_track,
-                    'is_hevc': False
-                }
-                self.sessions[sid] = sess
+                return None
             sess['last_seen'] = time.time()
+            sess['last_request_at'] = time.time()
             target_url = sess.get('target_url')
             seg_duration = sess.get('seg_duration', 6.0)
             variant_key = self._get_variant_key(sess, audio_track)
@@ -766,7 +913,12 @@ class HLSStreamManager:
                     return seg_path
                 time.sleep(0.1)
                 with self.lock:
-                    proc = sess.get('proc')
+                    current_sess = self.sessions.get(sid)
+                    if current_sess is not None:
+                        current_sess['last_request_at'] = time.time()
+                        proc = current_sess.get('proc')
+                    else:
+                        proc = None
                     worker_alive = proc is not None and proc.poll() is None
                 if not worker_alive:
                     break
@@ -837,6 +989,20 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             return
         super().do_HEAD()
 
+
+    def _deny_unsafe_target(self, target_url, is_head=False):
+        allowed, reason = _validate_external_http_url(target_url)
+        if allowed:
+            return False
+        body = ('{"error":"Destinazione non consentita","detail":"%s"}' % reason).encode('utf-8')
+        self.send_response(403)
+        self.end_cors_headers()
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        if not is_head:
+            self.wfile.write(body)
+        return True
+
     def handle_proxy(self, is_head=False):
         # Extract target_url safely from self.path without losing query parameters after '&'
         prefix = '/api/proxy?url='
@@ -866,6 +1032,9 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 target_url = urllib.parse.unquote(m.group(1))
             else:
                 break
+
+        if self._deny_unsafe_target(target_url, is_head=is_head):
+            return
 
         # Detect whether this is an API call or a media stream
         lower_url = target_url.lower()
@@ -1323,6 +1492,9 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         if target_url.startswith(('http%3A', 'https%3A')) or '%2F' in target_url:
             target_url = urllib.parse.unquote(target_url)
 
+        if self._deny_unsafe_target(target_url, is_head=is_head):
+            return
+
         target_parts = urllib.parse.urlparse(target_url)
         if target_parts.scheme not in ('http', 'https') or not target_parts.netloc:
             self.send_response(400)
@@ -1477,6 +1649,9 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
 
         if target_url.startswith('http%3A') or target_url.startswith('https%3A') or '%2F' in target_url:
             target_url = urllib.parse.unquote(target_url)
+
+        if self._deny_unsafe_target(target_url, is_head=is_head):
+            return
 
         start_seconds = 0.0
         if ss_val:
@@ -1664,12 +1839,16 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         if target_url.startswith(('http%3A', 'https%3A')) or '%2F' in target_url:
             target_url = urllib.parse.unquote(target_url)
 
-        dur, is_hevc, audio_tracks, subtitle_tracks, video_codec = HLS_STREAM_MGR.probe_stream(target_url)
+        if self._deny_unsafe_target(target_url):
+            return
+
+        dur, is_hevc, audio_tracks, subtitle_tracks, video_codec, video_info = HLS_STREAM_MGR.probe_stream(target_url)
 
         body = json.dumps({
             "duration": dur,
             "is_hevc": is_hevc,
             "video_codec": video_codec,
+            "video_info": video_info,
             "audio_tracks": audio_tracks,
             "subtitle_tracks": subtitle_tracks
         }).encode('utf-8')
@@ -1696,6 +1875,9 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
 
         if target_url.startswith(('http%3A', 'https%3A')) or '%2F' in target_url:
             target_url = urllib.parse.unquote(target_url)
+
+        if self._deny_unsafe_target(target_url):
+            return
 
         ffmpeg_path = find_ffmpeg()
         if not ffmpeg_path:
@@ -1770,6 +1952,17 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
 
+        if path == '/':
+            print(
+                f"[SAFARI DEBUG] GET / | "
+                f"UA={self.headers.get('User-Agent', '')} | "
+                f"Referer={self.headers.get('Referer', '')} | "
+                f"Accept={self.headers.get('Accept', '')} | "
+                f"X-Forwarded-For={self.headers.get('X-Forwarded-For', '')} | "
+                f"X-Requested-With={self.headers.get('X-Requested-With', '')}",
+                flush=True
+            )
+
         # 0. Real-time HLS Remuxer for VOD & Series: /api/hls/master.m3u8?url=<TARGET_URL>&duration=<SECS>
         if path == '/api/hls/master.m3u8':
             force_h264_req = (
@@ -1789,6 +1982,9 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
             if target_url:
                 if target_url.startswith(('http%3A', 'https%3A')) or '%2F' in target_url:
                     target_url = urllib.parse.unquote(target_url)
+
+                if self._deny_unsafe_target(target_url):
+                    return
 
                 if '.m3u8' in target_url.lower():
                     self.send_response(302)
@@ -1810,7 +2006,8 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
                 sid, m3u8_bytes = HLS_STREAM_MGR.get_vod_master_m3u8(
                     target_url, duration, seg_duration=6.0, is_hevc=is_hevc,
                     audio_tracks=audio_tracks, subtitle_tracks=subtitle_tracks,
-                    force_h264=force_h264_req, video_codec=v_codec
+                    force_h264=force_h264_req, video_codec=v_codec,
+                    video_info=dur_res[5] if len(dur_res) > 5 else {}
                 )
 
                 self.send_response(200)
@@ -1995,6 +2192,22 @@ class IPTVRequestHandler(SimpleHTTPRequestHandler):
 
         # Default: Serve static files from /public or /dist
         super().do_GET()
+
+
+
+def _safe_request_log(self, fmt, *args):
+    if args and isinstance(args[0], str):
+        requestline = args[0]
+        try:
+            method, target, version = requestline.split(' ', 2)
+            parsed_target = urllib.parse.urlsplit(target)
+            safe_target = parsed_target.path + ('?[query-redacted]' if parsed_target.query else '')
+            args = (f'{method} {safe_target} {version}',) + tuple(args[1:])
+        except Exception:
+            args = ('[request-redacted]',) + tuple(args[1:])
+    return SimpleHTTPRequestHandler.log_message(self, fmt, *args)
+
+IPTVRequestHandler.log_message = _safe_request_log
 
 
 def get_local_ip():

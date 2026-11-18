@@ -18,3 +18,10 @@ state/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local authentication database and backups
+iptv_auth.sqlite3
+backups/
+*.backup
+server.py.before_safari_debug
+server.py.backup-*

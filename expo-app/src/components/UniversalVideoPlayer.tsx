@@ -565,7 +565,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
                 </TouchableOpacity>
               )}
 
-              {onToggleMinimize && (
+              {onToggleMinimize && !isFullscreen && (
                 <TouchableOpacity style={styles.iconBtn} onPress={onToggleMinimize} accessibilityLabel="Mini-player">
                   <Ionicons name="contract-outline" size={18} color="#fff" />
                 </TouchableOpacity>

@@ -26,6 +26,10 @@
       "ios",
       "android",
       "web"
+    ],
+    "plugins": [
+      "expo-status-bar",
+      "expo-font"
     ]
   }
 }

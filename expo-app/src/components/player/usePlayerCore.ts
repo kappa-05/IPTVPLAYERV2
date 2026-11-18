@@ -749,71 +749,68 @@ export function usePlayerCore({
       webkitExitFullscreen?: () => void;
       webkitDisplayingFullscreen?: boolean;
     }) | null;
-    const container = document.getElementById('iptv-universal-player') || document.documentElement;
-    const doc = document as any;
+
+    const container = document.getElementById('iptv-universal-player') as (HTMLElement & {
+      webkitRequestFullscreen?: () => void;
+    }) | null;
+
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitIsFullScreen?: boolean;
+      webkitExitFullscreen?: () => void;
+    };
+
     const isNativeVideoFullscreen = Boolean(video?.webkitDisplayingFullscreen);
-    const isDocumentFullscreen = Boolean(document.fullscreenElement || doc.webkitFullscreenElement || doc.webkitIsFullScreen);
-    const isFullscreenNow = isNativeVideoFullscreen || isDocumentFullscreen;
+    const isDocumentFullscreen = Boolean(
+      document.fullscreenElement ||
+      doc.webkitFullscreenElement ||
+      doc.webkitIsFullScreen
+    );
 
-    if (isFullscreenNow) {
-      if (isNativeVideoFullscreen && typeof video?.webkitExitFullscreen === 'function') {
-        video.webkitExitFullscreen();
-      } else if (document.exitFullscreen) {
-        document.exitFullscreen().catch(() => {});
-      } else if (typeof doc.webkitExitFullscreen === 'function') {
-        doc.webkitExitFullscreen();
-      } else if (typeof video?.webkitExitFullscreen === 'function') {
-        video.webkitExitFullscreen();
+    if (isNativeVideoFullscreen) {
+      video?.webkitExitFullscreen?.();
+      return;
+    }
+
+    if (isDocumentFullscreen) {
+      if (document.exitFullscreen) {
+        void document.exitFullscreen().catch(() => {});
+      } else {
+        doc.webkitExitFullscreen?.();
       }
       return;
     }
 
-    if (!video) {
-      if (typeof container.requestFullscreen === 'function') {
-        container.requestFullscreen().catch(() => {});
-      }
-      return;
-    }
+    if (!container) return;
 
-    // iPhone/iPad Safari exposes a dedicated native fullscreen API for video.
     const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-    const isIOS = /iPhone|iPad|iPod/i.test(userAgent) ||
-      (/Macintosh/i.test(userAgent) && typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1);
+    const isIOS =
+      /iPhone|iPad|iPod/i.test(userAgent) ||
+      (/Macintosh/i.test(userAgent) &&
+        typeof navigator !== 'undefined' &&
+        navigator.maxTouchPoints > 1);
 
-    if (isIOS && typeof video.webkitEnterFullscreen === 'function') {
+    if (isIOS && video?.webkitEnterFullscreen) {
       video.controls = true;
       try {
         video.webkitEnterFullscreen();
         setIsFullscreen(true);
       } catch {
         video.controls = false;
-        if (typeof container.requestFullscreen === 'function') {
-          container.requestFullscreen().catch(() => {});
-        }
       }
       return;
     }
 
-    // Android browsers can fullscreen the video element itself and expose native controls.
-    if (typeof video.requestFullscreen === 'function') {
-      video.controls = true;
-      video.requestFullscreen().then(() => {
-        setIsFullscreen(true);
-      }).catch(() => {
-        video.controls = false;
-        if (typeof container.requestFullscreen === 'function') {
-          container.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
-        }
-      });
-      return;
+    if (video) {
+      video.controls = false;
     }
 
-    // Fallback for browsers that only support fullscreen on the player container.
-    video.controls = false;
     if (typeof container.requestFullscreen === 'function') {
-      container.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
-    } else if (typeof (container as any).webkitRequestFullscreen === 'function') {
-      (container as any).webkitRequestFullscreen();
+      void container.requestFullscreen()
+        .then(() => setIsFullscreen(true))
+        .catch(() => {});
+    } else if (typeof container.webkitRequestFullscreen === 'function') {
+      container.webkitRequestFullscreen();
       setIsFullscreen(true);
     }
   }, []);

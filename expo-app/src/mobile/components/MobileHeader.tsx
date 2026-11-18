@@ -153,7 +153,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
       )}
 
       {/* Centered Expanded Category Bar */}
-      {activeTab !== 'favorites' && activeTab !== 'epg' && categories.length > 0 && (
+      {activeTab !== 'home' && activeTab !== 'favorites' && activeTab !== 'epg' && categories.length > 0 && (
         <View style={styles.categoryBar}>
           {/* Previous Category Stepper */}
           <TouchableOpacity

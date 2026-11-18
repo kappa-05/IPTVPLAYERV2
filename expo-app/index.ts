@@ -48,7 +48,7 @@ if (Platform.OS === 'web' && typeof document !== 'undefined') {
   });
 
   // Register Service Worker for PWA
-  if (typeof window !== 'undefined' && 'serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('/sw.js').then((reg) => {
         console.log('[PWA] Service Worker registrato con successo (scope: ' + reg.scope + ')');
