@@ -41,7 +41,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     <View style={styles.heading}>
       <Text style={styles.eyebrow}>PERSONALIZZAZIONE</Text>
       <Text style={styles.title}>Impostazioni</Text>
-      <Text style={styles.subtitle}>Gestisci l’aspetto e le preferenze di IPTV Player.</Text>
+      <Text style={styles.subtitle}>Gestisci l’aspetto e le preferenze di Streamix.</Text>
     </View>
 
     <View style={styles.section}>
@@ -122,13 +122,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       {onOpenInstallPwa && (
         <TouchableOpacity style={styles.actionButton} onPress={onOpenInstallPwa} activeOpacity={0.75}>
           <Ionicons name="download-outline" size={18} color={colors.textPrimary} />
-          <Text style={styles.actionText}>Installa IPTV Player</Text>
+          <Text style={styles.actionText}>Installa Streamix</Text>
           <Ionicons name="chevron-forward" size={17} color={colors.textMuted} />
         </TouchableOpacity>
       )}
     </View>
 
-    <Text style={styles.footer}>IPTV Player V2 · Impostazioni salvate localmente su questo dispositivo</Text>
+    <Text style={styles.footer}>Streamix · Impostazioni salvate localmente su questo dispositivo</Text>
   </ScrollView>
 );
 

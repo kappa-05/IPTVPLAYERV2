@@ -1,6 +1,6 @@
 {
-  "name": "IPTV Player V2",
-  "short_name": "IPTV Player",
+  "name": "Streamix",
+  "short_name": "Streamix",
   "start_url": "/",
   "id": "/",
   "display": "standalone",

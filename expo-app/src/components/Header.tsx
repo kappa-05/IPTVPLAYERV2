@@ -48,10 +48,10 @@ export const Header: React.FC<HeaderProps> = ({
             source={require('../../assets/iptv-player-logo.png')}
             style={styles.logoImage}
             resizeMode="contain"
-            accessibilityLabel="IPTV Player"
+            accessibilityLabel="Streamix"
           />
           <Text style={styles.brandTitle}>
-            IPTV <Text style={styles.brandTitleAccent}>PLAYER</Text>
+            Strea<Text style={styles.brandTitleAccent}>mix</Text>
           </Text>
         </View>
 

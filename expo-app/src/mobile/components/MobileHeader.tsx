@@ -49,7 +49,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
       case 'vod': return 'Film & Cinema';
       case 'series': return 'Serie TV';
       case 'favorites': return 'Preferiti';
-      default: return 'IPTV Player';
+      default: return 'Streamix';
     }
   };
 
@@ -81,11 +81,11 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
             source={require('../../../assets/iptv-player-logo.png')}
             style={styles.logoImage}
             resizeMode="contain"
-            accessibilityLabel="IPTV Player"
+            accessibilityLabel="Streamix"
           />
           <View>
             <Text style={styles.brandTitle}>
-              IPTV <Text style={styles.brandAccent}>PLAYER</Text>
+              Strea<Text style={styles.brandAccent}>mix</Text>
             </Text>
             <Text style={styles.tabSubtitle} numberOfLines={1}>
               {account ? `Ciao ${account.username || account.name || 'Utente'}` : getTabTitle()}

@@ -35,7 +35,7 @@ if (Platform.OS === 'web' && typeof document !== 'undefined') {
     { name: 'theme-color', content: '#090b10' },
     { name: 'apple-mobile-web-app-capable', content: 'yes' },
     { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
-    { name: 'apple-mobile-web-app-title', content: 'IPTV Player' }
+    { name: 'apple-mobile-web-app-title', content: 'Streamix' }
   ];
 
   metaTags.forEach(({ name, content }) => {
