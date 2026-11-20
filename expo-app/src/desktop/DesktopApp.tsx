@@ -221,6 +221,7 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
             vod={homeVod}
             series={homeSeries}
             history={history}
+            favorites={favorites}
             loading={homeLoading}
             onPressItem={onPressItem}
             onToggleFavorite={onToggleFavorite}

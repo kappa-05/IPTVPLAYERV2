@@ -10,13 +10,14 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
-import { MediaType, WatchHistoryItem } from '../types';
+import { FavoriteItem, MediaType, WatchHistoryItem } from '../types';
 import { ContinueWatchingRow } from './ContinueWatchingRow';
 
 interface HomeScreenProps {
   vod: any[];
   series: any[];
   history: WatchHistoryItem[];
+  favorites: FavoriteItem[];
   loading?: boolean;
   onPressItem: (item: any, type: MediaType) => void;
   onToggleFavorite: (item: any) => void;
@@ -29,6 +30,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   vod,
   series,
   history,
+  favorites,
   loading = false,
   onPressItem,
   onToggleFavorite,
@@ -40,6 +42,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const renderPoster = (item: any, type: MediaType, index: number) => {
     const poster = item?.stream_icon || item?.cover;
     const title = item?.name || item?.title || 'Senza titolo';
+    const itemId = String(item?.stream_id || item?.series_id || item?.id || '');
+    const isFavorite = favorites.some((favorite) => String(favorite.streamId) === itemId);
     return (
       <TouchableOpacity
         key={`${type}_${item?.stream_id || item?.series_id || index}`}
@@ -63,10 +67,16 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           ) : null}
           <TouchableOpacity
             style={styles.favoriteButton}
-            onPress={() => onToggleFavorite({ ...item, type })}
+            accessibilityRole="button"
+            accessibilityLabel={isFavorite ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}
+            onPress={(event) => {
+              // @ts-ignore - React Native Web exposes stopPropagation on the event.
+              event?.stopPropagation?.();
+              onToggleFavorite({ ...item, type });
+            }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Ionicons name="star-outline" size={16} color="#fff" />
+            <Ionicons name={isFavorite ? 'star' : 'star-outline'} size={16} color={isFavorite ? colors.accentAmber : '#fff'} />
           </TouchableOpacity>
         </View>
         <Text style={styles.posterTitle} numberOfLines={2}>{title}</Text>
@@ -138,7 +148,7 @@ const styles = StyleSheet.create({
   welcomeRow: { paddingHorizontal: 20, paddingTop: 22, paddingBottom: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 14 },
   eyebrow: { color: colors.primary, fontSize: 10, fontWeight: '800', letterSpacing: 2 },
   pageTitle: { color: colors.textPrimary, fontSize: 28, fontWeight: '800', marginTop: 3 },
-  section: { marginBottom: 25 },
+  section: { marginBottom: 28 },
   sectionHeader: { paddingHorizontal: 18, marginBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 9 },
   sectionTitle: { color: colors.textPrimary, fontSize: 18, fontWeight: '700' },
@@ -146,13 +156,13 @@ const styles = StyleSheet.create({
   seeAllText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
   posterList: { paddingHorizontal: 16, gap: 12 },
   posterCard: { marginRight: 1 },
-  posterFrame: { aspectRatio: 2 / 3, borderRadius: 9, overflow: 'hidden', backgroundColor: colors.surface, position: 'relative', borderWidth: 1, borderColor: colors.border },
+  posterFrame: { aspectRatio: 2 / 3, borderRadius: 11, overflow: 'hidden', backgroundColor: colors.surface, position: 'relative', borderWidth: 1, borderColor: colors.border },
   poster: { width: '100%', height: '100%' },
   posterFallback: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   rating: { position: 'absolute', top: 7, left: 7, backgroundColor: 'rgba(0,0,0,0.8)', paddingHorizontal: 6, paddingVertical: 4, borderRadius: 5, flexDirection: 'row', alignItems: 'center', gap: 3 },
   ratingText: { color: '#fff', fontSize: 10, fontWeight: '700' },
   favoriteButton: { position: 'absolute', top: 6, right: 6, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.72)', alignItems: 'center', justifyContent: 'center' },
-  posterTitle: { color: colors.textPrimary, fontSize: 12, lineHeight: 16, fontWeight: '600', marginTop: 7 },
+  posterTitle: { color: colors.textPrimary, fontSize: 12, lineHeight: 17, fontWeight: '600', marginTop: 8 },
   posterYear: { color: colors.textMuted, fontSize: 10, marginTop: 2 },
   empty: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30, paddingVertical: 48 },
   emptyTitle: { color: colors.textPrimary, fontSize: 18, fontWeight: '700', marginTop: 12 },

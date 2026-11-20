@@ -1,9 +1,10 @@
 
-const CACHE_NAME = 'iptv-player-v2-cache-v2';
+const CACHE_NAME = 'iptv-player-v2-cache-v3';
 
 const ASSETS_TO_CACHE = [
   '/',
   '/manifest.json',
+  '/favicon.ico',
   '/assets/icon.png',
   '/assets/favicon.png'
 ];

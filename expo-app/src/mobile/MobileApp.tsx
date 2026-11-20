@@ -262,6 +262,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
             vod={homeVod}
             series={homeSeries}
             history={history}
+            favorites={favorites}
             loading={homeLoading}
             onPressItem={onPressItem}
             onToggleFavorite={onToggleFavorite}

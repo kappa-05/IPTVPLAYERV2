@@ -38,7 +38,9 @@ export const StreamCard: React.FC<StreamCardProps> = ({
           styles.liveCard,
           isHovered && styles.cardHovered
         ]}
-        activeOpacity={0.7}
+        activeOpacity={0.88}
+        accessibilityRole="button"
+        accessibilityLabel={`Riproduci ${stream.name}`}
         onPress={() => onPress(stream)}
         // @ts-ignore
         onMouseEnter={() => setIsHovered(true)}
@@ -140,7 +142,9 @@ export const StreamCard: React.FC<StreamCardProps> = ({
         styles.posterCard,
         isHovered && styles.cardHovered
       ]}
-      activeOpacity={0.8}
+      activeOpacity={0.9}
+      accessibilityRole="button"
+      accessibilityLabel={`Apri ${title}`}
       onPress={() => onPress(item)}
       // @ts-ignore
       onMouseEnter={() => setIsHovered(true)}
@@ -192,6 +196,8 @@ export const StreamCard: React.FC<StreamCardProps> = ({
         {/* Favorite Icon */}
         <TouchableOpacity
           style={styles.posterFavBtn}
+          accessibilityRole="button"
+          accessibilityLabel={isFavorite ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}
           onPress={(e) => {
             // @ts-ignore
             e?.stopPropagation?.();
@@ -230,10 +236,10 @@ const styles = StyleSheet.create({
   // Live Card
   liveCard: {
     backgroundColor: colors.card,
-    borderRadius: 6,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: 10,
+    padding: 11,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
@@ -242,7 +248,7 @@ const styles = StyleSheet.create({
   liveIconWrapper: {
     width: 48,
     height: 48,
-    borderRadius: 6,
+    borderRadius: 8,
     backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
@@ -334,11 +340,11 @@ const styles = StyleSheet.create({
   // Poster Card
   posterCard: {
     backgroundColor: colors.card,
-    borderRadius: 6,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
     overflow: 'hidden',
-    marginBottom: 12
+    marginBottom: 14
   },
   posterWrapper: {
     width: '100%',
@@ -368,7 +374,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(9, 11, 16, 0.85)',
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 4,
+    borderRadius: 5,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.1)'
   },
@@ -384,7 +390,7 @@ const styles = StyleSheet.create({
     gap: 3,
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 4,
+    borderRadius: 5,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.1)'
   },

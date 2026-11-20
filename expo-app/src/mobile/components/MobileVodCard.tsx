@@ -28,7 +28,9 @@ export const MobileVodCard: React.FC<MobileVodCardProps> = ({
   return (
     <TouchableOpacity
       style={styles.card}
-      activeOpacity={0.8}
+      activeOpacity={0.92}
+      accessibilityRole="button"
+      accessibilityLabel={`Apri ${title}`}
       onPress={() => onPress(item)}
     >
       {/* Poster Image */}
@@ -69,6 +71,8 @@ export const MobileVodCard: React.FC<MobileVodCardProps> = ({
         {/* Favorite Button */}
         <TouchableOpacity
           style={styles.favBtn}
+          accessibilityRole="button"
+          accessibilityLabel={isFavorite ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           onPress={(e) => {
             // @ts-ignore
@@ -100,11 +104,11 @@ export const MobileVodCard: React.FC<MobileVodCardProps> = ({
 const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.card,
-    borderRadius: 8,
+    borderRadius: 11,
     borderWidth: 1,
     borderColor: colors.border,
     overflow: 'hidden',
-    marginBottom: 12
+    marginBottom: 14
   },
   posterWrapper: {
     width: '100%',
@@ -170,13 +174,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center'
   },
   info: {
-    padding: 8
+    paddingHorizontal: 9,
+    paddingVertical: 10
   },
   title: {
     color: colors.textPrimary,
     fontSize: 12,
     fontWeight: '600',
-    lineHeight: 16
+    lineHeight: 17
   },
   year: {
     color: colors.textMuted,

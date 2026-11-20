@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { NavTab } from '../../types';
@@ -27,7 +27,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
 
   return (
     <View style={styles.container}>
-      <View style={styles.navRow}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.navRow}>
         {tabs.map((tab) => {
           const isActive = activeTab === tab.key;
           return (
@@ -35,7 +35,10 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
               key={tab.key}
               style={[styles.tabItem, isActive && styles.tabItemActive]}
               onPress={() => onTabChange(tab.key)}
-              activeOpacity={0.7}
+              activeOpacity={0.82}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: isActive }}
+              accessibilityLabel={tab.label}
             >
               <View style={styles.iconWrapper}>
                 <Ionicons
@@ -58,7 +61,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
             </TouchableOpacity>
           );
         })}
-      </View>
+      </ScrollView>
     </View>
   );
 };
@@ -69,21 +72,22 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
     paddingBottom: Platform.OS === 'web' ? 8 : 16,
-    paddingTop: 6,
+    paddingTop: 8,
     width: '100%',
     zIndex: 100
   },
   navRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-    paddingHorizontal: 6
+    alignItems: 'stretch',
+    justifyContent: 'flex-start',
+    paddingHorizontal: 8,
   },
   tabItem: {
-    flex: 1,
+    minWidth: 64,
+    paddingHorizontal: 7,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 4,
+    paddingVertical: 5,
     position: 'relative'
   },
   tabItemActive: {},
@@ -114,7 +118,7 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 10,
     fontWeight: '500',
-    marginTop: 3
+    marginTop: 4
   },
   tabLabelActive: {
     color: colors.primary,
