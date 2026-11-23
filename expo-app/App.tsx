@@ -473,7 +473,10 @@ export default function App() {
       streamUrl,
       poster: cover,
       rawItem: episode,
-      initialSeekTime
+      initialSeekTime,
+      seriesName,
+      seasonNum,
+      episodeNum: episode.episode_num
     });
   };
 
@@ -619,9 +622,9 @@ export default function App() {
         account={account}
         isMinimized={isMiniPlayer}
         onToggleMinimize={() => setIsMiniPlayer((prev) => !prev)}
-        onWatchProgressUpdated={() => {
+        onWatchProgressUpdated={async () => {
           if (account) {
-            loadHistory(account.id);
+            await loadHistory(account.id);
           }
         }}
         onClose={() => {

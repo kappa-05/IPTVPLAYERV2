@@ -26,7 +26,7 @@ export interface UsePlayerCoreOptions {
   account?: Account | null;
   isMinimized?: boolean;
   onClose: () => void;
-  onWatchProgressUpdated?: () => void;
+  onWatchProgressUpdated?: () => void | Promise<void>;
 }
 
 export function usePlayerCore({
@@ -154,29 +154,32 @@ export function usePlayerCore({
   }, []);
 
   // Save watch progress to storage
-  const saveProgress = useCallback(() => {
+  const saveProgress = useCallback(async () => {
     if (!isMovieOrSeries || !account?.id || !stream) return;
     const cur = webVideoRef.current?.currentTime || currentTime;
     const dur = webVideoRef.current?.duration || duration;
     if (cur > 10 && dur > 0) {
       const pct = Math.min(100, Math.floor((cur / dur) * 100));
       if (pct >= 96) {
-        StorageService.removeHistoryItem(account.id, String(stream.streamId)).catch(() => {});
+        await StorageService.removeHistoryItem(account.id, String(stream.streamId));
       } else {
-        StorageService.saveWatchProgress(account.id, {
+        await StorageService.saveWatchProgress(account.id, {
           id: String(stream.streamId),
           accountId: account.id,
           type: stream.type === 'series' ? 'series' : 'vod',
           title: stream.title || '',
           subTitle: stream.subTitle,
+          seriesName: stream.seriesName,
+          seasonNum: stream.seasonNum,
+          episodeNum: stream.episodeNum,
           poster: stream.poster,
           currentTime: Math.floor(cur),
           duration: Math.floor(dur),
           percent: pct,
           rawItem: stream.rawItem
-        }).catch(() => {});
+        });
       }
-      onWatchProgressUpdated?.();
+      await onWatchProgressUpdated?.();
     }
   }, [isMovieOrSeries, account, stream, currentTime, duration, onWatchProgressUpdated]);
 
@@ -548,7 +551,7 @@ export function usePlayerCore({
         const now = Date.now();
         if (now - lastSaveTimeRef.current >= 5000) {
           lastSaveTimeRef.current = now;
-          saveProgress();
+          void saveProgress();
         }
       }
     };
@@ -917,8 +920,8 @@ export function usePlayerCore({
     setShowMutedBanner(false);
   }, []);
 
-  const handleClose = useCallback(() => {
-    saveProgress();
+  const handleClose = useCallback(async () => {
+    await saveProgress();
     destroyEngines();
     onClose();
   }, [saveProgress, destroyEngines, onClose]);

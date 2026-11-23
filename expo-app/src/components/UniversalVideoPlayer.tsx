@@ -27,7 +27,7 @@ interface UniversalVideoPlayerProps {
   onClose: () => void;
   onOpenEpg?: () => void;
   onToggleMinimize?: () => void;
-  onWatchProgressUpdated?: () => void;
+  onWatchProgressUpdated?: () => void | Promise<void>;
 }
 
 export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
