@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -19,6 +19,7 @@ import {
   PlayingStream,
   SeriesEpisode,
   SeriesItem,
+  VodStream,
   WatchHistoryItem
 } from './src/types';
 import { XtreamAPI } from './src/services/api';
@@ -31,7 +32,7 @@ import { MobileApp } from './src/mobile/MobileApp';
 
 // Global Shared Modals
 import { LoginModal } from './src/components/LoginModal';
-import { SeriesDetailsModal } from './src/components/SeriesDetailsModal';
+import { ContentDetailsScreen } from './src/components/ContentDetailsScreen';
 import { UniversalVideoPlayer } from './src/components/UniversalVideoPlayer';
 import { EpgModal } from './src/components/EpgModal';
 import { PwaInstallModal } from './src/components/PwaInstallModal';
@@ -102,10 +103,16 @@ export default function App() {
   const [homeSeries, setHomeSeries] = useState<any[]>([]);
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeCatalogAccountId, setHomeCatalogAccountId] = useState<string | null>(null);
+  const [contentError, setContentError] = useState<string | null>(null);
+
+  // A late response must never overwrite the screen the user has already moved to.
+  const contentRequestId = useRef(0);
+  const homeRequestId = useRef(0);
 
   // Modals & Playback State
   const [playingStream, setPlayingStream] = useState<PlayingStream | null>(null);
   const [selectedSeries, setSelectedSeries] = useState<SeriesItem | null>(null);
+  const [selectedVod, setSelectedVod] = useState<VodStream | null>(null);
   const [isMiniPlayer, setIsMiniPlayer] = useState(false);
   const [history, setHistory] = useState<WatchHistoryItem[]>([]);
 
@@ -168,6 +175,7 @@ export default function App() {
   // Load the complete VOD and series catalogs for the Home dashboard.
   // This uses the existing API and cache without changing playback behavior.
   const loadHomeCatalog = async (targetAccount: Account, forceRefresh: boolean = false) => {
+    const requestId = ++homeRequestId.current;
     setHomeLoading(true);
     try {
       if (forceRefresh && targetAccount.accountType === 'm3u' && (targetAccount.m3uUrl || targetAccount.host)) {
@@ -187,13 +195,16 @@ export default function App() {
       };
 
       const [vodItems, seriesItems] = await Promise.all([loadType('vod'), loadType('series')]);
+      if (requestId !== homeRequestId.current) return;
       setHomeVod(vodItems);
       setHomeSeries(seriesItems);
       setHomeCatalogAccountId(targetAccount.id);
     } catch (e: any) {
       console.warn('Failed to load Home catalog:', e?.message || e);
     } finally {
-      setHomeLoading(false);
+      if (requestId === homeRequestId.current) {
+        setHomeLoading(false);
+      }
     }
   };
 
@@ -209,6 +220,8 @@ export default function App() {
       return;
     }
 
+    const requestId = ++contentRequestId.current;
+    setContentError(null);
     setLoading(true);
     try {
       if (forceRefresh && targetAccount.accountType === 'm3u' && (targetAccount.m3uUrl || targetAccount.host)) {
@@ -225,8 +238,6 @@ export default function App() {
         cats = await XtreamAPI.getCategories(targetAccount, tab);
         await StorageService.cacheCategories(targetAccount.id, tab, cats);
       }
-      setCategories(cats);
-
       // Determine initial category to select:
       // If catId was explicitly provided (e.g. user selected from sheet/sidebar), use it.
       // Otherwise, the user requested that the first category selected is NOT 'all', but the first available category right after it (cats[0])!
@@ -238,8 +249,6 @@ export default function App() {
           targetCatId = 'all';
         }
       }
-      setSelectedCategoryId(targetCatId);
-
       // 2. Fetch Streams for Category
       let streamList: any[] | null = null;
       if (!forceRefresh) {
@@ -250,6 +259,10 @@ export default function App() {
         streamList = await XtreamAPI.getStreams(targetAccount, tab, targetCatId === 'all' ? undefined : targetCatId);
         await StorageService.cacheStreams(targetAccount.id, tab, targetCatId, streamList);
       }
+      if (requestId !== contentRequestId.current) return;
+
+      setCategories(cats);
+      setSelectedCategoryId(targetCatId);
       setStreams(streamList);
 
       if (tab === 'live') {
@@ -260,8 +273,13 @@ export default function App() {
       }
     } catch (e: any) {
       console.warn('Failed to load data:', e.message);
+      if (requestId === contentRequestId.current) {
+        setContentError('Impossibile caricare i contenuti. Verifica la playlist o riprova.');
+      }
     } finally {
-      setLoading(false);
+      if (requestId === contentRequestId.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -414,6 +432,15 @@ export default function App() {
       (currentTab === 'vod')
     );
 
+    // Apri i dettagli per i normali clic sui film.
+    // La cronologia, che passa initialSeekTime, continua invece
+    // ad avviare direttamente il video dal punto salvato.
+    if (isVod && initialSeekTime === undefined) {
+      setSelectedSeries(null);
+      setSelectedVod(raw as VodStream);
+      return;
+    }
+
     const detectedType: MediaType = isVod ? 'vod' : (currentTab === 'live' ? 'live' : (activeTab === 'epg' ? 'live' : 'live'));
     const isApple = Platform.OS === 'ios' || Platform.OS === 'macos' || (Platform.OS === 'web' && typeof navigator !== 'undefined' && /Macintosh|iPhone|iPad|iPod/i.test(navigator.userAgent));
     const defaultLiveExt = isApple ? 'm3u8' : 'ts';
@@ -444,6 +471,39 @@ export default function App() {
       rawItem: raw,
       initialSeekTime
     });
+  };
+
+  const handlePlayVod = (item: VodStream, initialSeekTime?: number) => {
+    if (!account) return;
+
+    const extension = item.container_extension || 'mp4';
+    const streamUrl = XtreamAPI.buildStreamUrl(
+      account,
+      item,
+      'vod',
+      extension
+    );
+
+    setIsMiniPlayer(false);
+    setPlayingStream({
+      streamId: String(item.stream_id),
+      title: item.name || 'Film',
+      type: 'vod',
+      streamUrl,
+      poster: item.stream_icon,
+      extension,
+      rawItem: item,
+      initialSeekTime
+    });
+  };
+
+  const handleToggleContentFavorite = async (
+    item: any,
+    type: MediaType
+  ) => {
+    if (!account) return;
+    await StorageService.toggleFavorite(account.id, item, type);
+    await loadFavorites(account.id);
   };
 
   const handlePlaySeriesEpisode = (
@@ -500,7 +560,8 @@ export default function App() {
         stream_type: 'movie',
         container_extension: 'mp4'
       };
-      handlePressItem(vodRaw, 'vod', hItem.currentTime);
+      setSelectedSeries(null);
+      setSelectedVod(vodRaw as VodStream);
     }
   }, [account]);
 
@@ -546,6 +607,7 @@ export default function App() {
           onRemoveHistoryItem={handleRemoveHistoryItem}
           epgMap={epgMap}
           loading={loading}
+          contentError={contentError}
           refreshing={refreshing}
           onRefresh={handleRefresh}
           onPressItem={handlePressItem}
@@ -583,6 +645,7 @@ export default function App() {
           onRemoveHistoryItem={handleRemoveHistoryItem}
           epgMap={epgMap}
           loading={loading}
+          contentError={contentError}
           refreshing={refreshing}
           onRefresh={handleRefresh}
           onPressItem={handlePressItem}
@@ -608,11 +671,45 @@ export default function App() {
         }}
       />
 
-      <SeriesDetailsModal
-        visible={!!selectedSeries}
-        seriesItem={selectedSeries}
+      <ContentDetailsScreen
         account={account}
-        onClose={() => setSelectedSeries(null)}
+        vodItem={selectedVod}
+        seriesItem={selectedSeries}
+        resumeTime={
+          selectedVod
+            ? history.find(h =>
+                h.type === 'vod' &&
+                String(h.id) === String(selectedVod.stream_id) &&
+                h.currentTime > 15 &&
+                h.duration > 0 &&
+                h.currentTime < h.duration - 30
+              )?.currentTime
+            : undefined
+        }
+        resumePercent={
+          selectedVod
+            ? history.find(h =>
+                h.type === 'vod' &&
+                String(h.id) === String(selectedVod.stream_id) &&
+                h.currentTime > 15 &&
+                h.duration > 0 &&
+                h.currentTime < h.duration - 30
+              )?.percent
+            : undefined
+        }
+        isFavorite={Boolean(
+          selectedVod
+            ? favorites.some(f => String(f.streamId) === String(selectedVod.stream_id))
+            : selectedSeries
+              ? favorites.some(f => String(f.streamId) === String(selectedSeries.series_id))
+              : false
+        )}
+        onClose={() => {
+          setSelectedVod(null);
+          setSelectedSeries(null);
+        }}
+        onToggleFavorite={handleToggleContentFavorite}
+        onPlayVod={handlePlayVod}
         onPlayEpisode={handlePlaySeriesEpisode}
       />
 

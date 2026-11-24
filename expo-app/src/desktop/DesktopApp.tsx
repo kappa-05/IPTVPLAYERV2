@@ -48,6 +48,7 @@ interface DesktopAppProps {
   favorites: FavoriteItem[];
   epgMap: Record<string, EPGChannelSchedule>;
   loading: boolean;
+  contentError?: string | null;
   refreshing: boolean;
   onRefresh: () => void;
   onPressItem: (item: any, type?: MediaType) => void;
@@ -85,6 +86,7 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
   favorites,
   epgMap,
   loading,
+  contentError,
   refreshing,
   onRefresh,
   onPressItem,
@@ -276,14 +278,16 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
                     color={colors.textMuted}
                   />
                   <Text style={styles.emptyTitle}>
-                    {activeTab === 'favorites'
+                    {contentError || (activeTab === 'favorites'
                       ? 'Nessun preferito'
                       : searchQuery
                       ? 'Nessun risultato trovato'
-                      : 'Nessun contenuto in questa categoria'}
+                      : 'Nessun contenuto in questa categoria')}
                   </Text>
                   <Text style={styles.emptySubtitle}>
-                    {activeTab === 'favorites'
+                    {contentError
+                      ? 'Usa il pulsante di aggiornamento dopo aver verificato la connessione.'
+                      : activeTab === 'favorites'
                       ? 'Aggiungi canali o film ai tuoi preferiti tramite l\'icona a forma di stella.'
                       : 'Seleziona un\'altra categoria dal menu laterale o modifica la ricerca.'}
                   </Text>

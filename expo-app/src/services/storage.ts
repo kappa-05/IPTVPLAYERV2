@@ -50,6 +50,24 @@ export class StorageService {
       if (activeId === id) {
         await AsyncStorage.removeItem(KEYS.ACTIVE_ACCOUNT);
       }
+
+      // Remove all account-scoped data, including cached provider responses that
+      // can contain stream URLs and metadata from the removed account.
+      const allKeys = await AsyncStorage.getAllKeys();
+      const accountKeys = allKeys.filter(key =>
+        key === KEYS.FAVORITES(id) ||
+        key === KEYS.HISTORY(id) ||
+        key.startsWith(`${PREFIX}cat_${id}_`) ||
+        key.startsWith(`${PREFIX}str_${id}_`)
+      );
+      if (accountKeys.length > 0) {
+        await AsyncStorage.multiRemove(accountKeys);
+      }
+      for (const key of memoryCache.keys()) {
+        if (key.startsWith(`${PREFIX}cat_${id}_`) || key.startsWith(`${PREFIX}str_${id}_`)) {
+          memoryCache.delete(key);
+        }
+      }
     } catch (e) {
       console.error('Failed to delete account:', e);
     }

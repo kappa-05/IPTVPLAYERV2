@@ -49,6 +49,7 @@ interface MobileAppProps {
   favorites: FavoriteItem[];
   epgMap: Record<string, EPGChannelSchedule>;
   loading: boolean;
+  contentError?: string | null;
   refreshing: boolean;
   onRefresh: () => void;
   onPressItem: (item: any, type?: MediaType) => void;
@@ -84,6 +85,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   favorites,
   epgMap,
   loading,
+  contentError,
   refreshing,
   onRefresh,
   onPressItem,
@@ -301,14 +303,16 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               color={colors.textMuted}
             />
             <Text style={styles.emptyTitle}>
-              {activeTab === 'favorites'
+              {contentError || (activeTab === 'favorites'
                 ? 'Nessun preferito'
                 : searchQuery
                 ? 'Nessun risultato trovato'
-                : 'Nessun contenuto disponibile'}
+                : 'Nessun contenuto disponibile')}
             </Text>
             <Text style={styles.emptySubtitle}>
-              {activeTab === 'favorites'
+              {contentError
+                ? 'Controlla la playlist o la connessione, poi aggiorna.'
+                : activeTab === 'favorites'
                 ? 'Aggiungi i tuoi canali o film preferiti cliccando sull\'icona a forma di stella.'
                 : 'Prova a selezionare una categoria diversa o verifica la playlist.'}
             </Text>

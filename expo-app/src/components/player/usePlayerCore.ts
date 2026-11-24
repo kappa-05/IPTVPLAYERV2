@@ -498,7 +498,11 @@ export function usePlayerCore({
       setResumePrompt(null);
 
       // Check VOD history for resume
-      if (isMovieOrSeries && account?.id) {
+      if (
+        isMovieOrSeries &&
+        account?.id &&
+        stream.initialSeekTime === undefined
+      ) {
         const requestedStreamId = String(stream.streamId);
         StorageService.getHistory(account.id).then(hist => {
           if (!visible || activeStreamIdRef.current !== requestedStreamId) return;
