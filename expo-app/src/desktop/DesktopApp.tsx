@@ -9,6 +9,7 @@ import {
   Platform
 } from 'react-native';
 import { colors } from '../theme/colors';
+import { NewContentItem } from '../services/NewContentService';
 import {
   Account,
   Category,
@@ -60,6 +61,7 @@ interface DesktopAppProps {
   history?: WatchHistoryItem[];
   homeVod: any[];
   homeSeries: any[];
+  newContent: NewContentItem[];
   homeLoading?: boolean;
   onPressHistoryItem?: (item: WatchHistoryItem) => void;
   onRemoveHistoryItem?: (id: string) => void;
@@ -98,6 +100,7 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
   history = [],
   homeVod = [],
   homeSeries = [],
+  newContent = [],
   homeLoading = false,
   onPressHistoryItem,
   onRemoveHistoryItem,
@@ -222,6 +225,7 @@ export const DesktopApp: React.FC<DesktopAppProps> = ({
           <HomeScreen
             vod={homeVod}
             series={homeSeries}
+            newContent={newContent}
             history={history}
             favorites={favorites}
             loading={homeLoading}

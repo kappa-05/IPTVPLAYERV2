@@ -12,10 +12,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { FavoriteItem, MediaType, WatchHistoryItem } from '../types';
 import { ContinueWatchingRow } from './ContinueWatchingRow';
+import { NewContentItem, matchesNewContentItem } from '../services/NewContentService';
 
 interface HomeScreenProps {
   vod: any[];
   series: any[];
+  newContent: NewContentItem[];
   history: WatchHistoryItem[];
   favorites: FavoriteItem[];
   loading?: boolean;
@@ -29,6 +31,7 @@ interface HomeScreenProps {
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   vod,
   series,
+  newContent = [],
   history,
   favorites,
   loading = false,
@@ -108,6 +111,108 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     );
   };
 
+  const renderNewContentSection = () => {
+    const sortedItems = [...newContent]
+      .sort((a, b) => b.detectedAt - a.detectedAt)
+      .slice(0, 18);
+
+    if (sortedItems.length === 0) return null;
+
+    return (
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <View style={styles.sectionTitleWrap}>
+            <Ionicons name="sparkles" size={19} color={colors.primary} />
+            <Text style={styles.sectionTitle}>Novità</Text>
+          </View>
+          <Text style={styles.newContentSubtitle}>Ultimi 30 giorni</Text>
+        </View>
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.posterList}>
+          {sortedItems.map((entry, index) => {
+            const catalog = entry.type === 'vod' ? vod : series;
+            const item = catalog.find(candidate =>
+              matchesNewContentItem(entry, candidate)
+            );
+
+            if (!item) return null;
+
+            const itemId = String(item.stream_id || item.series_id || item.id || '');
+            const isFavorite = favorites.some(
+              favorite => String(favorite.streamId) === itemId
+            );
+            const poster = item.stream_icon || item.cover || entry.poster;
+            const detectedDate = new Date(entry.detectedAt).toLocaleDateString('it-IT', {
+              day: '2-digit',
+              month: '2-digit'
+            });
+
+            return (
+              <TouchableOpacity
+                key={`new_${entry.type}_${entry.id}`}
+                style={[styles.posterCard, { width: width < 600 ? 116 : 142 }]}
+                activeOpacity={0.82}
+                onPress={() => onPressItem(item, entry.type)}
+              >
+                <View style={styles.posterFrame}>
+                  {poster ? (
+                    <Image source={{ uri: poster }} style={styles.poster} resizeMode="cover" />
+                  ) : (
+                    <View style={styles.posterFallback}>
+                      <Ionicons
+                        name={entry.type === 'series' ? 'albums-outline' : 'film-outline'}
+                        size={30}
+                        color={colors.textMuted}
+                      />
+                    </View>
+                  )}
+
+                  <View style={styles.newBadge}>
+                    <Text style={styles.newBadgeText}>NUOVO</Text>
+                  </View>
+
+                  {item.rating || item.rating_5based ? (
+                    <View style={styles.rating}>
+                      <Ionicons name="star" size={10} color={colors.accentAmber} />
+                      <Text style={styles.ratingText}>
+                        {String(item.rating || item.rating_5based).slice(0, 3)}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  <TouchableOpacity
+                    style={styles.favoriteButton}
+                    accessibilityRole="button"
+                    accessibilityLabel={isFavorite ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}
+                    onPress={(event) => {
+                      // @ts-ignore - React Native Web exposes stopPropagation on the event.
+                      event?.stopPropagation?.();
+                      onToggleFavorite({ ...item, type: entry.type });
+                    }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons
+                      name={isFavorite ? 'star' : 'star-outline'}
+                      size={16}
+                      color={isFavorite ? colors.accentAmber : '#fff'}
+                    />
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.posterTitle} numberOfLines={2}>
+                  {entry.title}
+                </Text>
+                <Text style={styles.newDate}>
+                  Aggiunto il {detectedDate}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
+    );
+  };
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <View style={styles.welcomeRow}>
@@ -124,6 +229,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           onRemoveItem={onRemoveHistoryItem}
         />
       )}
+
+      {renderNewContentSection()}
 
       {renderSection('Film', 'film-outline', vod, 'vod', 'vod')}
       {renderSection('Serie TV', 'albums-outline', series, 'series', 'series')}
@@ -159,11 +266,15 @@ const styles = StyleSheet.create({
   posterFrame: { aspectRatio: 2 / 3, borderRadius: 11, overflow: 'hidden', backgroundColor: colors.surface, position: 'relative', borderWidth: 1, borderColor: colors.border },
   poster: { width: '100%', height: '100%' },
   posterFallback: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  rating: { position: 'absolute', top: 7, left: 7, backgroundColor: 'rgba(0,0,0,0.8)', paddingHorizontal: 6, paddingVertical: 4, borderRadius: 5, flexDirection: 'row', alignItems: 'center', gap: 3 },
+  rating: { position: 'absolute', top: 7, right: 7, backgroundColor: 'rgba(0,0,0,0.8)', paddingHorizontal: 6, paddingVertical: 4, borderRadius: 5, flexDirection: 'row', alignItems: 'center', gap: 3 },
   ratingText: { color: '#fff', fontSize: 10, fontWeight: '700' },
   favoriteButton: { position: 'absolute', top: 6, right: 6, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.72)', alignItems: 'center', justifyContent: 'center' },
   posterTitle: { color: colors.textPrimary, fontSize: 12, lineHeight: 17, fontWeight: '600', marginTop: 8 },
   posterYear: { color: colors.textMuted, fontSize: 10, marginTop: 2 },
+  newBadge: { position: 'absolute', top: 7, left: 7, backgroundColor: colors.primary, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 5 },
+  newBadgeText: { color: '#080a0f', fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
+  newDate: { color: colors.textMuted, fontSize: 10, marginTop: 3 },
+  newContentSubtitle: { color: colors.textMuted, fontSize: 11, fontWeight: '600' },
   empty: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30, paddingVertical: 48 },
   emptyTitle: { color: colors.textPrimary, fontSize: 18, fontWeight: '700', marginTop: 12 },
   emptyText: { color: colors.textMuted, fontSize: 13, textAlign: 'center', lineHeight: 19, marginTop: 7, maxWidth: 360 },

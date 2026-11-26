@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { MediaType } from '../types';
+import { SearchService, SearchDocument } from '../services/SearchService';
 
 type SearchFilter = 'all' | 'live' | 'vod' | 'series';
 
@@ -25,7 +26,7 @@ interface SearchScreenProps {
   onPressItem: (item: any, type: MediaType) => void;
 }
 
-interface SearchEntry {
+interface SearchEntry extends SearchDocument {
   item: any;
   type: MediaType;
   searchable: string;
@@ -53,21 +54,40 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
     { id: 'series', label: 'Serie TV' }
   ];
 
-  // Build the searchable index only when the catalog changes, not on every keystroke.
-  const searchIndex = useMemo<SearchEntry[]>(() => {
+  // Debounce: evita di avviare una ricerca per ogni carattere digitato.
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => setDebouncedQuery(query), 200);
+    return () => clearTimeout(timeout);
+  }, [query]);
+
+  // Build the normalized search index only when catalog data changes.
+  const searchIndex = useMemo(() => {
     const sources: { type: MediaType; items: any[] }[] = [
       { type: 'live', items: live || [] },
       { type: 'vod', items: vod || [] },
       { type: 'series', items: series || [] }
     ];
 
-    return sources.flatMap(source =>
+    const entries: SearchEntry[] = sources.flatMap(source =>
       source.items.map((item, index) => {
         const id = item.stream_id ?? item.series_id ?? item.id ?? index;
+
         return {
           item,
           type: source.type,
           key: `${source.type}_${id}`,
+          name: item.name,
+          title: item.title,
+          stream_id: item.stream_id,
+          series_id: item.series_id,
+          id: item.id,
+          year: item.year,
+          releaseDate: item.releaseDate,
+          genre: item.genre,
+          plot: item.plot,
+          category_name: item.category_name,
           searchable: [
             item.name,
             item.title,
@@ -75,21 +95,25 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
             item.series_id,
             item.year,
             item.genre
-          ].filter(Boolean).join(' ').toLocaleLowerCase()
+          ].filter(Boolean).join(' ').toLowerCase()
         };
       })
     );
+
+    return SearchService.createIndex(entries);
   }, [live, vod, series]);
 
-  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const normalizedQuery = debouncedQuery.trim();
 
-  const results = useMemo(() => {
+  const results = useMemo<SearchEntry[]>(() => {
     if (!normalizedQuery) return [];
 
-    return searchIndex.filter(entry =>
-      (filter === 'all' || entry.type === filter) &&
-      entry.searchable.includes(normalizedQuery)
-    );
+    return SearchService.search(
+      searchIndex,
+      normalizedQuery,
+      500,
+      entry => filter === 'all' || entry.type === filter
+    ).map(match => match.item);
   }, [searchIndex, normalizedQuery, filter]);
 
   const columns = width >= 1400 ? 6 : width >= 1000 ? 5 : width >= 650 ? 4 : 2;

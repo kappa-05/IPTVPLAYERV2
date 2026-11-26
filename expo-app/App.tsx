@@ -25,6 +25,7 @@ import {
 import { XtreamAPI } from './src/services/api';
 import { StorageService } from './src/services/storage';
 import { EPGService } from './src/services/epgService';
+import { NewContentService } from './src/services/NewContentService';
 
 // Dedicated Desktop and Mobile UI Shells
 import { DesktopApp } from './src/desktop/DesktopApp';
@@ -101,6 +102,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [homeVod, setHomeVod] = useState<any[]>([]);
   const [homeSeries, setHomeSeries] = useState<any[]>([]);
+  const [newContent, setNewContent] = useState<any[]>([]);
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeCatalogAccountId, setHomeCatalogAccountId] = useState<string | null>(null);
   const [contentError, setContentError] = useState<string | null>(null);
@@ -177,6 +179,7 @@ export default function App() {
   const loadHomeCatalog = async (targetAccount: Account, forceRefresh: boolean = false) => {
     const requestId = ++homeRequestId.current;
     setHomeLoading(true);
+    let catalogFetched = forceRefresh;
     try {
       if (forceRefresh && targetAccount.accountType === 'm3u' && (targetAccount.m3uUrl || targetAccount.host)) {
         await XtreamAPI.loadM3U(targetAccount.m3uUrl || targetAccount.host, targetAccount.name, targetAccount.useProxy);
@@ -189,12 +192,23 @@ export default function App() {
         }
         if (!items || items.length === 0) {
           items = await XtreamAPI.getStreams(targetAccount, type);
+          catalogFetched = true;
           await StorageService.cacheStreams(targetAccount.id, type, 'all', items);
         }
         return items;
       };
 
       const [vodItems, seriesItems] = await Promise.all([loadType('vod'), loadType('series')]);
+      if (requestId !== homeRequestId.current) return;
+
+      const recentItems = await NewContentService.updateCatalog(
+        targetAccount,
+        vodItems,
+        seriesItems,
+        catalogFetched
+      );
+      setNewContent(recentItems);
+
       if (requestId !== homeRequestId.current) return;
       setHomeVod(vodItems);
       setHomeSeries(seriesItems);
@@ -344,6 +358,7 @@ export default function App() {
     loadHistory(newAccount.id);
     setHomeVod([]);
     setHomeSeries([]);
+    setNewContent([]);
     setHomeCatalogAccountId(null);
     const targetTab = activeTab === 'epg' || activeTab === 'home' || activeTab === 'search' || activeTab === 'settings' ? 'live' : activeTab;
     loadCategoriesAndStreams(newAccount, targetTab, undefined, true);
@@ -359,6 +374,7 @@ export default function App() {
     setCategories([]);
     setHomeVod([]);
     setHomeSeries([]);
+    setNewContent([]);
     setHomeCatalogAccountId(null);
     setLoginModalVisible(true);
   };
@@ -602,6 +618,7 @@ export default function App() {
           history={history}
           homeVod={homeVod}
           homeSeries={homeSeries}
+          newContent={newContent}
           homeLoading={homeLoading}
           onPressHistoryItem={handlePressHistoryItem}
           onRemoveHistoryItem={handleRemoveHistoryItem}
@@ -640,6 +657,7 @@ export default function App() {
           history={history}
           homeVod={homeVod}
           homeSeries={homeSeries}
+          newContent={newContent}
           homeLoading={homeLoading}
           onPressHistoryItem={handlePressHistoryItem}
           onRemoveHistoryItem={handleRemoveHistoryItem}

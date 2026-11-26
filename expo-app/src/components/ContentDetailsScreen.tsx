@@ -280,6 +280,17 @@ export const ContentDetailsScreen: React.FC<ContentDetailsScreenProps> = ({
                   </Text>
                 ) : null}
 
+                {!isSeries && info.duration ? (
+                  <View style={styles.rating}>
+                    <Ionicons
+                      name="time-outline"
+                      size={14}
+                      color={colors.textSecondary}
+                    />
+                    <Text style={styles.metadataText}>{info.duration}</Text>
+                  </View>
+                ) : null}
+
                 {info.genre ? (
                   <Text style={styles.metadataText}>{info.genre}</Text>
                 ) : null}

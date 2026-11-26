@@ -8,7 +8,8 @@ const KEYS = {
   CATEGORIES_CACHE: (accId: string, type: MediaType) => `${PREFIX}cat_${accId}_${type}`,
   STREAMS_CACHE: (accId: string, type: MediaType, catId: string) => `${PREFIX}str_${accId}_${type}_${catId}`,
   FAVORITES: (accId: string) => `${PREFIX}fav_${accId}`,
-  HISTORY: (accId: string) => `${PREFIX}history_${accId}`
+  HISTORY: (accId: string) => `${PREFIX}history_${accId}`,
+  NEW_CONTENT: (accId: string) => `${PREFIX}new_content_${accId}`
 };
 
 // High-speed in-memory cache for instant O(1) tab and category switching without JSON re-parsing
@@ -285,4 +286,24 @@ export class StorageService {
       console.error('Failed to clear history:', e);
     }
   }
+
+  // --- NEW CONTENT ---
+  static async getNewContentState(accId: string): Promise<any | null> {
+    try {
+      const raw = await AsyncStorage.getItem(KEYS.NEW_CONTENT(accId));
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  static async saveNewContentState(accId: string, state: any): Promise<void> {
+    try {
+      await AsyncStorage.setItem(KEYS.NEW_CONTENT(accId), JSON.stringify(state));
+    } catch (e) {
+      console.error('Failed to save new content state:', e);
+    }
+  }
+
+
 }
