@@ -145,6 +145,7 @@ export interface PlayingStream {
   epgSchedule?: EPGChannelSchedule | null;
   initialSeekTime?: number;
   seriesName?: string;
+  seriesId?: string | number;
   seasonNum?: number | string;
   episodeNum?: number | string;
 }

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Platform } from 'react-native';
 import { PlayingStream, Account, MediaTrack, QualityLevel, PlaybackSpeed } from '../../types';
+import { createInitialDiagnostics, PlayerDiagnostics, sanitizePlayerDiagnosticMessage } from '../../services/PlayerDiagnosticsService';
 import { XtreamAPI } from '../../services/api';
 import { StorageService } from '../../services/storage';
 
@@ -27,6 +28,7 @@ export interface UsePlayerCoreOptions {
   isMinimized?: boolean;
   onClose: () => void;
   onWatchProgressUpdated?: () => void | Promise<void>;
+  onPlaybackEnded?: () => void;
 }
 
 export function usePlayerCore({
@@ -35,7 +37,8 @@ export function usePlayerCore({
   account,
   isMinimized = false,
   onClose,
-  onWatchProgressUpdated
+  onWatchProgressUpdated,
+  onPlaybackEnded
 }: UsePlayerCoreOptions) {
   // Video element refs
   const webVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -59,6 +62,7 @@ export function usePlayerCore({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [bufferPercent, setBufferPercent] = useState(0);
+  const [diagnostics, setDiagnostics] = useState<PlayerDiagnostics>(createInitialDiagnostics);
 
   // Audio & Aspect Ratio
   const [volume, setVolume] = useState(1);
@@ -95,6 +99,28 @@ export function usePlayerCore({
   const volumeTimeoutRef = useRef<any>(null);
   const lastSaveTimeRef = useRef(0);
   const isSwitchingRef = useRef(false);
+  const diagnosticsSessionStartedAtRef = useRef<number | null>(null);
+  const firstPlaybackAtRef = useRef<number | null>(null);
+  const bufferingStartedAtRef = useRef<number | null>(null);
+
+  const addDiagnosticError = useCallback((message: string) => {
+    setDiagnostics(prev => ({
+      ...prev,
+      errors: [...prev.errors, sanitizePlayerDiagnosticMessage(message)].slice(-10),
+    }));
+  }, []);
+
+  const recordFallback = useCallback(() => {
+    setDiagnostics(prev => ({
+      ...prev,
+      fallbackAttempts: prev.fallbackAttempts + 1,
+    }));
+  }, []);
+
+  const setTerminalError = useCallback((message: string) => {
+    setErrorMsg(message);
+    setDiagnostics(prev => ({ ...prev, status: 'Errore' }));
+  }, []);
 
   const applyPendingSeek = useCallback((video: HTMLVideoElement) => {
     const pending = pendingSeekRef.current;
@@ -237,6 +263,7 @@ export function usePlayerCore({
 
     // 1. HLS Engine (Hls.js)
     if (isM3u8 && HlsClass && HlsClass.isSupported()) {
+      setDiagnostics(prev => ({ ...prev, engine: 'HLS.js' }));
       const hls = new HlsClass({
         enableWorker: true,
         lowLatencyMode: false,
@@ -336,13 +363,16 @@ export function usePlayerCore({
 
       hls.on(HlsClass.Events.ERROR, (_event: any, data: any) => {
         if (!data?.fatal || hlsRef.current !== hls) return;
+
+        addDiagnosticError(`HLS ${String(data.type || 'errore')}: ${String(data.details || 'dettaglio non disponibile')}`);
+
         switch (data.type) {
           case HlsClass.ErrorTypes.NETWORK_ERROR:
             if (!hlsFallbackAttemptedRef.current) {
               hlsFallbackAttemptedRef.current = true;
               hls.startLoad();
             } else {
-              setErrorMsg('Connessione al flusso interrotta. Riprova la riproduzione.');
+              setTerminalError('Connessione al flusso interrotta. Riprova la riproduzione.');
               setIsBuffering(false);
               hls.destroy();
               if (hlsRef.current === hls) hlsRef.current = null;
@@ -353,7 +383,7 @@ export function usePlayerCore({
               mediaRecoveryAttemptedRef.current = true;
               hls.recoverMediaError();
             } else {
-              setErrorMsg('Formato multimediale non supportato o danneggiato.');
+              setTerminalError('Formato multimediale non supportato o danneggiato.');
               setIsBuffering(false);
             }
             break;
@@ -365,6 +395,7 @@ export function usePlayerCore({
                 isSwitchingRef.current = true;
                 setTimeout(() => {
                   isSwitchingRef.current = false;
+                  recordFallback();
                   loadStreamRef.current?.(altTs);
                 }, 200);
                 return;
@@ -376,11 +407,12 @@ export function usePlayerCore({
               const forceH264Url = withQueryParam(targetUrl, 'h264', '1');
               setTimeout(() => {
                 isSwitchingRef.current = false;
+                recordFallback();
                 loadStreamRef.current?.(forceH264Url);
               }, 200);
               return;
             }
-            setErrorMsg('Impossibile caricare il flusso multimediale.');
+            setTerminalError('Impossibile caricare il flusso multimediale.');
             setIsBuffering(false);
             break;
           }
@@ -391,6 +423,7 @@ export function usePlayerCore({
 
     // 2. MPEG-TS Engine (mpegts.js) for TS live streams
     if (isTs && mpegts && mpegts.isSupported()) {
+      setDiagnostics(prev => ({ ...prev, engine: 'MPEG-TS' }));
       try {
         const player = mpegts.createPlayer({
           type: 'mse',
@@ -425,7 +458,10 @@ export function usePlayerCore({
             liveFallbackAttemptedRef.current = true;
             console.info(`[Live] Audio ${audioCodec} rilevato: attivo remux audio AAC tramite FFmpeg.`);
             const transcodedUrl = XtreamAPI.getLiveTranscodeUrl(targetUrl);
-            setTimeout(() => loadStreamRef.current?.(transcodedUrl), 0);
+            setTimeout(() => {
+              recordFallback();
+              loadStreamRef.current?.(transcodedUrl);
+            }, 0);
             return;
           }
 
@@ -439,8 +475,10 @@ export function usePlayerCore({
         }
 
         player.on(mpegts.Events.ERROR, (errType: any, errDetail: any, errInfo: any) => {
-          console.warn('mpegts error:', errType, errDetail, errInfo || '');
+          console.warn('mpegts error:', errType, errDetail);
           if (mpegtsRef.current !== player) return;
+
+          addDiagnosticError(`MPEG-TS ${String(errType || 'errore')}: ${String(errDetail || 'dettaglio non disponibile')}`);
           if (isLive && !liveFormatFallbackAttemptedRef.current && !cleanUrl.includes('/api/live_transcode')) {
             const altM3u8 = targetUrl.replace(/\.ts(\?.*)?$/i, '.m3u8$1');
             if (altM3u8 !== targetUrl) {
@@ -448,13 +486,14 @@ export function usePlayerCore({
               isSwitchingRef.current = true;
               setTimeout(() => {
                 isSwitchingRef.current = false;
+                recordFallback();
                 loadStreamRef.current?.(altM3u8);
               }, 250);
               return;
             }
           }
           setIsBuffering(false);
-          setErrorMsg('Errore durante la lettura del flusso MPEG-TS. Prova a riavviare il canale.');
+          setTerminalError('Errore durante la lettura del flusso MPEG-TS. Prova a riavviare il canale.');
         });
         return;
       } catch (e) {
@@ -463,16 +502,26 @@ export function usePlayerCore({
     }
 
     // 3. Direct HTML5 Video (Native MP4, Apple Safari HLS)
+    setDiagnostics(prev => ({ ...prev, engine: 'HTML5' }));
     video.src = targetUrl;
     video.load();
     triggerPlay(video);
-  }, [destroyEngines, stream, triggerPlay, isLive]);
+  }, [addDiagnosticError, destroyEngines, recordFallback, setTerminalError, stream, triggerPlay, isLive]);
 
   loadStreamRef.current = loadStream;
 
   // Main lifecycle when stream changes
   useEffect(() => {
     if (visible && stream) {
+      const sessionStartedAt = Date.now();
+      diagnosticsSessionStartedAtRef.current = sessionStartedAt;
+      firstPlaybackAtRef.current = null;
+      bufferingStartedAtRef.current = null;
+      setDiagnostics({
+        ...createInitialDiagnostics(),
+        sessionStartedAt,
+      });
+
       activeStreamIdRef.current = String(stream.streamId);
       isSwitchingRef.current = false;
       hlsFallbackAttemptedRef.current = false;
@@ -531,9 +580,43 @@ export function usePlayerCore({
     if (!video || Platform.OS !== 'web') return;
 
     const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
-    const onWaiting = () => setIsBuffering(true);
+    const onPause = () => {
+      setIsPlaying(false);
+      setDiagnostics(prev => ({ ...prev, status: 'In pausa' }));
+    };
+    const onWaiting = () => {
+      setIsBuffering(true);
+      const now = Date.now();
+
+      if (bufferingStartedAtRef.current === null) {
+        bufferingStartedAtRef.current = now;
+        setDiagnostics(prev => ({
+          ...prev,
+          status: 'Buffering',
+          bufferingEvents: prev.bufferingEvents + 1,
+        }));
+      }
+    };
     const onPlaying = () => {
+      const now = Date.now();
+      const bufferingStartedAt = bufferingStartedAtRef.current;
+      bufferingStartedAtRef.current = null;
+
+      if (firstPlaybackAtRef.current === null) {
+        firstPlaybackAtRef.current = now;
+      }
+
+      setDiagnostics(prev => ({
+        ...prev,
+        status: 'In riproduzione',
+        startupTimeMs: prev.startupTimeMs === null && diagnosticsSessionStartedAtRef.current !== null
+          ? now - diagnosticsSessionStartedAtRef.current
+          : prev.startupTimeMs,
+        bufferingTimeMs: prev.bufferingTimeMs + (
+          bufferingStartedAt !== null ? now - bufferingStartedAt : 0
+        ),
+      }));
+
       setIsBuffering(false);
       setFirstFrameRendered(true);
       setIsPlaying(true);
@@ -576,6 +659,13 @@ export function usePlayerCore({
     const onError = () => {
       const code = video.error ? video.error.code : 0;
       console.warn('HTML5 Video Error code:', code);
+      const html5ErrorLabels: Record<number, string> = {
+        1: 'riproduzione interrotta',
+        2: 'errore di rete',
+        3: 'errore di decodifica',
+        4: 'formato non supportato',
+      };
+      addDiagnosticError(`HTML5 codice ${code}: ${html5ErrorLabels[code] || 'errore sconosciuto'}`);
       const activeUrl = currentStreamUrlRef.current || stream?.streamUrl || '';
       if (!isSwitchingRef.current && activeUrl) {
         if (isLive) {
@@ -585,6 +675,7 @@ export function usePlayerCore({
           if (altM3u8 !== clean) {
             setTimeout(() => {
               isSwitchingRef.current = false;
+              recordFallback();
               loadStream(altM3u8);
             }, 300);
             return;
@@ -599,6 +690,7 @@ export function usePlayerCore({
             const fallbackUrl = XtreamAPI.getHlsUrl(curUrl, stream?.rawItem, true);
             setTimeout(() => {
               isSwitchingRef.current = false;
+              recordFallback();
               loadStream(fallbackUrl);
             }, 200);
             return;
@@ -610,14 +702,20 @@ export function usePlayerCore({
             const forceH264Url = withQueryParam(curUrl, 'h264', '1');
             setTimeout(() => {
               isSwitchingRef.current = false;
+              recordFallback();
               loadStream(forceH264Url);
             }, 200);
             return;
           }
         }
       }
-      setErrorMsg('Impossibile riprodurre lo stream multimediale.');
+      setTerminalError('Impossibile riprodurre lo stream multimediale.');
       setIsBuffering(false);
+    };
+    const onEnded = () => {
+      setIsPlaying(false);
+      setIsBuffering(false);
+      onPlaybackEnded?.();
     };
 
     video.addEventListener('play', onPlay);
@@ -632,6 +730,7 @@ export function usePlayerCore({
     video.addEventListener('progress', onProgress);
     video.addEventListener('volumechange', onVolumeChange);
     video.addEventListener('error', onError);
+    video.addEventListener('ended', onEnded);
 
     // Fullscreen events: standard browsers plus Safari/iOS native video fullscreen.
     const syncFullscreenState = () => {
@@ -673,8 +772,9 @@ export function usePlayerCore({
       video.removeEventListener('progress', onProgress);
       video.removeEventListener('volumechange', onVolumeChange);
       video.removeEventListener('error', onError);
+      video.removeEventListener('ended', onEnded);
     };
-  }, [stream, isMovieOrSeries, account, isLive, loadStream, saveProgress, applyPendingSeek]);
+  }, [stream, isMovieOrSeries, account, isLive, loadStream, saveProgress, applyPendingSeek, addDiagnosticError, recordFallback, setTerminalError, onPlaybackEnded]);
 
   // Controls Handlers
   const togglePlayPause = useCallback(() => {
@@ -871,14 +971,14 @@ export function usePlayerCore({
         console.warn('[PlayerCore] Impossibile cambiare traccia audio:', error);
         pendingSeekRef.current = null;
         resumeSeekAppliedRef.current = true;
-        setErrorMsg('Impossibile cambiare la traccia audio. Riprova.');
+        setTerminalError('Impossibile cambiare la traccia audio. Riprova.');
       }
     } else {
       setActiveAudioTrack(idx);
       setAudioTracks(prev => prev.map(track => ({ ...track, active: track.id === idx })));
     }
     setTrackModalVisible(false);
-  }, [currentTime]);
+  }, [currentTime, setTerminalError]);
 
   const handleSelectSubtitleTrack = useCallback((idx: number) => {
     setActiveSubtitleTrack(idx);
@@ -950,6 +1050,7 @@ export function usePlayerCore({
     currentTime,
     duration,
     bufferPercent,
+    diagnostics,
     volume,
     isMuted,
     videoFit,

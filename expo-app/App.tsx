@@ -117,6 +117,14 @@ export default function App() {
   const [selectedVod, setSelectedVod] = useState<VodStream | null>(null);
   const [isMiniPlayer, setIsMiniPlayer] = useState(false);
   const [history, setHistory] = useState<WatchHistoryItem[]>([]);
+  const [nextSeriesEpisode, setNextSeriesEpisode] = useState<{
+    episode: SeriesEpisode;
+    seasonNum: number | string;
+    seriesName: string;
+    cover?: string;
+    seriesId: string | number;
+  } | null>(null);
+  const seriesEpisodeRequestId = useRef(0);
 
   // EPG / TV Guide State
   const [epgMap, setEpgMap] = useState<Record<string, EPGChannelSchedule>>({});
@@ -527,12 +535,40 @@ export default function App() {
     seasonNum: number | string,
     seriesName: string,
     cover?: string,
+    seriesId?: string | number,
     initialSeekTime?: number
   ) => {
     if (!account) return;
 
     // Chiudi il pannello serie prima di avviare l'episodio.
     setSelectedSeries(null);
+    setNextSeriesEpisode(null);
+    const requestId = ++seriesEpisodeRequestId.current;
+
+    // The series detail endpoint is the source of truth for an in-season episode
+    // sequence. This lookup is deliberately non-blocking: playback still starts
+    // immediately and Auto Next stays hidden if the list is unavailable.
+    if (seriesId !== undefined && seriesId !== null) {
+      void XtreamAPI.getSeriesInfo(account, seriesId)
+        .then((details) => {
+          if (requestId !== seriesEpisodeRequestId.current) return;
+          const seasonEpisodes = details?.episodes?.[String(seasonNum)] || [];
+          const ordered = [...seasonEpisodes].sort((a, b) => {
+            const orderA = Number(a.episode_num);
+            const orderB = Number(b.episode_num);
+            if (Number.isFinite(orderA) && Number.isFinite(orderB)) return orderA - orderB;
+            return String(a.episode_num).localeCompare(String(b.episode_num), undefined, { numeric: true });
+          });
+          const currentIndex = ordered.findIndex((item) => String(item.id) === String(episode.id));
+          const nextEpisode = currentIndex >= 0 ? ordered[currentIndex + 1] : undefined;
+          if (nextEpisode) {
+            setNextSeriesEpisode({ episode: nextEpisode, seasonNum, seriesName, cover, seriesId });
+          }
+        })
+        .catch(() => {
+          // The feature is optional; a failed metadata lookup must never affect playback.
+        });
+    }
     const streamUrl = XtreamAPI.buildStreamUrl(
       account,
       episode,
@@ -551,6 +587,7 @@ export default function App() {
       rawItem: episode,
       initialSeekTime,
       seriesName,
+      seriesId,
       seasonNum,
       episodeNum: episode.episode_num
     });
@@ -565,6 +602,7 @@ export default function App() {
           hItem.seasonNum || 1,
           hItem.seriesName || hItem.title,
           hItem.poster,
+          (hItem.rawItem as any)?.series_id,
           hItem.currentTime
         );
       }
@@ -741,6 +779,17 @@ export default function App() {
           if (account) {
             await loadHistory(account.id);
           }
+        }}
+        nextEpisode={nextSeriesEpisode}
+        onPlayNextEpisode={() => {
+          if (!nextSeriesEpisode) return;
+          handlePlaySeriesEpisode(
+            nextSeriesEpisode.episode,
+            nextSeriesEpisode.seasonNum,
+            nextSeriesEpisode.seriesName,
+            nextSeriesEpisode.cover,
+            nextSeriesEpisode.seriesId
+          );
         }}
         onClose={() => {
           setPlayingStream(null);

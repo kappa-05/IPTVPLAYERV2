@@ -11,13 +11,14 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
-import { PlayingStream, Account } from '../types';
+import { PlayingStream, Account, SeriesEpisode } from '../types';
 import { usePlayerCore } from './player/usePlayerCore';
 import { SeamlessPosterBackdrop } from './player/SeamlessPosterBackdrop';
 import { TrackSelectionModal } from './player/TrackSelectionModal';
 import { QualitySelectionModal } from './player/QualitySelectionModal';
 import { SpeedSelectionModal } from './player/SpeedSelectionModal';
 import { KeyboardShortcutsModal } from './player/KeyboardShortcutsModal';
+import { PlayerDiagnosticsModal } from './player/PlayerDiagnosticsModal';
 
 interface UniversalVideoPlayerProps {
   visible: boolean;
@@ -28,6 +29,12 @@ interface UniversalVideoPlayerProps {
   onOpenEpg?: () => void;
   onToggleMinimize?: () => void;
   onWatchProgressUpdated?: () => void | Promise<void>;
+  nextEpisode?: {
+    episode: SeriesEpisode;
+    seasonNum: number | string;
+    seriesName: string;
+  } | null;
+  onPlayNextEpisode?: () => void;
 }
 
 export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
@@ -38,10 +45,23 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
   onClose,
   onOpenEpg,
   onToggleMinimize,
-  onWatchProgressUpdated
+  onWatchProgressUpdated,
+  nextEpisode = null,
+  onPlayNextEpisode
 }) => {
   const { width } = useWindowDimensions();
   const isCompactLayout = width < 600;
+  const [autoNextRemaining, setAutoNextRemaining] = useState<number | null>(null);
+  const [autoNextCancelled, setAutoNextCancelled] = useState(false);
+  const autoNextTriggeredRef = useRef<string | null>(null);
+
+  const startNextEpisode = useCallback(() => {
+    const episodeKey = nextEpisode ? String(nextEpisode.episode.id) : null;
+    if (!episodeKey || autoNextCancelled || autoNextTriggeredRef.current === episodeKey) return;
+    autoNextTriggeredRef.current = episodeKey;
+    setAutoNextRemaining(null);
+    onPlayNextEpisode?.();
+  }, [nextEpisode, autoNextCancelled, onPlayNextEpisode]);
 
   // Core Hook
   const {
@@ -52,6 +72,7 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
     currentTime,
     duration,
     bufferPercent,
+    diagnostics,
     volume,
     isMuted,
     videoFit,
@@ -100,7 +121,8 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
     account,
     isMinimized,
     onClose,
-    onWatchProgressUpdated
+    onWatchProgressUpdated,
+    onPlaybackEnded: startNextEpisode
   });
 
   // Controls Visibility
@@ -115,6 +137,41 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
   const [hoverSec, setHoverSec] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState<number>(0);
   const [pendingResumeTime, setPendingResumeTime] = useState<number | null>(null);
+  const [diagnosticsModalVisible, setDiagnosticsModalVisible] = useState(false);
+
+  const canAutoPlayNext = Boolean(
+    visible &&
+    !isMinimized &&
+    stream?.type === 'series' &&
+    nextEpisode &&
+    duration > 0
+  );
+
+  useEffect(() => {
+    setAutoNextRemaining(null);
+    setAutoNextCancelled(false);
+    autoNextTriggeredRef.current = null;
+  }, [stream?.streamId]);
+
+  useEffect(() => {
+    if (!canAutoPlayNext || !nextEpisode) {
+      setAutoNextRemaining(null);
+      return;
+    }
+
+    const remaining = Math.max(0, Math.ceil(duration - currentTime));
+    if (remaining > 10) {
+      // A replay or a seek back before the final ten seconds arms the prompt again.
+      setAutoNextRemaining(null);
+      setAutoNextCancelled(false);
+      autoNextTriggeredRef.current = null;
+      return;
+    }
+    if (autoNextCancelled || !isPlaying) return;
+
+    setAutoNextRemaining(remaining);
+    if (remaining === 0) startNextEpisode();
+  }, [canAutoPlayNext, nextEpisode, duration, currentTime, isPlaying, autoNextCancelled, startNextEpisode]);
 
   // Apply a resume choice as soon as the media duration is available.
   useEffect(() => {
@@ -131,12 +188,12 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
   const resetControlsTimer = useCallback(() => {
     setShowControls(true);
     if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
-    if (isPlaying && !isDragging && !trackModalVisible && !qualityModalVisible && !speedModalVisible && !shortcutsModalVisible) {
+    if (isPlaying && !isDragging && !trackModalVisible && !qualityModalVisible && !speedModalVisible && !shortcutsModalVisible && !diagnosticsModalVisible) {
       controlsTimeoutRef.current = setTimeout(() => {
         setShowControls(false);
       }, 2800);
     }
-  }, [isPlaying, isDragging, trackModalVisible, qualityModalVisible, speedModalVisible, shortcutsModalVisible]);
+  }, [isPlaying, isDragging, trackModalVisible, qualityModalVisible, speedModalVisible, shortcutsModalVisible, diagnosticsModalVisible]);
 
   useEffect(() => {
     resetControlsTimer();
@@ -527,8 +584,34 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
         </View>
       )}
 
+      {!isMinimized && autoNextRemaining !== null && nextEpisode && !autoNextCancelled && (
+        <View style={styles.autoNextOverlay}>
+          <View style={styles.autoNextCard}>
+            <Ionicons name="play-forward" size={22} color={colors.primary} />
+            <View style={styles.autoNextCopy}>
+              <Text style={styles.autoNextTitle}>Prossimo episodio tra {autoNextRemaining}</Text>
+              <Text style={styles.autoNextDescription} numberOfLines={1}>
+                {nextEpisode.episode.episode_num}. {nextEpisode.episode.title}
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.autoNextPlayBtn} onPress={startNextEpisode}>
+              <Text style={styles.autoNextPlayText}>Riproduci ora</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.autoNextCancelBtn}
+              onPress={() => {
+                setAutoNextCancelled(true);
+                setAutoNextRemaining(null);
+              }}
+            >
+              <Text style={styles.autoNextCancelText}>Annulla</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {/* ── 9. Interactive Controls Overlay ── */}
-      {!isMinimized && showControls && (
+      {!isMinimized && showControls && autoNextRemaining === null && (
         <View style={styles.controlsOverlay} pointerEvents="box-none">
           {/* Top Bar */}
           <View style={styles.topBar}>
@@ -573,6 +656,9 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
 
               <TouchableOpacity style={styles.iconBtn} onPress={() => setShortcutsModalVisible(true)} accessibilityLabel="Scorciatoie">
                 <Ionicons name="help-circle-outline" size={18} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.iconBtn} onPress={() => setDiagnosticsModalVisible(true)} accessibilityLabel="Diagnostica player">
+                <Ionicons name="pulse-outline" size={18} color="#fff" />
               </TouchableOpacity>
             </View>
           </View>
@@ -779,6 +865,12 @@ export const UniversalVideoPlayer: React.FC<UniversalVideoPlayerProps> = ({
         visible={shortcutsModalVisible}
         onClose={() => setShortcutsModalVisible(false)}
       />
+
+      <PlayerDiagnosticsModal
+        visible={diagnosticsModalVisible}
+        diagnostics={diagnostics}
+        onClose={() => setDiagnosticsModalVisible(false)}
+      />
     </View>
   );
 };
@@ -881,6 +973,63 @@ const styles = StyleSheet.create({
   resumeSecondaryText: {
     color: '#fff',
     fontSize: 13,
+    fontWeight: '600'
+  },
+  autoNextOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 55,
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingBottom: 28,
+    backgroundColor: 'rgba(0,0,0,0.18)'
+  },
+  autoNextCard: {
+    width: '100%',
+    maxWidth: 620,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: 'rgba(15, 23, 42, 0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)'
+  },
+  autoNextCopy: {
+    flex: 1,
+    minWidth: 0
+  },
+  autoNextTitle: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700'
+  },
+  autoNextDescription: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginTop: 3
+  },
+  autoNextPlayBtn: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    borderRadius: 8
+  },
+  autoNextPlayText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  autoNextCancelBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 9
+  },
+  autoNextCancelText: {
+    color: '#fff',
+    fontSize: 12,
     fontWeight: '600'
   },
   miniBtn: {

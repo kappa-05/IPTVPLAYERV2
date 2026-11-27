@@ -40,7 +40,8 @@ interface ContentDetailsScreenProps {
     episode: SeriesEpisode,
     seasonNum: number | string,
     seriesName: string,
-    cover?: string
+    cover?: string,
+    seriesId?: string | number
   ) => void;
 }
 
@@ -496,7 +497,8 @@ export const ContentDetailsScreen: React.FC<ContentDetailsScreenProps> = ({
                             episode,
                             selectedSeason,
                             info.name || seriesItem?.name || 'Serie',
-                            info.cover
+                            info.cover,
+                            seriesItem?.series_id
                           )
                         }
                       >
